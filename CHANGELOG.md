@@ -8,6 +8,32 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## Unreleased
+
+Cross-run memory and a quiet-by-default notification policy. No version is
+published for this yet.
+
+- **Cross-run memory.** `<stateDir>/memory/<scope>.jsonl` keeps short notes the
+  aggregator writes (`decision`, `pitfall`, `next`, `dispatch`, `note`) plus the
+  six most recent runs derived from the run store. The digest is bounded
+  (12 notes / 1600 characters / 2600 characters total), compacted above 400
+  lines or 128 KB, and injected into the planner and aggregator prompts. A newer
+  note with the same key supersedes an older one, `forget` retracts it, and
+  notes older than 30 days expire. Secrets are redacted before storage; the
+  directory carries its own `.gitignore` and is never in the package.
+- Added `superagent_memory` (`list`, `set`, `forget`). Existing tools keep their
+  arguments and output; this is the sixth tool.
+- **Quiet by default.** Only a delivered, failed, or partially finished run may
+  wake the session; a cancelled run never does, and progress is never pushed.
+  `maxNotificationsPerHour` (default 3) buffers extra runs into one summary.
+- **Self-heal before reporting.** A subtask failure that looks transient
+  (quota, rate limit, timeout, 5xx) gets `autoResumeRounds` (default 1) more
+  rounds, optionally on `childModelFallback`. The failure message now says what
+  was tried, and `self-heal:` appears in `superagent_status`.
+- New config: `memory`, `memoryScope`, `memoryMaxEntries`, `memoryMaxAgeDays`,
+  `memoryDigestEntries`, `memoryDigestChars`, `maxNotificationsPerHour`,
+  `autoResumeRounds`, `childModelFallback`.
+
 ## 0.9.3 — 2026-11-14
 
 Documentation only; no code change.

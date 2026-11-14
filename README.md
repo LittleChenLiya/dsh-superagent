@@ -17,7 +17,7 @@ prints the cost once you give it a price for the route.
 planner and an aggregator on top. It is also the wrong tool for work that must
 finish inside a single turn, for a step that needs human approval in the middle,
 for anything that needs nested delegation (child depth is capped at 1), and for
-anyone who wants an in-host panel — this adds no UI, only five tools. Children run
+anyone who wants an in-host panel — this adds no UI, only six tools. Children run
 with the host's credentials and filesystem; this is not a sandbox.
 
 **Install and run.** Node `>= 24.9.0`, a tool-calling route, and that route's key
@@ -36,7 +36,7 @@ The reply ends `completed` with the merged report, or with
 covers the path from an empty machine, including the reason not to install npm's
 unrelated `dsh` package by name.
 
-It adds no in-host UI and patches no host code: the five `superagent_*` tools are
+It adds no in-host UI and patches no host code: the six `superagent_*` tools are
 the surface, plus two optional operator utilities (a terminal panel and an HTML
 report) that read the same run files.
 
@@ -211,7 +211,16 @@ Row config in `<profile>/cordis.patch.yml`:
 | `maxTokensPerRun` | `2000000` | Hard cap on prompt + completion tokens per run; `0` disables. |
 | `pricing` | empty | Per-1M-token prices, keyed exactly as the usage log names the model (`provider/model`). Nothing is priced out of the box. |
 | `resultCapBytes` | `32768` | Bytes kept per subtask report. |
-| `notifyOnComplete` | `true` | Wake the owning session once when a run finishes while nobody is polling. |
+| `notifyOnComplete` | `true` | Master switch for proactive messages. Off means the plugin never wakes the session. |
+| `maxNotificationsPerHour` | `3` | Proactive messages allowed per hour. Runs above the cap are folded into one summary; `0` disables the cap. |
+| `autoResumeRounds` | `1` | Extra rounds that retry subtasks which failed in a way that looks transient, before the failure is reported; `0` disables. |
+| `childModelFallback` | none | Model used on such a retry (quota, rate limit, timeout). Unset keeps the configured route. |
+| `memory` | `true` | Cross-run notebook. See [Cross-run memory](#cross-run-memory). |
+| `memoryScope` | `default` | Notebook file per scope, so unrelated projects can stay apart. |
+| `memoryMaxEntries` | `60` | Notes kept before the notebook is compacted. |
+| `memoryMaxAgeDays` | `30` | Notes older than this are ignored, then compacted away. |
+| `memoryDigestEntries` | `12` | Notes injected into a prompt. |
+| `memoryDigestChars` | `1600` | Character budget for the note part of that prompt. |
 | `keepRuns` | `0` | Delete terminal runs older than this many days at mount; `0` keeps everything. |
 | `controlPort` | off | Loopback port for the embedding surface; `0` picks a free one. See [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md). |
 
@@ -314,6 +323,72 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
 - `superagent_cancel(run_id)` stops the run, from any process; see below.
 - `superagent_resume(run_id, wait_seconds?)` continues an `interrupted`, `failed`,
   `partial`, or `cancelled` run; completed subtasks are kept.
+- `superagent_memory(action, key?, kind?, text?, limit?)` lists, adds, corrects,
+  or forgets notebook notes. `set` with an existing key supersedes it; `forget`
+  retracts it. The tool is additive: the five tools above keep their arguments
+  and output.
+
+## Cross-run memory
+
+A run is isolated on purpose: planner and workers start empty. Without a
+notebook, every run repeats work the last one already finished and rediscovers
+the same traps. The plugin keeps two different things, and only one of them is
+stored:
+
+1. **What happened** is derived from the run store at planning time. The six
+   most recent runs are rendered as one line each (date, status, completed
+   subtasks, goal, run id). Nothing is copied, so it cannot drift from the run
+   records.
+2. **What was learned** is a small curated notebook: decisions, pitfalls, next
+   steps, and which work was delegated. The aggregator returns it inside a
+   fenced `memory` block that is removed from the report before the user sees it.
+   A run that produces no block writes nothing; the plugin never invents a note.
+
+**Storage.** `<stateDir>/memory/<scope>.jsonl`, one JSON object per line. A line
+is `{v,id,ts,key,kind,text,runId,status}`; `key` is a short slug (`deploy-target`)
+and `kind` is `decision`, `pitfall`, `next`, `dispatch`, or `note`. The directory
+contains a `.gitignore` with `*`, so even a `stateDir` that points inside a
+repository cannot commit the notebook. It is never listed in the package `files`
+whitelist, so it never ships to npm.
+
+**When it is written.** Once per run, at settle, only for a terminal run whose
+report carried a block. A resume that settles the same run again is a no-op
+because the store records the writing run id. A write failure is recorded on the
+run (`memoryWrite.reason`) and never fails the run.
+
+**When it is read.** Once at `superagent_start` (and again at `superagent_resume`,
+since the aggregator will run again), before planning. The composed context is
+stored on the run as `memory.digest`, injected into the planner and aggregator
+prompts, and summarised in `superagent_status`.
+
+**Size.** Each note is capped at 400 characters after redaction. A prompt sees at
+most `memoryDigestEntries` notes inside `memoryDigestChars` characters, plus six
+one-line run summaries, hard-capped at 2600 characters in total. The file is
+compacted above 400 lines or 128 KB down to the newest `memoryMaxEntries` notes.
+Context cannot grow with the number of runs.
+
+**Concurrency.** Within a process, writes to one scope are serialised. Across
+processes, each batch is appended as one small `write` (no read-modify-write of
+the whole file), compaction takes a lock file and replaces the file from a temp
+file, and a truncated last line from a killed process is skipped. Two runs
+finishing at once cannot overwrite each other's notes; a line may land in a
+different order, and resolution is by timestamp, never by position.
+
+**Correction.** A newer note with the same key supersedes the old one. An
+explicit `forget` writes a tombstone. Notes older than `memoryMaxAgeDays` stop
+being injected and are dropped at the next compaction. Every note is shown with
+its age and the digest tells the model the notes may be stale and must be
+verified, so a wrong conclusion can be refuted by a later run instead of
+becoming a permanent bias.
+
+**Privacy.** Notes are written outside the repository by default
+(`$DSH_HOME/state/superagent/memory`). Before storage, the plugin redacts API-key
+shapes (`sk-…`, `Bearer …`, `ghp_…`, `AKIA…`), long hex/base64 blobs, email
+addresses, and absolute home paths; it collapses a note to one line and caps it.
+The aggregator is instructed not to record secrets, customer data, or the report
+itself. A `stateDir` inside the installed package disables memory rather than
+risk shipping it. If you point `stateDir` at a repository, the nested
+`.gitignore` still keeps the files out of a default `git add`.
 
 ## Watch and report
 
@@ -461,10 +536,29 @@ that were mid-flight become `pending`, so `superagent_resume` continues the run.
 The heartbeat is refreshed every 30 seconds by the owning process, so a healthy
 run is never mistaken for an orphan.
 
-### Notification boundaries
+### Talking to the user
 
-`notifyOnComplete` writes one message back into the owning session when a run
-finishes. Two cases report instead of notifying:
+The plugin is quiet unless the user must hear something. This is a rule in code,
+not only in this document:
+
+- **Allowed to interrupt:** a run finished and delivered a result, a run failed,
+  or a run stopped half-way (`partial`, `interrupted`). A run the user cancelled
+  is never announced — the caller already knows.
+- **Never pushed:** progress, subtask start/finish, retries, and memory writes.
+  They live in the run record, `superagent_status`, the watch panel, and the
+  report page; the user can look, but nothing pops up.
+- **Self-heal first:** each subtask gets `attempts` tries, and a failure that
+  looks transient (quota, rate limit, timeout, 5xx) gets `autoResumeRounds`
+  more rounds, optionally on `childModelFallback`. Only what still fails is
+  reported, and the message says what was tried.
+- **Bounded noise:** at most `maxNotificationsPerHour` proactive messages per
+  hour. Runs above the cap are buffered and folded into the next message as one
+  summary; `superagent_list` shows how many are waiting.
+- **Do not ask what is known:** the planner and aggregator receive the notebook
+  and are told to use it instead of asking the user for facts it already holds.
+
+`notifyOnComplete` is the master switch. Two cases already report instead of
+notifying:
 
 - a caller in the same host process was inside `superagent_status` and receives
   the terminal report itself (no message, to avoid duplicate noise). A poller in
@@ -569,8 +663,8 @@ A run that fails *after* it was accepted keeps its report and shows `error:`
 
 The package is published as `@xiangyixie/dsh-superagent` — npm already has a
 `dsh-super-agent` that is too close to the unscoped name, so the scope keeps
-the name instead of renaming the project. The five tools are unchanged:
-`superagent_*`. The earlier working name was `dsh-longhaul` with `longhaul_*`
+the name instead of renaming the project. The tools are unchanged:
+`superagent_*` (with `superagent_memory` added in 0.10, additively). The earlier working name was `dsh-longhaul` with `longhaul_*`
 tools; nothing was ever published, so the old names do not exist anywhere and
 there is no alias layer. If you find an old snippet that calls `longhaul_start`,
 replace the prefix — the arguments are unchanged.

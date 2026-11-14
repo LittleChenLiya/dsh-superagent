@@ -4,6 +4,31 @@ Working notes for the road to a publishable release. The checklist in
 [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md) tracks gates; this file tracks
 what was done, the evidence, and what is deliberately left.
 
+## 2026-11-14 — cross-run memory and quiet-by-default notifications
+
+Unreleased. Two additions to the plugin, both verified by unit tests only at this
+point (real-profile runs are recorded separately when the self-test is done).
+
+- `lib/memory.js` — `<stateDir>/memory/<scope>.jsonl`, curated notes written by
+  the aggregator's fenced `memory` block at settle, bounded digest injected into
+  planner and aggregator prompts, per-key supersede/retract, 30-day expiry,
+  compaction, redaction before storage, nested `.gitignore`, and an additive
+  `superagent_memory` tool. Run history is derived from the store, not copied.
+- `lib/notify.js` — only `completed`, `failed`, `partial`, and `interrupted` may
+  wake the session; `cancelled` and progress never do. A fixed hourly window
+  (`maxNotificationsPerHour`, default 3) buffers the overflow into one summary.
+  The counter file is changed under a lock and written through a temp file.
+- `lib/lock.js` — the shared advisory file lock used by memory compaction and the
+  notification counter.
+- `lib/orchestrator.js` — self-heal round: a failure that looks transient (quota,
+  rate limit, timeout, 5xx) is retried once more, optionally on
+  `childModelFallback`; the run records `selfHeal` and the failure message says
+  what was tried. A permanent failure is not re-run.
+- `lib/index.js` — six tools, memory/quiet config, status/list lines for memory,
+  self-heal, and buffered notifications.
+
+Tests: the original 106 stay green; the suite is now 130.
+
 ## 2026-11-14 — round 1: the three blockers from the adversarial review
 
 An independent reviewer cloned `07def5a`, reproduced three blocking defects and

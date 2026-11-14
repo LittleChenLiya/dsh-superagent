@@ -5,6 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { capText, computeCost, createOrchestrator, extractPlan } from '../lib/orchestrator.js'
+import { createMemory } from '../lib/memory.js'
 import { ACTIVE_STATUSES, createStore } from '../lib/store.js'
 
 const BASE_CONFIG = {
@@ -82,7 +83,7 @@ function makeSpawner(handle) {
   const calls = []
   const spawnChild = async spec => {
     const childId = `child-${++seq}`
-    calls.push({ label: spec.label, prompt: spec.prompt, childId })
+    calls.push({ label: spec.label, prompt: spec.prompt, childId, model: spec.model ?? null })
     return {
       childId,
       result: Promise.resolve().then(() => handle(spec, childId)),
@@ -96,6 +97,7 @@ function orchestratorWith({
   store = memoryStore(),
   spawner,
   config = {},
+  memory = null,
   readUsage = async () => ({
     inputTokens: 10,
     outputTokens: 2,
@@ -110,6 +112,7 @@ function orchestratorWith({
     config: { ...BASE_CONFIG, ...config },
     spawnChild: spawner.spawnChild,
     readUsage,
+    memory,
     notify: run => notifications.push(run.id),
     log: () => {},
   })
@@ -954,4 +957,184 @@ test('on a shared state directory the pid is ignored and the heartbeat decides',
   assert.equal(old.reclaimed.pidChecked, false)
   assert.match(old.reclaimed.basis, /shared with some-other-machine/)
   assert.equal(old.reclaimed.sharedWith, 'some-other-machine')
+})
+
+async function withMemoryRoot(fn) {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-memory-run-'))
+  try {
+    return await fn(root)
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+}
+
+test('earlier notes and runs reach planning and aggregation, and the block is stored', async () => {
+  await withMemoryRoot(async root => {
+    const memory = createMemory(root)
+    await memory.set({ key: 'deploy-target', kind: 'decision', text: 'staging lives in eu-west' })
+
+    const store = memoryStore()
+    await store.write({
+      id: '20261113T000000-old1',
+      status: 'failed',
+      goal: 'earlier goal',
+      createdAt: '2026-11-13T00:00:00.000Z',
+      subtasks: [{ status: 'failed' }],
+      limits: { maxParallel: 1, attempts: 1, maxSubtasks: 1, deadlineMinutes: 10 },
+    })
+
+    const spawner = makeSpawner(async spec => {
+      if (spec.label === 'superagent-plan') {
+        return completed(JSON.stringify({
+          subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }],
+        }))
+      }
+      if (spec.label === 'superagent-aggregate') {
+        return completed('Final answer.\n\n```memory\n{"entries":[{"key":"next-step","kind":"next","text":"verify the rollout"}]}\n```')
+      }
+      return completed('worker result')
+    })
+    const { orchestrator } = orchestratorWith({ spawner, store, memory })
+
+    const started = await orchestrator.start({ goal: 'new goal', parentSessionId: parent.id, parent })
+    const finished = await orchestrator.status(started.id, 10)
+
+    assert.equal(finished.status, 'completed')
+    const plan = spawner.calls.find(call => call.label === 'superagent-plan')
+    assert.match(plan.prompt, /staging lives in eu-west/)
+    assert.match(plan.prompt, /earlier goal/)
+    const aggregate = spawner.calls.find(call => call.label === 'superagent-aggregate')
+    assert.match(aggregate.prompt, /staging lives in eu-west/)
+
+    assert.equal(finished.report, 'Final answer.')
+    assert.equal(finished.memoryWrite.written, 1)
+    assert.match(finished.memory.digest, /deploy-target/)
+
+    const notes = await memory.read()
+    assert.deepEqual(notes.entries.map(entry => entry.key).sort(), ['deploy-target', 'next-step'])
+  })
+})
+
+test('a memory write failure is recorded and never fails the run', async () => {
+  const memory = {
+    read: async () => ({ entries: [] }),
+    digest: async () => '',
+    write: async () => {
+      throw new Error('disk full')
+    },
+  }
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }],
+      }))
+    }
+    if (spec.label === 'superagent-aggregate') {
+      return completed('Report.\n\n```memory\n{"entries":[{"key":"k","kind":"note","text":"v"}]}\n```')
+    }
+    return completed('worker result')
+  })
+  const { orchestrator } = orchestratorWith({ spawner, memory })
+
+  const run = await orchestrator.start({ goal: 'goal', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.report, 'Report.')
+  assert.match(finished.memoryWrite.reason, /write failed: disk full/)
+})
+
+test('a report that is only a notebook block leaves no plugin syntax behind', async () => {
+  await withMemoryRoot(async root => {
+    const memory = createMemory(root)
+    const spawner = makeSpawner(async spec => {
+      if (spec.label === 'superagent-plan') {
+        return completed(JSON.stringify({
+          subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }],
+        }))
+      }
+      if (spec.label === 'superagent-aggregate') {
+        return completed('```memory\n{"entries":[{"key":"next-step","kind":"next","text":"verify"}]}\n```')
+      }
+      return completed('worker result')
+    })
+    const { orchestrator } = orchestratorWith({ store: memoryStore(), spawner, memory })
+
+    const run = await orchestrator.start({ goal: 'goal', parentSessionId: parent.id, parent })
+    const finished = await orchestrator.status(run.id, 10)
+
+    assert.equal(finished.status, 'completed')
+    assert.equal(finished.report, '')
+    assert.equal(finished.memoryWrite.written, 1)
+  })
+})
+
+test('a resume clears the self-heal and memory-write outcome of the previous settle', async () => {
+  const store = memoryStore()
+  await store.write(interruptedRun({
+    selfHeal: { rounds: 1, retried: 1, recovered: 0, model: 'old/model' },
+    memoryWrite: { at: '2026-01-01T00:10:00.000Z', written: 2, reason: null },
+  }))
+  const { spawnChild } = makeSpawner(async spec => (spec.label === 'superagent-plan'
+    ? completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    : completed('resumed')))
+  const { orchestrator } = orchestratorWith({ store, spawner: { spawnChild } })
+
+  const resumed = await orchestrator.resume('20260101T000000-res1', parent)
+  assert.equal(resumed.selfHeal, null)
+  assert.equal(resumed.memoryWrite, null)
+  await orchestrator.idle()
+})
+
+test('a transient failure is retried once more on the fallback model', async () => {
+  let workerCalls = 0
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    }
+    if (spec.label === 'superagent-1') {
+      workerCalls++
+      if (workerCalls === 1) {
+        return { output: [], stopReason: 'error', diagnostic: 'rate limit exceeded' }
+      }
+      return completed('recovered')
+    }
+    return completed('aggregated')
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    config: { attempts: 1, autoResumeRounds: 1, childModelFallback: 'fallback/model' },
+  })
+
+  const run = await orchestrator.start({ goal: 'goal', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(workerCalls, 2)
+  assert.equal(finished.selfHeal.retried, 1)
+  assert.equal(finished.selfHeal.recovered, 1)
+  assert.equal(finished.selfHeal.model, 'fallback/model')
+  const workerSpecs = spawner.calls.filter(call => call.label === 'superagent-1')
+  assert.equal(workerSpecs.length, 2)
+  assert.equal(workerSpecs[1].model, 'fallback/model')
+})
+
+test('a permanent failure is not re-run by the self-heal round', async () => {
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    }
+    if (spec.label === 'superagent-1') return failed('refusal')
+    return completed('none')
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    config: { attempts: 1, autoResumeRounds: 1 },
+  })
+
+  const run = await orchestrator.start({ goal: 'goal', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(spawner.calls.filter(call => call.label === 'superagent-1').length, 1)
+  assert.equal(finished.selfHeal, null)
 })

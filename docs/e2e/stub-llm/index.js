@@ -150,6 +150,17 @@ class StubAdapter {
       const parts = ['FINAL REPORT: both strategies were measured.']
       if (text.includes('ALPHA-REPORT')) parts.push('Alpha: 3 operations.')
       if (text.includes('BETA-REPORT')) parts.push('Beta: 7 operations.')
+      // The real aggregator writes its notebook in a fenced block; mirror that
+      // shape only when the harness asks, so the default transcript stays clean.
+      if (process.env.E2E_MEMORY_NOTE) {
+        parts.push('', '```memory', JSON.stringify({
+          entries: [{
+            key: process.env.E2E_MEMORY_KEY ?? 'stub-next-step',
+            kind: 'next',
+            text: process.env.E2E_MEMORY_NOTE,
+          }],
+        }), '```')
+      }
       yield* textChunks(parts.join('\n'))
       yield usageChunk(500, 120)
       yield { type: 'finish', reason: { kind: 'stop' } }
@@ -245,6 +256,18 @@ class StubAdapter {
         return
       }
       yield* textChunks(`notify sequence finished: ${lastToolText(messages)}`)
+      yield usageChunk(20, 5)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (kind === 'memory') {
+      if (step === 0) {
+        yield* toolChunks('call-memory-list', 'superagent_memory', { action: 'list' })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      yield* textChunks(lastToolText(messages))
       yield usageChunk(20, 5)
       yield { type: 'finish', reason: { kind: 'stop' } }
       return
