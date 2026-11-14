@@ -585,3 +585,16 @@ Asked whether the package is safe to distribute. Findings:
 
 The audit is a read of the tree, not a line-by-line comparison against every
 public repository, and it does not replace legal review.
+## 2026-11-14 — round 6: 0.9.1, metadata only
+
+`author` was missing from the package, so the licence audit's fix could not
+reach the registry without a new version. 0.9.1 carries nothing else: only
+`package.json`, `README.md`, and `CHANGELOG.md` differ from 0.9.0.
+
+Published with `npm publish --registry=https://registry.npmjs.org` (the machine
+default is npmmirror, so the flag is still required). The registry then reports
+`0.9.1`, `author: Admire (LittleChenLiya)`, `license: MIT`, 15 files,
+73.9 kB packed, and `dist-tags.latest = 0.9.1`.
+
+Tag `v0.9.1` is pushed. No GitHub Release: a patch that changes metadata only
+does not need one.
