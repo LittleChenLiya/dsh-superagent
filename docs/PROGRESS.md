@@ -620,3 +620,25 @@ time of the publish. The working copy of this repository was on
 `fix/status-waits-for-final-write` (a separate branch, not part of this
 release); the release was cut from a worktree checked out at `main` so the
 unmerged fix could not ship by accident.
+## 2026-11-14 — round 8: the missing `lib` files were a local install
+
+A report said a headless profile had an installed copy without
+`lib/control.js`, `lib/watch.js` and `lib/report.js`, so `index.js`'s
+import failed and the plugin never mounted.
+
+The published packages are complete. Pulled `@xiangyixie/dsh-superagent@0.9.2`
+from the official registry with `npm pack`: all 15 files, including the eight
+`lib/` modules. Installed 0.9.2 into a new `DSH_HOME` with
+`dsh plugin --profile headless add @xiangyixie/dsh-superagent@0.9.2`: the
+profile copy has the same eight files, `--dump-config` shows the bundle row,
+and mounting that installed copy registers five tools.
+
+On this machine the damaged copy is the `web` profile: its `package.json`
+says 0.9.1, `lib/` holds five files, and `index.js` is a different size —
+a partial extraction. The fix is to remove that directory and re-run the same
+`add`; the README troubleshooting table now says so and says not to copy files
+in by hand.
+
+Also learned: a plain `add` picked 0.9.0 rather than 0.9.2 because pnpm's
+minimum release age holds back packages published in the last hours. Naming the
+version (`@0.9.2`) installs it immediately.
