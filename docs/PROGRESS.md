@@ -642,3 +642,15 @@ in by hand.
 Also learned: a plain `add` picked 0.9.0 rather than 0.9.2 because pnpm's
 minimum release age holds back packages published in the last hours. Naming the
 version (`@0.9.2`) installs it immediately.
+## 2026-11-14 — round 9: the local web profile, and a pinned install line
+
+The `web` profile on this machine was a real broken copy, not a link: 0.9.1 in
+`package.json` with five `lib/` files. Removed it with
+`dsh plugin --profile web remove dsh-superagent` and reinstalled
+`@xiangyixie/dsh-superagent@0.9.2` from the official registry. The result has
+eight `lib/` files, the `--dump-config` row, and mounts five tools.
+
+The README install lines now name the version, with the reason: pnpm's minimum
+release age skips releases from the last few hours, so a bare `add` resolves to
+an older version and still reports success. A bare install here picked 0.9.0
+while 0.9.2 was current; the pinned command installs 0.9.2 immediately.
