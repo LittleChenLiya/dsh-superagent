@@ -85,9 +85,9 @@ the build machine; see B8).
 
 | # | Check, answerable yes/no | Evidence | Status |
 | --- | --- | --- | --- |
-| H1 | Version, CHANGELOG, and README agree on the release version and its date. | files | PENDING |
-| H2 | `git status` is clean and the release commit is pushed. | `git log`/`git status` | PENDING |
-| H3 | No known blocker from the latest adversarial review remains open. | review list in `docs/PROGRESS.md` | PENDING |
+| H1 | Version, CHANGELOG, and README agree on the release version and its date. | `package.json` 0.9.0; `CHANGELOG.md` `## 0.9.0 — 2026-11-14`; README has no version claim beyond the bundled patch | MET |
+| H2 | `git status` is clean and the release commit is pushed. | `git status -sb` clean at `origin/main` | MET |
+| H3 | No known blocker from the latest adversarial review remains open. | round-1, round-2, and release-mechanics findings all fixed or recorded with a reason in `docs/PROGRESS.md` | MET |
 
 ## Not required for release
 

@@ -443,8 +443,31 @@ docs-vs-code truth. Findings fixed here, each with a test or a doc correction:
 Evidence: `npm test` 87/87, real-host control run re-passed 17/17 after the
 lifecycle change (`transcripts/control-plane.log`), cross-process cancel 9/9.
 
+### Release mechanics audit
+
+A third reviewer checked the tarball, metadata, and git state. Fixed:
+
+- `publishConfig` names `registry.npmjs.org` (this machine defaults to the
+  npmmirror read-only mirror, so a bare `npm publish` would fail confusingly).
+- `exports` exposes `./cordis.patch.yml`, because the bundle patch is resolved
+  by path and `ERR_PACKAGE_PATH_NOT_EXPORTED` is otherwise waiting for the first
+  embedder who imports it.
+- `SECURITY.md` documents the loopback surface and a private report channel;
+  `.github/workflows/test.yml` runs the suite on Linux and Windows.
+- `CHANGELOG` is dated `2026-11-14`; tarball numbers refreshed everywhere
+  (11 files, 55.2 kB packed / 182.4 kB unpacked).
+- The E2E transcripts were regenerated after reinstalling the freshly packed
+  tarball, so they describe the current code rather than the previous build.
+
+Recorded and deliberately not done: the README's "not published yet" caveat
+stays until the package actually exists (removing it now would make the docs
+lie); `engines.dsh` is not a field npm enforces but dsh reads; `docs/` is not in
+the tarball and every README link is an absolute GitHub URL, so npm readers do
+not hit dead relative links.
+
 ### Next
 
-1. Release mechanics audit (package contents, version, links, tarball).
-2. Web-profile E2E pass (same plugin, browser-driven).
-3. H1–H3 close-out; a paid default-route run once a key exists (B8).
+1. At publish time: remove the two README caveats, `npm login`, then
+   `npm publish --registry https://registry.npmjs.org`, and run G1 (registry
+   install) plus a paid B8 run.
+2. Keep the transcripts current if code changes again.
