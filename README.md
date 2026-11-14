@@ -8,8 +8,8 @@ answer. Runs are persisted to disk, so a host restart does not lose them:
 `superagent_status` reports them and `superagent_resume` continues them.
 
 Registered tools: `superagent_start`, `superagent_status`, `superagent_list`,
-`superagent_cancel`, `superagent_resume`. No panel, no host patch, no runtime
-dependencies.
+`superagent_cancel`, `superagent_resume`. No panel, no monkey-patching of host
+code, no runtime dependencies.
 
 ### Naming
 
@@ -31,8 +31,10 @@ anywhere and there is no alias layer. If you find an old snippet that calls
 
 ## Quickstart
 
-Five minutes, from nothing to a finished run. Every command is written to be
-copied from a clean machine.
+Five minutes, from nothing to a finished run. Every command below runs on a
+clean machine; the one exception is the bare registry name in step 1, because
+the package is not published yet — the tarball form directly under it is
+byte-identical to what the registry will serve.
 
 ### 0. Do not install `dsh` from npm by name
 
@@ -53,6 +55,15 @@ dsh plugin --profile web add dsh-superagent
 
 # 2. confirm the bundle row exists in the merged config
 dsh --profile web --dump-config
+```
+
+The package is not on the npm registry yet, so `add dsh-superagent` answers
+404. Until it is, install the packed tarball — the same content the registry
+will serve:
+
+```bash
+npm pack                                  # writes dsh-superagent-<version>.tgz
+dsh plugin --profile web add ./dsh-superagent-<version>.tgz
 ```
 
 If you are working on the plugin itself, install the checkout instead:
@@ -89,7 +100,7 @@ In the session, ask for a run:
 > Use superagent_start with goal "Explain the difference between process and thread in 300 words, with one concrete example" and wait_seconds 120.
 
 Shape of the reply (numbers illustrative — a full transcript of a real run is
-in [docs/e2e-2026-11-14.md](docs/e2e-2026-11-14.md)):
+in [docs/e2e-2026-11-14.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/e2e-2026-11-14.md)):
 
 ```
 run 20261114T051233-a1b2 — completed
@@ -107,9 +118,10 @@ report:
 
 There is no built-in price for the default DeepSeek route; see
 [Spending limits and prices](#spending-limits-and-prices) to add one, after
-which the same run also prints `cost: ...`. `usage: not recorded` only appears
-on a finished run whose child logs cannot be read at all — see
-[Troubleshooting](#troubleshooting).
+which the next run (or a resume of this one) prints `cost: ...`. `cost` is
+computed when a run settles, so an already-finished run keeps the "not
+computed" line. `usage: not recorded` only appears on a finished run whose
+child logs cannot be read at all — see [Troubleshooting](#troubleshooting).
 
 If `wait_seconds` runs out before the run finishes, the reply ends with
 `next: superagent_status run_id="..." wait_seconds=120`. Call it again; the run
@@ -158,9 +170,9 @@ Row config in `<profile>/cordis.patch.yml`:
 | `childModel` | parent's | Optional model override for child agents. |
 | `childPreset` | none | Agent preset for child agents. A preset owns the child's tool set; this host has no per-run tool filter. |
 | `maxSubagentDepth` | `1` | How deep children may delegate. `1` forbids grandchildren; `provider-managed` leaves it to the backend. |
-| `maxSubtasks` | `8` | Cap on planned subtasks (tool can lower it, hard max 16). |
-| `maxParallel` | `3` | Subtasks executing at once (hard max 8). |
-| `maxActiveRuns` | `2` | Active runs per host; further `superagent_start` and `superagent_resume` calls are rejected. |
+| `maxSubtasks` | `8` | Cap on planned subtasks. A tool argument can only lower it, never raise it; hard max 16. |
+| `maxParallel` | `3` | Subtasks executing at once. A tool argument can only lower it; hard max 8. |
+| `maxActiveRuns` | `2` | Active runs per state directory, across profiles and hosts that share it; further `superagent_start` and `superagent_resume` calls are rejected. |
 | `attempts` | `2` | Attempts per subtask before it is marked failed. |
 | `deadlineMinutes` | `120` | Wall-clock budget; on expiry the run ends `partial` or `failed`. |
 | `maxModelCallsPerRun` | `80` | Hard cap on child model calls per run; `0` disables. |
@@ -169,7 +181,7 @@ Row config in `<profile>/cordis.patch.yml`:
 | `resultCapBytes` | `32768` | Bytes kept per subtask report. |
 | `notifyOnComplete` | `true` | Wake the owning session once when a run finishes while nobody is polling. |
 | `keepRuns` | `0` | Delete terminal runs older than this many days at mount; `0` keeps everything. |
-| `controlPort` | off | Loopback port for the embedding surface; `0` picks a free one. See [docs/embedding.md](docs/embedding.md). |
+| `controlPort` | off | Loopback port for the embedding surface; `0` picks a free one. See [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md). |
 
 ### Switching models
 
@@ -206,7 +218,9 @@ There is **no** enforced tool allowlist on `dsh@0.2.2-rc.1`. The host's
 subagent start request has no tool filter, and its own `subagent` tool rejects a
 `toolFilter` config and points at agent presets. `childPreset` is therefore the
 supported way to narrow a child's tools; without a dedicated preset, workers
-inherit the session's tools (minus `superagent_*`, which they are refused).
+inherit the session's tools. The `superagent_*` tools still exist in their tool
+list, but `superagent_start`, `superagent_resume`, and `superagent_cancel`
+refuse to run from a worker session; only the top-level agent manages runs.
 
 ### Spending limits and prices
 
@@ -281,23 +295,24 @@ without importing this package, set `controlPort`:
 ```
 
 The plugin then writes `<stateDir>/control.json` with the bound URL and a
-per-process bearer token (mode `0600`) and serves `GET /health`, `GET /runs`,
-`GET /runs/:id`, `POST /runs`, `POST /runs/:id/cancel`, and
+per-process bearer token (mode `0600`) and serves `GET /`, `GET /health`,
+`GET /runs`, `GET /runs/:id`, `POST /runs`, `POST /runs/:id/cancel`, and
 `POST /runs/:id/resume` on `127.0.0.1` only. Every reply carries the same text
-the tool would print; every run goes through the same quota, budgets, locks,
-and recovery as a tool-started run. `POST /runs` requires `session_id` of a
-session that is live in that host — a run needs a real parent agent for its
-children.
+the tool would print (the route index and `/health` are the two exceptions:
+they describe the socket, not a run). Every run goes through the same quota,
+budgets, locks, and recovery as a tool-started run. `POST /runs` requires
+`session_id` of a session that is live in that host — a run needs a real parent
+agent for its children.
 
 ```bash
-STATE="$DSH_HOME/state/superagent"
+STATE="${DSH_HOME:-$HOME/.dsh}/state/superagent"
 URL=$(node -e "console.log(require('$STATE/control.json').url)")
 TOKEN=$(node -e "console.log(require('$STATE/control.json').token)")
 curl -s -H "Authorization: Bearer $TOKEN" "$URL/runs"
 ```
 
 The full contract — routes, error ids, security model, lifecycle, client
-examples — is [docs/embedding.md](docs/embedding.md). It is opt-in, loopback
+examples — is [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md). It is opt-in, loopback
 only, and there is no remote or unauthenticated mode.
 
 ## State and recovery
@@ -329,7 +344,7 @@ Three side files live next to the run:
 | File | Meaning |
 | --- | --- |
 | `<runId>.cancel` | A cancel was requested by some process. The owner polls it once per second and stops its children. Removed when the run ends. |
-| `<runId>.lock` | The process that is allowed to schedule this run. Created with `wx`, so exactly one process wins. A lock left by a dead local pid is broken immediately; a lock from another machine is broken once it is older than 10 minutes, since its pid cannot be checked. |
+| `<runId>.lock` | The process that is allowed to schedule this run. Created with `wx`, so exactly one process wins. A lock left by a dead local pid is broken immediately; a live local pid keeps it however long it has held it; a lock from another machine is broken once it is older than 10 minutes, since its pid cannot be checked. |
 | `<runId>.json.corrupt-<ts>` | The state file was not valid JSON and was moved aside, not deleted. The run is skipped by `superagent_list` and reported by id with this path. |
 
 If a run's file is damaged, nothing else breaks: other runs list normally, and
@@ -345,12 +360,14 @@ forever. Before every quota check the plugin looks for such runs and reclaims
 them, with two different rules:
 
 - **The state directory belongs to this machine** (`.owner` holds our hostname):
-  a run is reclaimed when its heartbeat is older than 90 seconds **and** its
-  recorded owner pid is no longer running. A live pid vetoes reclamation even
-  with a stale heartbeat, because a wedged process may still resume.
+  a dead local pid is enough on its own — that is direct evidence the process is
+  gone, so the next mount reclaims immediately regardless of the heartbeat. A
+  live pid vetoes reclamation even with a stale heartbeat, because a wedged
+  process may still resume.
 - **The directory is shared, or its owner is unknown**: the pid may belong to
-  another machine, so it is ignored and only the heartbeat decides. This is the
-  case for a state directory on a network share or a synced folder.
+  another machine, so it is ignored and only the heartbeat decides; a run is
+  reclaimed once its heartbeat is older than 90 seconds. This is the case for a
+  state directory on a network share or a synced folder.
 
 In both cases a lock held by a live local process also vetoes reclamation, and
 mount-time recovery uses exactly the same rules — a run is never rewritten
@@ -425,10 +442,10 @@ appears to "hang" until the ignored-abort child returns.
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |
 | `[error] the subagent service is unavailable` | The profile has no `subagents` service, so the plugin has nothing to spawn. | Use a profile built on the base bundle (`web` or `headless` from the stock image), or add the subagent plugin to the profile. |
-| `[error] subagent provider "..." cannot enforce maxSubagentDepth` | The route's subagent backend cannot cap delegation. | Keep `provider: spawn`, or set `maxSubagentDepth: provider-managed` if you accept the backend's own limit. |
-| `[error] the Windows file sandbox could not start a child process` | Host sandbox launcher failure (`windows-acl-run: ...`), not your goal or key. The subtask is retried once. | Retry the run; if it repeats, restart the host, or disable the Windows ACL sandbox in the profile, then run the `diagnose-windows-sandbox-acl` skill. |
-| `[error] the run was not started because the active-run limit is already in use` | `maxActiveRuns` is full, including runs from another profile that shares the state directory. | Wait, cancel one, or raise `maxActiveRuns`. |
-| `[error] the run stopped because it reached its spending cap` | `maxModelCallsPerRun` or `maxTokensPerRun` was hit. | Read the partial report; raise the cap in the config, then `superagent_resume` continues with the new limits. |
+| `error: subagent provider "..." cannot enforce maxSubagentDepth` | The route's subagent backend cannot cap delegation. | Keep `provider: spawn`, or set `maxSubagentDepth: provider-managed` if you accept the backend's own limit. |
+| `error: the Windows file sandbox could not start a child process` | Host sandbox launcher failure (`windows-acl-run: ...`), not your goal or key. The subtask is retried once. | Retry the run; if it repeats, restart the host, or disable the Windows ACL sandbox in the profile, then run the `diagnose-windows-sandbox-acl` skill. |
+| `error: the run was not started because the active-run limit is already in use` | `maxActiveRuns` is full, including runs from another profile that shares the state directory. | Wait, cancel one, or raise `maxActiveRuns`. |
+| `error: the run stopped because it reached its spending cap` | `maxModelCallsPerRun` or `maxTokensPerRun` was hit. | Read the partial report; raise the cap in the config, then `superagent_resume` continues with the new limits. |
 | `usage: not recorded` | The run finished and no child session log could be read (moved `sessions` directory, or a run created before accounting). | Nothing to fix on old runs; new runs record usage. While a run is still active the line says accounting is pending instead. |
 | `usage note: N child session log(s) could not be read` | Part of the usage was unreadable; the token figures are a lower bound. The call budget still counted those children. | Check that `$DSH_HOME/sessions` exists and is readable by the host process. |
 | `cost: not computed — no price configured for X` | The model is not in the `pricing` table. | Add its per-1M prices under `pricing["provider/model"]`, copying the id from the `usage:` line. |
@@ -438,10 +455,12 @@ appears to "hang" until the ignored-abort child returns.
 | `[error] ... still owned by a live process` | Another profile is running this run, so resuming here would duplicate the work. | Let it finish, or `superagent_cancel` it first. |
 | `missing or wrong bearer token` (HTTP 401) | The embedder used a token from an earlier host start, or the wrong state directory's discovery file. | Read `token` from `<stateDir>/control.json` again; it is regenerated on every start. Read the file as UTF-8. |
 | `the request did not name a live session` (HTTP 409) | `POST /runs` or `/resume` was called without a `session_id`, or the session closed. | Pass the id of a session open in that host process; run the start from the session that should own it. |
-| `[dsh-superagent] control plane is not listening` in the host log | `controlPort` is already taken, or the value is invalid. | Use `controlPort: 0`, free the port, or remove the key; the tools keep working either way. |
+| `[dsh-superagent] control plane is not listening` in the host log | `controlPort` is already taken, the value is invalid, or the state directory is not writable. | Use `controlPort: 0`, free the port, fix the state directory, or remove the key; the tools keep working either way. |
 
-Every tool error has three lines: `[error]` a sentence, `hint:` one next step,
-and `detail:` the untouched host message, so nothing is hidden.
+A tool call that fails itself returns three lines: `[error]` a sentence, `hint:`
+one next step, and `detail:` the untouched host message, so nothing is hidden.
+A run that fails *after* it was accepted keeps its report and shows `error:`
+(plus a `hint:` line when it is `failed`) in the run block instead.
 
 ## Known limits
 
@@ -454,8 +473,8 @@ and `detail:` the untouched host message, so nothing is hidden.
   `{"subtasks":[...]}` object, the run degrades to a single subtask and is
   marked `plan.mode = "degraded"`.
 - Aggregation is skipped for a single successful subtask (the report is that
-  subtask's text) and falls back to a deterministic merge when the aggregator
-  fails or the budget is exhausted.
+  subtask's text under the goal heading) and falls back to a deterministic merge
+  when the aggregator fails or the budget is exhausted.
 - Retention is opt-in (`keepRuns`); by default state accumulates, at up to
   32 KB per subtask plus the report per run.
 - The HTTP embedding surface is loopback-only, opt-in, and token-authenticated;
@@ -471,8 +490,8 @@ npm pack        # inspect what would ship
 ```
 
 What "ready to publish" means is written down as checkable rows in
-[docs/DONE.md](docs/DONE.md); the real-host run that most of them point at is
-[docs/e2e-2026-11-14.md](docs/e2e-2026-11-14.md).
+[docs/DONE.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/DONE.md); the real-host run that most of them point at is
+[docs/e2e-2026-11-14.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/e2e-2026-11-14.md).
 
 Layout: `lib/index.js` (plugin, tool schemas, run formatting),
 `lib/orchestrator.js` (ordering, retries, budgets, cancel, resume),

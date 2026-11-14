@@ -8,12 +8,14 @@ path except the new spending caps and the cost line.
 ### Embedding surface (local HTTP)
 
 - New opt-in `controlPort` exposes the five operations as JSON over loopback:
-  `GET /health`, `GET /runs`, `GET /runs/:id`, `POST /runs`,
+  `GET /`, `GET /health`, `GET /runs`, `GET /runs/:id`, `POST /runs`,
   `POST /runs/:id/cancel`, `POST /runs/:id/resume`. Off by default; `0` picks a
   free port. Another UI can start and watch runs without importing `lib/`.
 - Bound to `127.0.0.1` only, with a per-process bearer token written to
   `<stateDir>/control.json` (mode `0600`), a `Host` check that blocks DNS
-  rebinding, no CORS headers, a 64 KB body cap, and a 320 s request timeout.
+  rebinding, no CORS headers, a 64 KB body cap, and a 60 s limit on receiving a
+  request (a 300 s long poll is unaffected: the wait happens while the response
+  is produced).
 - Every route goes through the same orchestrator as the tools: quota, budgets,
   run locks, cross-process cancel, and recovery behave identically. `POST /runs`
   requires `session_id` of a live session; a run still needs a real parent agent
@@ -24,14 +26,24 @@ path except the new spending caps and the cost line.
   `forbidden-host`, `no-session`, `body-too-large`, …) so a client can tell a
   bad token from a broken run.
 - The contract, security model, and client examples are in
-  [docs/embedding.md](docs/embedding.md); verified against real
-  `dsh@0.2.2-rc.1` with 17 checks in `docs/e2e/transcripts/control-plane.log`.
+  [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md);
+  verified against real `dsh@0.2.2-rc.1` with 17 checks in
+  `docs/e2e/transcripts/control-plane.log`, plus a two-host cross-process cancel
+  run in `docs/e2e/transcripts/cross-cancel.log`.
 - Review fixes before release: a dispose that lands while the port is still
   binding now closes it instead of leaving an orphaned listener; a failed
   discovery write closes the server instead of running unreachable; `/health`
   does no state work, so a liveness probe cannot reclaim runs; a blank goal is
   a 400 `no-goal` and a profile without a subagent service is a 503
   `no-subagents` instead of a 500.
+- A second review pass added: the plane starts only after the state directory
+  exists (a fresh `DSH_HOME` used to leave it off for the whole host lifetime);
+  discovery files carry a per-plane `instanceId`, so a reloaded plugin does not
+  delete the newer plane's file; a concurrent `start()` shares one listener;
+  `GET /runs?limit` also limits the returned array; a missing goal is reported
+  before a missing session; a worker session is refused by `superagent_cancel`
+  as well; and a malformed `controlPort` (`""`, `" "`, `true`) can no longer
+  coerce to an accidental listener.
 
 ### Renamed to `dsh-superagent`
 
@@ -57,8 +69,11 @@ path except the new spending caps and the cost line.
 ### Spending
 
 - New hard budgets `maxModelCallsPerRun` (80) and `maxTokensPerRun` (2,000,000),
-  checked before every child spawn. Hitting one ends the run `partial` and keeps
-  the reports that finished.
+  checked before every child spawn. Hitting one stops spawning: the run ends
+  `partial` when at least one subtask finished and `failed` when none did, keeps
+  the reports that did finish, and leaves the rest `pending` for a resume.
+- A tool's `max_subtasks` / `max_parallel` / `deadline_minutes` can narrow the
+  configured cap but never widen it: the config stays the operator's control.
 - New `pricing` table (per 1M tokens, per model) and a `cost` field on every
   run. Unpriced models are named and excluded instead of being estimated.
 - `usage: not recorded` now explains why instead of printing two bare words.
@@ -73,7 +88,7 @@ path except the new spending caps and the cost line.
   older than 90 s is reclaimed, using the owner pid only when the state
   directory belongs to this machine, and recording the exact basis on the run.
 - Tool errors are now `[error] <sentence>` / `hint: <next step>` /
-  `detail: <untouched host message>`, covering 14 known failure shapes,
+  `detail: <untouched host message>`, covering 19 known failure shapes,
   including the Windows ACL sandbox launcher.
 
 ### Notifications and retention
@@ -96,9 +111,9 @@ path except the new spending caps and the cost line.
   that lock, refuses a run that still has a live owner, and applies the
   `maxActiveRuns` check. Two concurrent resumes, or a resume in a second
   process, can no longer run the same subtasks twice.
-- A lock left by a dead process on this machine is broken immediately; a lock
-  from another machine is broken after 10 minutes, because its pid cannot be
-  checked.
+- A lock left by a dead process on this machine is broken immediately; a live
+  local process keeps its lock however long the run takes; a lock from another
+  machine is broken after 10 minutes, because its pid cannot be checked.
 - `maxActiveRuns` is clamped to an integer (1–8), so a config value such as
   `"abc"` falls back to the default instead of making the quota `NaN`.
 - A cancel from another process is reported by `superagent_status` as
@@ -180,11 +195,12 @@ profile configures one.
 
 ### Tests
 
-- 70 offline tests (`npm test`): fake store, fake child spawner, no network, no
+- 86 offline tests (`npm test`): fake store, fake child spawner, no network, no
   API key. Covers cross-process cancel, orphan reclamation in both local and
   shared modes, concurrent and cross-process resume, resume quotas and limit
   rebuilding, budgets with and without readable usage logs, pricing keys, a
   child that ignores abort, notify ordering, corrupted state, a missing state
-  directory, retention, error text, usage-log reading, and a full plugin mount.
-  Polling-based tests were rewritten around event gates; four consecutive full
-  runs pass.
+  directory, retention, error text, usage-log reading, the HTTP control plane
+  (auth, transport errors, discovery lifecycle, start/stop races), and a full
+  plugin mount. Polling-based tests were rewritten around event gates; five
+  consecutive full runs pass.

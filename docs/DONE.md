@@ -13,10 +13,10 @@ money, a publish — is missing; the blocker is written in the row).
 | # | Check, answerable yes/no | Evidence | Status |
 | --- | --- | --- | --- |
 | A1 | `npm pack` produces a tarball with no test, harness, or credential files. | `npm pack --dry-run` file list | MET |
-| A2 | On a `DSH_HOME` that never ran this plugin, `dsh plugin --profile web add dsh-superagent` succeeds with the exact README command. | transcript in `docs/e2e-*.md` | MET |
+| A2 | On a `DSH_HOME` that never ran this plugin, `dsh plugin --profile web add <packed tarball>` succeeds with the exact README command. The bare registry name is the same command once G1 unblocks. | transcript in `docs/e2e-*.md` | MET |
 | A3 | After A2, `dsh --profile web --dump-config` contains the `dsh-superagent` bundle row. | dump excerpt | MET |
 | A4 | A fresh session can call all five `superagent_*` tools; none returns "unknown tool". | five scenarios in `docs/e2e-2026-11-14.md` | MET |
-| A5 | Every Quickstart command that does not depend on the package being on the registry runs verbatim on a clean home; no undocumented env var or manual edit. | install transcript + claim table in `docs/e2e-2026-11-14.md` | MET |
+| A5 | Every Quickstart command that does not need the package on the registry runs verbatim on a clean home; no undocumented env var or manual edit. The tarball form is written in the README. | install transcript + claim table in `docs/e2e-2026-11-14.md` | MET |
 
 ## B. It works in a real host
 
