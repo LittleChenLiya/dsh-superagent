@@ -49,7 +49,7 @@ the build machine; see B8).
 
 | # | Check, answerable yes/no | Evidence | Status |
 | --- | --- | --- | --- |
-| D1 | A child cannot start or resume a superagent run. | `transcripts/child-attempt.log` | MET |
+| D1 | A child cannot start, resume, or cancel a superagent run. | `test/plugin.test.mjs` "a worker session cannot start, resume, or cancel a run" (asks all three tools as the child id the orchestrator remembered) | MET |
 | D2 | `maxSubagentDepth: 1` is sent as `maxDepth`; a provider that cannot enforce it makes `superagent_start` fail loudly rather than run unbounded. | unit test + capability table | MET |
 | D3 | A second host on the same state directory never rewrites a run owned by a live process, and can cancel it from outside the owning process. | two-process test + `transcripts/cross-cancel.log` (two real pids, 9/9 checks) | MET |
 | D4 | Nodes with a stale/dead owner are reclaimed without user action, and the evidence (`reclaimed: …`) is printed. | unit test + status | MET |
