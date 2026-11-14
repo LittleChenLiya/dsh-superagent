@@ -515,6 +515,12 @@ test('a run that finishes with its session gone says the result was not delivere
     assert.match(status, /report:/)
 
     const listed = await tools.get('superagent_list').execute({})
+    if (!/\(result not delivered to the session\)/.test(listed)) {
+      const disk = await fsp
+        .readFile(path.join(stateDir, 'runs', `${runId}.json`), 'utf8')
+        .catch(error => `unreadable: ${error.code}`)
+      console.error(`[diag] status:\n${status}\n[diag] listed:\n${listed}\n[diag] disk:\n${disk}`)
+    }
     assert.match(listed, /\(result not delivered to the session\)/)
   } finally {
     if (previousHome === undefined) delete process.env.DSH_HOME
