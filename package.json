@@ -1,0 +1,46 @@
+{
+  "name": "dsh-longhaul",
+  "version": "0.9.0",
+  "description": "Long-horizon autonomous runs for DeepSeek Harness: one goal, model-planned parallel subtasks, one merged report, durable across restarts.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./orchestrator": "./lib/orchestrator.js",
+    "./store": "./lib/store.js",
+    "./errors": "./lib/errors.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/orchestrator.js",
+    "lib/store.js",
+    "lib/errors.js",
+    "lib/usage.js",
+    "cordis.patch.yml",
+    "CHANGELOG.md",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.19.0",
+    "dsh": ">=0.2.2-rc.1 <0.3.0-0"
+  },
+  "scripts": {
+    "test": "node --test test/orchestrator.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "agent",
+    "autonomous",
+    "subagent"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

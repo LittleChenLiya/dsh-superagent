@@ -1,0 +1,24 @@
+# dependencies (this package has none, but keep the directory out anyway)
+node_modules/
+
+# packed artifacts
+*.tgz
+
+# local secrets — never commit a key or an env file
+.env
+.env.*
+*.key
+*.pem
+
+# local run state; it normally lives under $DSH_HOME, never in the repo
+state/
+**/state/longhaul/
+*.cancel
+*.corrupt-*
+
+# logs and editor/OS noise
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
