@@ -482,9 +482,10 @@ elapsed, current activity, parent session. Live runs sort first in a stable
 order, then finished runs newest-first. A fingerprint change triggers a 200 ms
 follow-up read, so planning→running→aggregating does not wait a full second;
 otherwise an idle panel reads one small file per second. Alternate screen and
-hidden cursor on a TTY, and every exit path (Ctrl-C, SIGTERM, `--once`, EPIPE)
-runs the same cleanup that shows the cursor and leaves the alternate screen. On
-a pipe it appends plain frames, and only when the frame changed.
+hidden cursor on a TTY, and the live exit paths (Ctrl-C, SIGTERM, EPIPE) run
+the same cleanup that shows the cursor and leaves the alternate screen;
+`--once` stays on the normal screen so its frame survives the exit. On a pipe
+it appends plain frames, and only when the frame changed.
 
 **`report`** (`lib/report.js`, `bin/report.js`). Normalises runs into
 start/end/phase spans, assigns lanes by greedy interval colouring (lane count is

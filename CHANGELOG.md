@@ -10,9 +10,9 @@ path except the new spending caps, the cost line, and two operator utilities.
 - `dsh-superagent-watch` draws one line per run — id, status, calls used against
   the cap, elapsed, current activity, parent session — in the alternate screen.
   A status change repaints within 200 ms; an idle panel costs one small file
-  read per second. Ctrl-C, SIGTERM, `--once`, and a closed pipe all restore the
-  cursor and leave the alternate screen. `--once` prints a plain frame for logs
-  and CI.
+  read per second. Ctrl-C, SIGTERM, and a closed pipe restore the cursor and
+  leave the alternate screen; `--once` prints one plain frame and never takes
+  over the screen.
 - `dsh-superagent-report` renders recorded runs into one self-contained HTML
   file: inline CSS and inline SVG, no script, no font, no image, no network. It
   contains a timeline with each run's start, end, and derived

@@ -94,7 +94,7 @@ the build machine; see B8).
 | # | Check, answerable yes/no | Evidence | Status |
 | --- | --- | --- | --- |
 | I1 | `watch` draws one line per run with id, status, calls used against the cap, elapsed time, current activity, and parent session, and a frame is captured from real runs. | `docs/e2e/transcripts/watch-panel.log` (40 real runs) + `test/watch.test.mjs` | MET |
-| I2 | `watch` restores the cursor and leaves the alternate screen on Ctrl-C, SIGTERM, `--once`, and a closed pipe. | `test/watch.test.mjs` asserts the hide/before-show ordering on both the once and signal paths; the TTY path was run on the build machine | MET |
+| I2 | `watch` never strands the terminal: the live path restores the cursor and leaves the alternate screen on Ctrl-C, SIGTERM, and a closed pipe, and `--once` never enters it. | `test/watch.test.mjs` asserts the hide→show ordering on the signal path and a plain, un-hidden frame on the once path; the TTY path was run on the build machine | MET |
 | I3 | Neither utility adds a runtime dependency or a published file beyond its own module and binary. | `package.json` `dependencies: {}`; `npm pack` = 15 files (up from 11) | MET |
 | I4 | `report` writes one file that references nothing external: zero `http://`, `https://`, `<script`, `<link`, `src=`, `@import`, `url(`. | `docs/e2e/transcripts/report-cli.log` audit (all zero, 4 inline SVGs) + `test/report.test.mjs` | MET |
 | I5 | That file contains a timeline with per-run start/end/phases, concurrency swimlanes, cumulative call and cost curves, and explicit failure/cancellation/interruption annotations. | `docs/report-sample.html` (40 real runs); six section ids asserted by test | MET |
