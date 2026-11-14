@@ -293,5 +293,7 @@ an offline test.
   Contract in [embedding.md](embedding.md), verified on real `dsh@0.2.2-rc.1`
   with 17/17 checks in
   [transcripts/control-plane.log](e2e/transcripts/control-plane.log), plus 7
-  offline transport tests and one plugin-level end-to-end test.
+  offline transport tests and one plugin-level end-to-end test. A second real
+  pass with two hosts on one state directory verified cross-process cancel in
+  [transcripts/cross-cancel.log](e2e/transcripts/cross-cancel.log) (9/9 checks).
 - **Effort.** M.

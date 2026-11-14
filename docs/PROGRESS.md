@@ -385,6 +385,22 @@ directory because `store.read` validates against
 unhandled rejection. A malformed percent escape used to become a 500; it is now
 a 400 `bad-run-id`.
 
+### Cross-process cancel, real host
+
+`docs/e2e/transcripts/cross-cancel.log`: two headless hosts, one state directory,
+`controlPort: 0` each, different pids/ports/tokens. Host B mounted while A's run
+was live, logged `is still owned (owner pid … is still running); leaving it
+running`, and **did not** mark it interrupted. `POST /runs/:id/cancel` on B
+returned 200, both hosts converged on `cancelled`, A's workers logged
+`threw: aborted`, the user-facing text had no `error:`/`hint:` line, and
+`control.json` was gone after both exited. 9/9 checks.
+
+Two probe bugs were fixed rather than papered over: the mount assertion compared
+B's fresh status with A's earlier snapshot (`running` vs `planning`, a legal
+transition) and now asserts "still active"; the old "no error" assertion
+contradicted `orchestrator.cancel`'s audit note and now asserts on the rendered
+text instead, which is what a reader actually sees.
+
 ### Next
 
 1. A second adversarial round after the web-profile pass.

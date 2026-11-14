@@ -51,7 +51,7 @@ the build machine; see B8).
 | --- | --- | --- | --- |
 | D1 | A child cannot start or resume a superagent run. | `transcripts/child-attempt.log` | MET |
 | D2 | `maxSubagentDepth: 1` is sent as `maxDepth`; a provider that cannot enforce it makes `superagent_start` fail loudly rather than run unbounded. | unit test + capability table | MET |
-| D3 | A second host on the same state directory never rewrites a run owned by a live process. | two-process test | MET |
+| D3 | A second host on the same state directory never rewrites a run owned by a live process, and can cancel it from outside the owning process. | two-process test + `transcripts/cross-cancel.log` (two real pids, 9/9 checks) | MET |
 | D4 | Nodes with a stale/dead owner are reclaimed without user action, and the evidence (`reclaimed: …`) is printed. | unit test + status | MET |
 | D5 | Cancel of a child that ignores abort returns within the documented bound. | unit test with a never-settling child | MET |
 
@@ -79,7 +79,7 @@ the build machine; see B8).
 | --- | --- | --- | --- |
 | G1 | `dsh plugin --profile web add dsh-superagent` installs the published package name (no `file:`), once the package exists on the registry. | post-publish transcript | BLOCKED: not published, by instruction |
 | G2 | `npm i -g dsh-superagent` is not offered as an install path (it is a plugin, not a CLI). | README | MET |
-| G3 | A stable embedding surface (MCP or local HTTP) lets another UI start/status/cancel runs without importing internals. | `docs/embedding.md` + 17/17 checks against real `dsh@0.2.2-rc.1` in `transcripts/control-plane.log` (start, status, list, cancel, resume, auth, discovery cleanup) | MET |
+| G3 | A stable embedding surface (MCP or local HTTP) lets another UI start/status/cancel runs without importing internals. | `docs/embedding.md` + 17/17 checks against real `dsh@0.2.2-rc.1` in `transcripts/control-plane.log` (start, status, list, cancel, resume, auth, discovery cleanup) + cross-process cancel in `transcripts/cross-cancel.log` | MET |
 
 ## H. Release mechanics
 
