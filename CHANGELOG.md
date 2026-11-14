@@ -1,5 +1,40 @@
 # Changelog
 
+Doc-only releases: npm serves the README from the tarball, so a README edit is
+invisible on the package page until something is published. When the edit
+changes what a reader would do — install commands, limits, troubleshooting
+steps — it gets its own patch version (0.9.2, 0.9.3). Typos and wording ride
+along with the next code release. A doc-only version leaves `lib/` and `bin/`
+byte-identical to the version before it, and the pinned install line in the
+README is updated to the version being released.
+
+## 0.9.3 — 2026-11-14
+
+Documentation only; no code change.
+
+- Both install commands name the version (`@xiangyixie/dsh-superagent@0.9.3`),
+  and the Quickstart explains why: pnpm's minimum release age skips packages
+  published in the last few hours, so a bare `add` installs an older version and
+  still reports success. A bare install here resolved 0.9.0 while 0.9.2 was
+  current.
+- Added the command that reports what actually landed:
+  `npm ls --prefix <DSH_HOME>/profiles/web @xiangyixie/dsh-superagent`.
+- The troubleshooting rows for a missing tool and for
+  `Cannot find module .../lib/control.js` now carry the pinned reinstall command.
+
+## 0.9.2 — 2026-11-14
+
+Documentation only; no code change. npm renders the README from the tarball, so
+this version exists to put the rewritten opening on the package page.
+
+- The first screen now answers three questions in order: what the plugin is for,
+  when it is the wrong tool, and the first command to run after installing.
+- `Naming` moved from the top to just above `Development`. The copyright line
+  and the "personal project, not affiliated with DeepSeek" statement moved to
+  the top, where they are read.
+- `Known limits` gained the isolation boundary: children use the host's
+  credentials and filesystem and are only as sandboxed as the host makes them.
+
 ## 0.9.1 — 2026-11-14
 
 Metadata-only release. No code or behaviour change; the only file contents that

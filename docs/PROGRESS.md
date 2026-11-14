@@ -603,3 +603,54 @@ Last publish, Collaborators). The field is real in the registry document and
 `npm view` prints it; the visible credit on the page is the README licence line.
 The changelog text in the repository is corrected; the copy inside the published
 0.9.1 tarball still carries the earlier wording, which is not worth a 0.9.2.
+## 2026-11-14 — round 7: 0.9.2, the README on the package page
+
+npm renders the README from the tarball, so the rewrite stayed invisible until a
+publish. 0.9.2 ships documentation only: the rewritten first screen, `Naming`
+moved down, the copyright and non-affiliation lines moved up, and the isolation
+boundary added to `Known limits`.
+
+`npm test` on the release commit: 106 pass, 0 fail. Published with
+`--registry=https://registry.npmjs.org`; 15 files, 75.3 kB packed, 250.5 kB
+unpacked, `dist-tags.latest = 0.9.2`. The npm page was checked in a browser:
+version 0.9.2 and the new opening, including the `Don't use it when` paragraph.
+
+Tag `v0.9.2` is on the release commit `c6380ca`, which is main's tip at the
+time of the publish. The working copy of this repository was on
+`fix/status-waits-for-final-write` (a separate branch, not part of this
+release); the release was cut from a worktree checked out at `main` so the
+unmerged fix could not ship by accident.
+## 2026-11-14 — round 8: the missing `lib` files were a local install
+
+A report said a headless profile had an installed copy without
+`lib/control.js`, `lib/watch.js` and `lib/report.js`, so `index.js`'s
+import failed and the plugin never mounted.
+
+The published packages are complete. Pulled `@xiangyixie/dsh-superagent@0.9.2`
+from the official registry with `npm pack`: all 15 files, including the eight
+`lib/` modules. Installed 0.9.2 into a new `DSH_HOME` with
+`dsh plugin --profile headless add @xiangyixie/dsh-superagent@0.9.2`: the
+profile copy has the same eight files, `--dump-config` shows the bundle row,
+and mounting that installed copy registers five tools.
+
+On this machine the damaged copy is the `web` profile: its `package.json`
+says 0.9.1, `lib/` holds five files, and `index.js` is a different size —
+a partial extraction. The fix is to remove that directory and re-run the same
+`add`; the README troubleshooting table now says so and says not to copy files
+in by hand.
+
+Also learned: a plain `add` picked 0.9.0 rather than 0.9.2 because pnpm's
+minimum release age holds back packages published in the last hours. Naming the
+version (`@0.9.2`) installs it immediately.
+## 2026-11-14 — round 9: the local web profile, and a pinned install line
+
+The `web` profile on this machine was a real broken copy, not a link: 0.9.1 in
+`package.json` with five `lib/` files. Removed it with
+`dsh plugin --profile web remove dsh-superagent` and reinstalled
+`@xiangyixie/dsh-superagent@0.9.2` from the official registry. The result has
+eight `lib/` files, the `--dump-config` row, and mounts five tools.
+
+The README install lines now name the version, with the reason: pnpm's minimum
+release age skips releases from the last few hours, so a bare `add` resolves to
+an older version and still reports success. A bare install here picked 0.9.0
+while 0.9.2 was current; the pinned command installs 0.9.2 immediately.
