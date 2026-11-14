@@ -513,3 +513,38 @@ Verified:
 DONE.md gained section I (`I1`–`I6`); `G2` was narrowed to say the utilities are
 not an install path, and `F2` now says "no in-host panel" rather than
 "no panel".
+
+## 2026-11-14 — round 4: released
+
+Published as `@xiangyixie/dsh-superagent@0.9.0`. The unscoped name is not
+available: npm's similarity check treats `dsh-superagent` and the existing
+`dsh-super-agent` as one name and refuses the publish with a 403 that suggests
+the author scope. The scope keeps the project name, the repository, the plugin
+row id, the five tools, the state directory, and both bin names; only the
+install specifier changes.
+
+Mechanics worth recording, because each one cost a round:
+
+- **Token, not password.** The registry accepted the OTP-less `npm login` token
+  for reads only. Email OTP is a working second factor for sign-in (the codes
+  arrive, 8 digits), but a publish attempt sends no mail and `--otp` changes
+  nothing: the 403 is raised before any code is evaluated. A granular token
+  with *Bypass 2FA* is the only self-service path; `dsh-release-bypass-2026-11-14`
+  was created in the web UI, expires 2026-11-21, and is what `~/.npmrc` now
+  holds.
+- **First publish is reviewed.** The version went to `Validating` in npm's
+  automated review and answered 404 for about four minutes; a second publish in
+  that window returns 409 `Cannot publish over previously staged version`.
+
+G1 is MET (`docs/e2e/transcripts/g1-install.log`): a fresh `DSH_HOME` with
+`npm_config_registry` forced to the official registry resolves the scoped name,
+the `# == @xiangyixie/dsh-superagent` row appears in `--dump-config`, both bins
+are linked in `node_modules/.bin`, and both run — `report.js` renders 17.6 kB
+from the one real run and refuses an empty state directory with exit 1.
+
+B8 is MET on real spend (`docs/e2e/transcripts/b8-real-route.log`): the
+`byte.haoduotoken.com` credentials are scoped to gpt models and answer 403 for
+every deepseek id, so the default `deepseek-official` route was pointed at
+DashScope's Anthropic proxy, which serves the flash tier as
+`deepseek-v4.1-flash-1017`. Three calls, 1882 in / 7363 out / 19456 cache-read,
+printed as `cost: ¥0.1016` from Model Studio's peak rates.

@@ -77,7 +77,7 @@ the build machine; see B8).
 
 | # | Check, answerable yes/no | Evidence | Status |
 | --- | --- | --- | --- |
-| G1 | `dsh plugin --profile web add dsh-superagent` installs the published package name (no `file:`), once the package exists on the registry. | post-publish transcript | BLOCKED: not published, by instruction |
+| G1 | `dsh plugin --profile web add @xiangyixie/dsh-superagent` installs the published package name (no `file:`), once the package exists on the registry. | `docs/e2e/transcripts/g1-install.log`: registry 0.9.0 → pnpm resolved/downloaded/added 1 → `# == @xiangyixie/dsh-superagent` row in `--dump-config` → both bins linked and run | MET |
 | G2 | `npm i -g dsh-superagent` is not offered as an install path (it is a plugin, not a CLI). The `watch`/`report` binaries are operator utilities run from the profile's `node_modules`; the README says they are not the install path. | README "Watch and report" | MET |
 | G3 | A stable embedding surface (MCP or local HTTP) lets another UI start/status/cancel runs without importing internals. | `docs/embedding.md` + 17/17 checks against real `dsh@0.2.2-rc.1` in `transcripts/control-plane.log` (start, status, list, cancel, resume, auth, discovery cleanup) + cross-process cancel in `transcripts/cross-cancel.log` | MET |
 
