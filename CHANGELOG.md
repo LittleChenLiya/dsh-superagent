@@ -36,8 +36,27 @@ published for this yet.
 - **Duplicate dispatch is collapsed.** The same active goal (case and whitespace
   ignored) returns the existing run id with `deduped: true`, under a per-goal
   claim so two processes sharing a state directory cannot both start it.
+  The match is scoped to the owning session, so two sessions that ask for the
+  same generic goal still get their own runs.
   `allow_duplicate: true` on `superagent_start` (or `allow_duplicate` on the
-  control `start` body) opts out.
+  control `start` body) opts out. A `wait_seconds` call keeps the `deduped`
+  marker in its result.
+- **Attention text is bounded.** Question, options, and reason are collapsed to
+  one line and capped at 500 / 200 / 300 characters, so neither status nor a
+  notification can be given forged extra lines. An invalid attention block is
+  no longer stripped silently: its raw text stays in the report and status
+  prints `attention: <reason>`.
+- **Resume is quotad and session-scoped.** `superagent_resume` counts against
+  `maxActiveRuns` and is refused when the cap is full unless `force: true`
+  (`force` or `override_quota` on HTTP) is passed. It may only be called by the
+  session named in the run's `parentSessionId`.
+- **Buffered notifications survive a failed send.** The folded batch is put back
+  into `pending` when the wake-up fails, so a later message still carries those
+  runs; it is dropped only after three failed deliveries.
+- **`memoryMaxEntries` is a compaction trigger.** Exceeding it, 400 lines, or
+  128 KB compacts the notebook on the next write.
+- **Prune removes report artifacts.** `keepRuns` now deletes
+  `reports/<runId>.md` together with the run record.
 - **Transient backoff.** A rate-limit, quota, timeout, or 5xx failure now waits
   2s, then 4s, then 8s before the next attempt instead of retrying immediately.
 - **Recovery note.** A resumed run tells each worker what failed and instructs it

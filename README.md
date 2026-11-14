@@ -204,7 +204,7 @@ Row config in `<profile>/cordis.patch.yml`:
 | `maxSubagentDepth` | `1` | How deep children may delegate. `1` forbids grandchildren; `provider-managed` leaves it to the backend. |
 | `maxSubtasks` | `8` | Cap on planned subtasks. A tool argument can only lower it, never raise it; hard max 16. |
 | `maxParallel` | `3` | Subtasks executing at once. A tool argument can only lower it; hard max 8. |
-| `maxActiveRuns` | `2` | Active runs per state directory, across profiles and hosts that share it; further `superagent_start` calls are rejected. `superagent_resume` is a human action and is not refused by this quota. |
+| `maxActiveRuns` | `2` | Active runs per state directory, across profiles and hosts that share it; further `superagent_start` calls are rejected. `superagent_resume` counts the same way and is refused when the cap is full; pass `force: true` (or `override_quota: true` over HTTP) to override it explicitly. |
 | `attempts` | `2` | Attempts per subtask before it is marked failed. A failure that looks transient (quota, rate limit, timeout, 5xx) waits 2s, then 4s, then 8s before the next attempt. |
 | `deadlineMinutes` | `120` | Wall-clock budget; on expiry the run ends `partial` or `failed`. |
 | `maxModelCallsPerRun` | `80` | Hard cap on child model calls per run; `0` disables. |
@@ -219,7 +219,7 @@ Row config in `<profile>/cordis.patch.yml`:
 | `childModelFallback` | none | Model used on such a retry (quota, rate limit, timeout). Unset keeps the configured route. |
 | `memory` | `true` | Cross-run notebook. See [Cross-run memory](#cross-run-memory). |
 | `memoryScope` | `default` | Notebook file per scope, so unrelated projects can stay apart. Run notes are written here; `rules` and `profile` are read into every run. |
-| `memoryMaxEntries` | `60` | Notes kept before the notebook is compacted. |
+| `memoryMaxEntries` | `60` | Compaction threshold: a write that would exceed it compacts the notebook down to this many notes (400 lines / 128 KB are hard caps too). |
 | `memoryMaxAgeDays` | `30` | Notes older than this are ignored, then compacted away. |
 | `memoryDigestEntries` | `12` | Notes injected into a prompt. |
 | `memoryDigestChars` | `1600` | Character budget for the note part of that prompt. |
@@ -317,21 +317,26 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
 
 - `superagent_start(goal, max_subtasks?, max_parallel?, deadline_minutes?, allow_duplicate?, wait_seconds?)`
   starts a run and returns immediately with a run id. Starting a goal that an
-  active run already has returns that run id marked `deduped: true` instead of
-  paying for a second plan: the goal is compared after trimming, collapsing runs
-  of whitespace, and ignoring case, and the check runs under a per-goal claim keyed
-  in the state directory, so two processes that share it still start one run.
+  active run in the same session already covers returns that run id marked
+  `deduped: true` instead of paying for a second plan: the goal is compared after
+  trimming, collapsing runs of whitespace, and ignoring case, and the check runs
+  under a per-goal claim keyed in the state directory, so two processes that share
+  it still start one run. The match is per session, because two sessions may
+  legitimately ask for the same generic goal at once.
   `allow_duplicate: true` starts another one. A finished run never blocks the same
-  goal from being started again. `wait_seconds` blocks for a terminal state.
+  goal from being started again. `wait_seconds` blocks for a terminal state and
+  keeps the `deduped` marker in its result.
 - `superagent_status(run_id, wait_seconds?)` returns status, milestones,
   per-subtask outcome, measured token usage, estimated cost, the report file
   path, and the final report.
 - `superagent_list(limit?)` lists runs, newest first, plus the state directory's
   file count and size.
 - `superagent_cancel(run_id)` stops the run, from any process; see below.
-- `superagent_resume(run_id, wait_seconds?)` continues an `interrupted`, `failed`,
-  `partial`, or `cancelled` run; completed subtasks are kept. Workers are told
-  what failed and to check what the earlier attempt already did.
+- `superagent_resume(run_id, wait_seconds?, force?)` continues an `interrupted`,
+  `failed`, `partial`, or `cancelled` run; completed subtasks are kept. Workers
+  are told what failed and to check what the earlier attempt already did. Only
+  the session that started the run may resume it. It counts against
+  `maxActiveRuns`; `force: true` overrides a full quota explicitly.
 - `superagent_memory(action, key?, kind?, text?, scope?, limit?)` lists, adds,
   corrects, or forgets notebook notes. `set` with an existing key supersedes it;
   `forget` retracts it. `scope` addresses `rules` (project rules), `profile`
@@ -346,7 +351,11 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
 - **Attention.** A worker or the aggregator may append one fenced `attention`
   block with a question that only the user can answer. It is stripped from the
   report, stored on the run as `attention.items`, shown as `needs your decision:`
-  in status, and leads the notification when the run finishes.
+  in status, and leads the notification when the run finishes. The question,
+  options, and reason are collapsed to one line and capped at 500 / 200 / 300
+  characters, so the block cannot inject a forged status or notification line.
+  A block that is not valid JSON or has no question is kept in the report, and
+  status prints `attention: <reason>` instead of hiding the request.
 - **Report file.** A terminal run writes its report to
   `<stateDir>/reports/<runId>.md` with an atomic rename, so the outcome has a
   path that can be opened or attached. The directory carries a `.gitignore` with
@@ -395,7 +404,8 @@ read.
 **Size.** Each note is capped at 400 characters after redaction. A prompt sees at
 most `memoryDigestEntries` notes inside `memoryDigestChars` characters, plus six
 one-line run summaries, hard-capped at 2600 characters in total. The file is
-compacted above 400 lines or 128 KB down to the newest `memoryMaxEntries` notes.
+compacted when a write would push it past `memoryMaxEntries` notes, 400 lines,
+or 128 KB; compaction keeps the newest `memoryMaxEntries` notes.
 Context cannot grow with the number of runs.
 
 **Concurrency.** Within a process, writes to one scope are serialised. Across
@@ -521,8 +531,10 @@ run would make the surviving child keep spending while the file says
 
 Resuming is exclusive for the same reason. `superagent_resume` takes the same
 serial gate as `superagent_start`, claims `<runId>.lock` (created atomically),
-and refuses a run that still has a live owner or that would exceed
-`maxActiveRuns`.
+refuses a run that still has a live owner, and refuses a caller that is not the
+session in `parentSessionId`. It counts against `maxActiveRuns`; pass
+`force: true` (tool) or `force` / `override_quota` (HTTP) when the cap is full
+and you deliberately want the run to proceed.
 
 Three side files live next to the run:
 
@@ -584,7 +596,9 @@ not only in this document:
   reported, and the message says what was tried.
 - **Bounded noise:** at most `maxNotificationsPerHour` proactive messages per
   hour. Runs above the cap are buffered and folded into the next message as one
-  summary; `superagent_list` shows how many are waiting.
+  summary; `superagent_list` shows how many are waiting. If the message carrying
+  a folded batch cannot be delivered, the batch stays buffered and rides the
+  next one; it is dropped only after three failed deliveries.
 - **Do not ask what is known:** the planner and aggregator receive the notebook
   and are told to use it instead of asking the user for facts it already holds.
 
@@ -608,8 +622,9 @@ live run as orphaned.
 ### Retention
 
 Nothing is deleted by default. Set `keepRuns` to a number of days to delete
-terminal runs older than that at mount; active runs are never touched, and the
-removed ids are logged. `superagent_list` prints the current file count and size,
+terminal runs older than that at mount; active runs are never touched, the
+removed ids are logged, and the matching `reports/<runId>.md` artifact is
+removed with its run. `superagent_list` prints the current file count and size,
 so growth is visible before it becomes a problem.
 
 ## Cancelling from another process

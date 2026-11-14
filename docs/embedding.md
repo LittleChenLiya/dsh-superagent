@@ -185,8 +185,11 @@ cancel. A terminal run answers `nothing to cancel` instead of pretending.
 ```
 
 Continues an `interrupted`, `failed`, `partial`, or `cancelled` run and replies
-`202` with it. The run lock and the `maxActiveRuns` quota apply exactly as in the
-tool path.
+`202` with it. It takes the same run lock as the tool path and may only be called
+by a session that is live in this host and is the run's `parentSessionId`;
+anything else is `409 wrong-session`. An active `maxActiveRuns` quota also
+refuses it with `409 quota` unless the body sets `"force": true` (or
+`"override_quota": true`), which is the explicit way to override the cap.
 
 ## 5. Errors
 
@@ -207,7 +210,8 @@ from "the run is broken":
 | 409 | `no-session` | `session_id` is missing or not open in this host. |
 | 409 | `recursion` | `session_id` names a superagent worker; workers may not start or resume runs. |
 | 409 | `run-owned` | Another live process is running it. |
-| 409 | `quota` | `maxActiveRuns` is full. |
+| 409 | `wrong-session` | `session_id` is not the run's `parentSessionId`. |
+| 409 | `quota` | `maxActiveRuns` is full; pass `force` only when the override is deliberate. |
 | 409 | `budget` | The run hit a spending cap. |
 | 413 | `body-too-large` | Body over 64 KB. |
 | 500 | `corrupt`, `unclassified`, … | Classified by `lib/errors.js`, same text as the tools. A damaged run file is ours to fix, not the caller's. |

@@ -103,10 +103,20 @@ test('prune deletes only terminal runs older than the window', async () => {
   await store.write({ id: '20260101T000000-new1', status: 'completed', createdAt: recent, finishedAt: recent })
   await store.write({ id: '20260101T000000-run1', status: 'running', createdAt: old, finishedAt: null })
   await store.requestCancel('20260101T000000-old1')
+  // A terminal run also leaves a report behind; prune must remove both, or
+  // `keepRuns` bounds the state directory only for the run records.
+  const reports = path.join(dir, 'reports')
+  await fsp.mkdir(reports, { recursive: true })
+  const oldReport = path.join(reports, '20260101T000000-old1.md')
+  const newReport = path.join(reports, '20260101T000000-new1.md')
+  await fsp.writeFile(oldReport, 'old\n', 'utf8')
+  await fsp.writeFile(newReport, 'new\n', 'utf8')
 
   assert.deepEqual((await store.prune({ olderThanDays: 7 })).removed, ['20260101T000000-old1'])
   assert.deepEqual((await store.list()).map(run => run.id).sort(), ['20260101T000000-new1', '20260101T000000-run1'])
   assert.equal((await fsp.readdir(store.runsDir)).includes('20260101T000000-old1.cancel'), false)
+  await assert.rejects(fsp.access(oldReport), { code: 'ENOENT' })
+  await fsp.access(newReport)
   assert.deepEqual((await store.prune({ olderThanDays: 0 })).removed, [], 'keepRuns 0 means keep everything')
   await fsp.rm(dir, { recursive: true, force: true })
 })

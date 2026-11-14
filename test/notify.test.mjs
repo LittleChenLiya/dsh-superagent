@@ -52,6 +52,33 @@ test('messages above the hourly cap are batched into the next one', async () => 
   })
 })
 
+test('a folded batch is retried in the next message when its send fails', async () => {
+  await withState(async stateFile => {
+    let clock = Date.parse('2026-11-14T01:05:00.000Z')
+    const policy = createNotifyPolicy({ stateFile, maxPerHour: 1, now: () => clock })
+    assert.equal((await policy.reserve(run('a'))).allowed, true)
+
+    const held = await policy.reserve(run('b', 'failed'))
+    assert.equal(held.allowed, false)
+    assert.match(held.reason, /batched/)
+
+    // Next window: the first message carries `b`, but its delivery fails.
+    clock += 60 * 60 * 1000 + 1
+    const next = await policy.reserve(run('c'))
+    assert.equal(next.allowed, true)
+    assert.deepEqual(next.batch.map(item => item.id), ['b'])
+    await policy.restore(next.batch)
+    assert.deepEqual((await policy.summary()).pending.map(item => item.id), ['b'])
+
+    // The following message must still carry it instead of losing the run.
+    clock += 60 * 60 * 1000 + 1
+    const retry = await policy.reserve(run('d'))
+    assert.equal(retry.allowed, true)
+    assert.deepEqual(retry.batch.map(item => item.id), ['b'])
+    assert.equal((await policy.summary()).pending.length, 0)
+  })
+})
+
 test('the counter survives a new policy instance in the same window', async () => {
   await withState(async stateFile => {
     const clock = () => Date.parse('2026-11-14T00:10:00.000Z')

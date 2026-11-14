@@ -227,6 +227,23 @@ test('compaction keeps the notebook bounded and drops old notes', async () => {
     assert.equal(read.entries[0].key, 'topic-419')  })
 })
 
+test('memoryMaxEntries is the compaction trigger, not only the keep size', async () => {
+  await withRoot(async root => {
+    const memory = createMemory(root)
+    for (let index = 0; index < 3; index++) {
+      await memory.write({
+        runId: `run-${index}`,
+        entries: [{ key: `topic-${index}`, kind: 'note', text: `fact ${index}` }],
+        maxEntries: 2,
+      })
+    }
+
+    const lines = (await fsp.readFile(memory.fileOf('default'), 'utf8')).split('\n').filter(Boolean)
+    assert.equal(lines.length, 2)
+    assert.deepEqual((await memory.read()).entries.map(entry => entry.key), ['topic-2', 'topic-1'])
+  })
+})
+
 test('forget retracts a note without leaving it visible', async () => {
   await withRoot(async root => {
     const memory = createMemory(root)

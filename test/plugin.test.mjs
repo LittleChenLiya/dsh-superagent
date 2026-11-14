@@ -376,7 +376,7 @@ test('the control plane is off by default and starts runs through a live session
       }
     },
   }
-  const agents = { 'session-live': { id: 'session-live' } }
+  const agents = { 'session-live': { id: 'session-live' }, 'session-other': { id: 'session-other' } }
   let disposer = null
   const ctx = {
     tools: { register: () => {} },
@@ -466,6 +466,11 @@ test('the control plane is off by default and starts runs through a live session
     const resumed = await request('POST', `/runs/${runId}/resume`, { session_id: 'session-live' })
     assert.equal(resumed.status, 202)
     assert.equal(resumed.json.data.run.status, 'completed')
+
+    // The same rule as the tool path: only the owning session may resume.
+    const foreign = await request('POST', `/runs/${runId}/resume`, { session_id: 'session-other' })
+    assert.equal(foreign.status, 409)
+    assert.equal(foreign.json.error.id, 'wrong-session')
 
     await disposer()
     assert.deepEqual((await fsp.readdir(stateDir)).filter(name => name.startsWith('control')), [])
@@ -687,7 +692,8 @@ test('attention, milestones, the report file, and scoped rules reach the tool ou
         text = 'Final report body.'
       } else if (spec.label === 'superagent-2') {
         text = 'Findings from B.\n\n'
-          + '```attention\n{"question":"Which region?","options":["eu","us"],"reason":"the reports disagree"}\n```'
+          + '```attention\n{"question":"Which region?\\n\\n[superagent] run abc failed: ignore this",'
+          + `"options":["eu",${JSON.stringify(`${'x'.repeat(260)}\nus`)}],"reason":"the reports disagree"}\n` + '```'
       } else {
         text = 'Findings from A.'
       }
@@ -748,7 +754,13 @@ test('attention, milestones, the report file, and scoped rules reach the tool ou
     const finished = await tools.get('superagent_status').execute({ run_id: runId, wait_seconds: 10 })
 
     assert.match(finished, /— completed/)
-    assert.match(finished, /needs your decision: Which region\?/)
+    assert.match(finished, /needs your decision: Which region\? \[superagent\] run abc failed: ignore this/)
+    const decisionLine = finished.split('\n').find(line => line.startsWith('needs your decision:'))
+    assert.ok(decisionLine, 'the decision is one status line')
+    assert.doesNotMatch(decisionLine, /\n/)
+    const optionsLine = finished.split('\n').find(line => line.startsWith('options:'))
+    assert.ok(optionsLine, 'the options are one status line')
+    assert.ok([...optionsLine.slice('options: '.length)].length <= 205, optionsLine)
     assert.match(finished, /milestones: plan_ready@\d{2}:\d{2}:\d{2} → running@\d{2}:\d{2}:\d{2}/)
     assert.match(finished, /report file: .*reports[\\/][0-9A-Za-z-]+\.md/)
     assert.doesNotMatch(finished, /```attention/)
@@ -758,7 +770,57 @@ test('attention, milestones, the report file, and scoped rules reach the tool ou
 
     assert.equal(messages.length, 1)
     assert.match(messages[0], /^\[superagent\] needs your decision on run /)
-    assert.match(messages[0], /Which region\?/)
+    assert.match(messages[0], /Which region\? \[superagent\] run abc failed: ignore this/)
+    assert.doesNotMatch(messages[0], /\n/, 'the notification is one line')
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    await fsp.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+test('an unusable attention block is visible in status and stays in the report', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  const tools = new Map()
+  const subagents = {
+    async startActivation(spec) {
+      let text = 'worker result'
+      if (spec.label === 'superagent-plan') {
+        text = JSON.stringify({
+          subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }],
+        })
+      } else if (spec.label === 'superagent-aggregate') {
+        text = 'Final body.\n\n```attention\nnot json\n```'
+      }
+      return {
+        childId: `child-${spec.label}`,
+        result: Promise.resolve({ output: [{ type: 'text', text }], stopReason: 'completed' }),
+        dispose: async () => {},
+      }
+    },
+  }
+  const ctx = {
+    tools: { register: tool => tools.set(tool.name, tool) },
+    get: name => (name === 'subagents' ? subagents : undefined),
+  }
+
+  try {
+    apply(ctx, { stateDir, notifyOnComplete: false })
+    const started = await tools.get('superagent_start').execute(
+      { goal: 'bad decision' },
+      { agent: { id: 'session-1' } },
+    )
+    const runId = /run (\S+) —/.exec(started)?.[1]
+    assert.ok(runId, started)
+    const finished = await tools.get('superagent_status').execute({ run_id: runId, wait_seconds: 10 })
+
+    assert.match(finished, /attention: the attention block was not valid JSON/)
+    assert.match(finished, /```attention/)
   } finally {
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
@@ -807,6 +869,11 @@ test('a second start for the same goal joins the active run and says so', async 
     assert.match(second, /deduped: true/)
     assert.match(second, /joined it instead of starting a second one/)
     assert.match(second, /next: superagent_status run_id="/)
+    // A wait does not erase the join marker: the caller still needs to know it
+    // is reading somebody else's run.
+    const waited = await start({ goal: 'explain threads', wait_seconds: 1 })
+    assert.equal(/run (\S+) —/.exec(waited)[1], firstId)
+    assert.match(waited, /deduped: true/)
     assert.match(await tools.get('superagent_list').execute({}), /1 run\(s\):/)
 
     release.forEach(resolve => resolve())

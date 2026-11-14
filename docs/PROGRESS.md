@@ -4,6 +4,69 @@ Working notes for the road to a publishable release. The checklist in
 [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md) tracks gates; this file tracks
 what was done, the evidence, and what is deliberately left.
 
+## 2026-11-15 — findings from the adversarial review
+
+An independent review of `4b67a27..main` reported 5 major and 5 minor findings
+against the work merged earlier the same day. All ten are addressed here. No
+dependency, tool, version, or tag was added; the suite is now 157 tests.
+
+1. **Attention text could inject lines and had no per-field cap.** `question`,
+   `options`, and `reason` are collapsed with `replace(/\s+/g, ' ')` before they
+   enter the run record, then capped at 500 / 200 / 300 characters. A status
+   line and the notification lead are therefore always one line; a forged
+   `[superagent]` line cannot be produced. Evidence: `oneLine()` and
+   `extractAttentionBlock()` in `lib/orchestrator.js`; tests "attention text is
+   collapsed to one line and capped per field" and the plugin attention test
+   (newline + 260-char option).
+2. **An option had no length limit.** Each option is capped at 200 characters
+   in the same function. Evidence: the test above asserts the 200-character
+   bound; the plugin test reads the bounded `options:` line.
+3. **An invalid attention block vanished.** `extractAttentionBlock()` now keeps
+   the original text for an unusable block and returns the error; settle and the
+   subtask path record `run.attention.issue` instead of only logging. Status
+   prints `attention: <reason>` and the notification adds an `Attention:` line,
+   while the raw fence stays in the report. Evidence:
+   `recordAttentionIssue()`, `formatRun()`, `notifyParent()`; tests "an unusable
+   attention block is kept in the report instead of disappearing", "a malformed
+   aggregator attention block stays visible on the finished run", and the
+   plugin test "an unusable attention block is visible in status and stays in
+   the report".
+4. **Resume bypassed quota and session ownership.** `resume()` now counts
+   against `maxActiveRuns` and refuses when full; `force: true` (tool) or
+   `force` / `override_quota` (HTTP) is the explicit override. It also refuses a
+   run whose `parentSessionId` is not the calling session, and the HTTP path maps
+   that to `409 wrong-session`. Evidence: `assertResumeOwner()`, the tool
+   property, the control action; tests "resume counts against the active-run
+   quota unless force is explicit", "a run can only be resumed by the session
+   that started it", and the control-plane assertion for a foreign `session_id`.
+5. **Dedupe crossed sessions.** `activeRunForGoal(key, parentSessionId)` only
+   matches runs owned by the calling session, so two sessions with the same goal
+   get two runs while the same session still gets one run plus `deduped: true`.
+   The per-goal claim still serialises the check across processes. Evidence:
+   the extended "two orchestrators on one state directory dispatch one goal
+   once" test asserts a different session gets a distinct run.
+6. **`wait_seconds` lost `deduped`.** The start tool and HTTP start carry the
+   transient marker onto the status snapshot they return. Evidence: the plugin
+   dedupe test now waits and still sees `deduped: true`.
+7. **A failed folded notification was lost.** `notifyPolicy.restore(batch)` puts
+   an undelivered batch back into `pending`, deduplicated by run id, bounded by
+   `MAX_PENDING`, and dropped only after `MAX_FOLD_ATTEMPTS` (3) failures.
+   `notifyParent` calls it in the catch path. Evidence: notify test "a folded
+   batch is retried in the next message when its send fails".
+8. **`memoryMaxEntries` was not a trigger.** `memory.write()` now compacts when
+   the appended file would exceed `maxEntries` as well as 400 lines / 128 KB, so
+   lowering it takes effect on the next write. Evidence: test
+   "memoryMaxEntries is the compaction trigger, not only the keep size".
+9. **Docs and retention drift.** `docs/embedding.md` now says resume uses the
+   same quota and needs `force` to override; its error table has
+   `409 wrong-session` and the corrected quota row. `store.prune()` deletes
+   `reports/<runId>.md` with the run. Evidence: extended store prune test.
+10. **The "clean workspace" claim was stale.** `docs/AUTONOMY_LEDGER.md` had an
+    uncommitted review record; it is committed with this fix, and `docs/DONE.md`
+    H2 now states that the tree is clean while the commits are not yet pushed.
+
+Tests: `npm test` twice, 157 / 157 pass, 0 fail, offline.
+
 ## 2026-11-14 — cross-run memory and quiet-by-default notifications
 
 Unreleased. Two additions to the plugin, both verified by unit tests only at this
