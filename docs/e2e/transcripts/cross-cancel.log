@@ -1,37 +1,18 @@
-﻿host A pid: 9768
-A published http://127.0.0.1:51337; active run 20261114T083845-a221 (running)
-host B pid: 29604
-B published http://127.0.0.1:57228
-host A: pid=9768 http://127.0.0.1:51337
-host B: pid=29604 http://127.0.0.1:57228
+﻿host A pid: 4468
+A published http://127.0.0.1:54870; active run 20261114T090200-7eee (running)
+host B pid: 3284
+B published http://127.0.0.1:49367
+host A: pid=4468 http://127.0.0.1:54870
+host B: pid=3284 http://127.0.0.1:49367
 PASS the two hosts are different processes
 PASS host A has an active run to cancel
-run: 20261114T083849-f2c5 (running)
+run: 20261114T090204-686a (running)
 PASS host B sees the run in the shared state directory
 PASS host B did not mark the live run interrupted at mount
-POST /runs/20261114T083849-f2c5/cancel -> 200 {"ok":true,"data":{"run":{"id":"20261114T083849-f2c5","schemaVersion":1,"goal":"Compare two sorting strategies on the stub fixture and report one number for each.","status":"cancelled","mode":"planned","parentSessionId":"session-eae8d20f-7fe8-44f4-ba89-b02eb48ea745","clientTimeZone":null,"createdAt"
+POST /runs/20261114T090204-686a/cancel -> 200 {"ok":true,"data":{"run":{"id":"20261114T090204-686a","schemaVersion":1,"goal":"Compare two sorting strategies on the stub fixture and report one number for each.","status":"cancelled","mode":"planned","parentSessionId":"session-c636fe41-3fa7-4e6e-932b-090077075ec6","clientTimeZone":null,"createdAt"
 PASS host B accepts the cancel request
 PASS the run stops changing
 PASS the owner recorded it as cancelled
 PASS host A reports the same terminal state
 PASS the cancel did not surface as an error to the reader
 ALL CHECKS PASSED
-discovery file after both hosts: False
---- host A superagent log ---
-
-[dsh-superagent] registered 5 tools; state C:\Windows\TEMP\dsh-e2e2-home\state\superagent; control port 0
-[dsh-superagent] control plane listening on http://127.0.0.1:51337 (token in C:\Windows\TEMP\dsh-e2e2-home\state\supera
-gent\control.json)
-[dsh-superagent] aggregator failed: subagent service is unavailable; dsh-superagent needs the host subagents service
-[dsh-superagent] run 20261114T083845-a221 finished but its session session-00624411-02ba-4842-bad3-af8e29c4f7a7 is no l
-onger live
---- host B superagent log ---
-[dsh-superagent] registered 5 tools; state C:\Windows\TEMP\dsh-e2e2-home\state\superagent; control port 0
-[dsh-superagent] control plane listening on http://127.0.0.1:57228 (token in C:\Windows\TEMP\dsh-e2e2-home\state\supera
-gent\control.json)
-[dsh-superagent] run 20261114T083845-a221 is still owned (owner pid 9768 is still running); leaving it running
-[dsh-superagent] subtask 1 attempt 1 threw: aborted
-[dsh-superagent] subtask 2 attempt 1 threw: aborted
-probe exit: 0
-
-

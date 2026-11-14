@@ -1,12 +1,12 @@
-﻿host pid: 30816
-discovery seen after 12 poll(s)
-session seen after 12 poll(s): session-b8b0bcf7-0ce0-4c1c-b04c-eadf10f25b61
-control url: http://127.0.0.1:49672
-discovery: url=http://127.0.0.1:49672 pid=30816 token=KsiLmr… (43 chars)
-session: session-b8b0bcf7-0ce0-4c1c-b04c-eadf10f25b61
-GET / -> 200 {"ok":true,"data":{"service":"dsh-superagent","version":"0.9.0","pid":30816,"endpoints":["GET /health","GET /runs","GET /runs/:id","POST /runs","POST /runs/:id/cancel","POST /runs/:id/resume"]}}
+﻿host pid: 22368
+discovery seen after 14 poll(s)
+session seen after 14 poll(s): session-304d999d-9842-4640-9f33-b814f2a5ee51
+control url: http://127.0.0.1:54536
+discovery: url=http://127.0.0.1:54536 pid=22368 token=rO1H0M… (43 chars)
+session: session-304d999d-9842-4640-9f33-b814f2a5ee51
+GET / -> 200 {"ok":true,"data":{"service":"dsh-superagent","version":"0.9.0","pid":22368,"endpoints":["GET /health","GET /runs","GET /runs/:id","POST /runs","POST /runs/:id/cancel","POST /runs/:id/resume"]}}
 PASS index names the routes
-GET /health -> 200 {"ok":true,"data":{"service":"dsh-superagent","version":"0.9.0","pid":30816,"hostname":"繁星所爱之人","stateDir":"C:\\Windows\\TEMP\\dsh-e2e2-home\\state\\superagent","startedAt":"2026-11-14T08:48:10.492Z","uptimeSeconds":3,"runs":"GET /runs"}}
+GET /health -> 200 {"ok":true,"data":{"service":"dsh-superagent","version":"0.9.0","pid":22368,"hostname":"繁星所爱之人","stateDir":"C:\\Windows\\TEMP\\dsh-e2e2-home\\state\\superagent","startedAt":"2026-11-14T09:01:05.963Z","uptimeSeconds":3,"runs":"GET /runs"}}
 PASS health answers
 PASS health reports a pid and a state directory
 GET /runs -> 401 {"ok":false,"error":{"id":"unauthorized","summary":"missing or wrong bearer token","hint":"read the \"token\" field in C:\\Windows\\TEMP\\dsh-e2e2-home\\state\\superagent\\control.json and send \"Authorization: Bearer <token>\". The token is regenerated each time the host starts.","detail":"missing or wrong bearer token"}}
@@ -18,21 +18,21 @@ PASS start without session_id is refused as no-session
 PASS the refusal carries a hint
 POST /runs -> 409 {"ok":false,"error":{"id":"no-session","summary":"the request did not name a live session that can own the run","hint":"pass session_id of a session that is open in the host process running the control plane; a run needs a live parent agent to create its child agents. Read the discovery file for the URL and token.","detail":"no live agent: session session-not-open is not open in this host process;…
 PASS start with a session that is not live is refused
-POST /runs -> 202 {"ok":true,"data":{"run":{"id":"20261114T084810-e633","schemaVersion":1,"goal":"Compare two sorting strategies on the stub fixture.","status":"planning","mode":"planned","parentSessionId":"session-b8b0bcf7-0ce0-4c1c-b04c-eadf10f25b61","clientTimeZone":null,"createdAt":"2026-11-14T08:48:10.932Z","updatedAt":"2026-11-14T08:48:10.935Z","startedAt":"2026-11-14T08:48:10.932Z","deadlineAt":"2026-11-14T1…
+POST /runs -> 202 {"ok":true,"data":{"run":{"id":"20261114T090106-a188","schemaVersion":1,"goal":"Compare two sorting strategies on the stub fixture.","status":"planning","mode":"planned","parentSessionId":"session-304d999d-9842-4640-9f33-b814f2a5ee51","clientTimeZone":null,"createdAt":"2026-11-14T09:01:06.732Z","updatedAt":"2026-11-14T09:01:06.736Z","startedAt":"2026-11-14T09:01:06.732Z","deadlineAt":"2026-11-14T1…
 PASS start accepts a live session
 PASS the run records its owning session
-GET /runs/20261114T084810-e633?wait=60 -> 200 {"ok":true,"data":{"run":{"id":"20261114T084810-e633","schemaVersion":1,"goal":"Compare two sorting strategies on the stub fixture.","status":"completed","mode":"planned","parentSessionId":"session-b8b0bcf7-0ce0-4c1c-b04c-eadf10f25b61","clientTimeZone":null,"createdAt":"2026-11-14T08:48:10.932Z","updatedAt":"2026-11-14T08:48:11.739Z","startedAt":"2026-11-14T08:48:10.932Z","deadlineAt":"2026-11-14T…
+GET /runs/20261114T090106-a188?wait=60 -> 200 {"ok":true,"data":{"run":{"id":"20261114T090106-a188","schemaVersion":1,"goal":"Compare two sorting strategies on the stub fixture.","status":"completed","mode":"planned","parentSessionId":"session-304d999d-9842-4640-9f33-b814f2a5ee51","clientTimeZone":null,"createdAt":"2026-11-14T09:01:06.732Z","updatedAt":"2026-11-14T09:01:07.663Z","startedAt":"2026-11-14T09:01:06.732Z","deadlineAt":"2026-11-14T…
 PASS the run reaches completed
 PASS the report is non-empty
 PASS usage was measured through the child session logs
 PASS the text rendering matches the tool result
-GET /runs?limit=10 -> 200 {"ok":true,"data":{"runs":[{"id":"20261114T084810-e633","schemaVersion":1,"goal":"Compare two sorting strategies on the stub fixture.","status":"completed","mode":"planned","parentSessionId":"session-b8b0bcf7-0ce0-4c1c-b04c-eadf10f25b61","clientTimeZone":null,"createdAt":"2026-11-14T08:48:10.932Z","updatedAt":"2026-11-14T08:48:11.739Z","startedAt":"2026-11-14T08:48:10.932Z","deadlineAt":"2026-11-1…
+GET /runs?limit=10 -> 200 {"ok":true,"data":{"runs":[{"id":"20261114T090106-a188","schemaVersion":1,"goal":"Compare two sorting strategies on the stub fixture.","status":"completed","mode":"planned","parentSessionId":"session-304d999d-9842-4640-9f33-b814f2a5ee51","clientTimeZone":null,"createdAt":"2026-11-14T09:01:06.732Z","updatedAt":"2026-11-14T09:01:07.663Z","startedAt":"2026-11-14T09:01:06.732Z","deadlineAt":"2026-11-1…
 PASS the run appears in the list
-POST /runs/20261114T084810-e633/cancel -> 200 {"ok":true,"data":{"run":{"id":"20261114T084810-e633","schemaVersion":1,"goal":"Compare two sorting strategies on the stub fixture.","status":"completed","mode":"planned","parentSessionId":"session-b8b0bcf7-0ce0-4c1c-b04c-eadf10f25b61","clientTimeZone":null,"createdAt":"2026-11-14T08:48:10.932Z","updatedAt":"2026-11-14T08:48:11.739Z","startedAt":"2026-11-14T08:48:10.932Z","deadlineAt":"2026-11-14T…
+POST /runs/20261114T090106-a188/cancel -> 200 {"ok":true,"data":{"run":{"id":"20261114T090106-a188","schemaVersion":1,"goal":"Compare two sorting strategies on the stub fixture.","status":"completed","mode":"planned","parentSessionId":"session-304d999d-9842-4640-9f33-b814f2a5ee51","clientTimeZone":null,"createdAt":"2026-11-14T09:01:06.732Z","updatedAt":"2026-11-14T09:01:07.663Z","startedAt":"2026-11-14T09:01:06.732Z","deadlineAt":"2026-11-14T…
 PASS cancelling a finished run says there is nothing to cancel
-POST /runs/20261114T084810-e633/resume -> 202 {"ok":true,"data":{"run":{"id":"20261114T084810-e633","schemaVersion":1,"goal":"Compare two sorting strategies on the stub fixture.","status":"completed","mode":"planned","parentSessionId":"session-b8b0bcf7-0ce0-4c1c-b04c-eadf10f25b61","clientTimeZone":null,"createdAt":"2026-11-14T08:48:10.932Z","updatedAt":"2026-11-14T08:48:11.739Z","startedAt":"2026-11-14T08:48:10.932Z","deadlineAt":"2026-11-14T…
+POST /runs/20261114T090106-a188/resume -> 202 {"ok":true,"data":{"run":{"id":"20261114T090106-a188","schemaVersion":1,"goal":"Compare two sorting strategies on the stub fixture.","status":"completed","mode":"planned","parentSessionId":"session-304d999d-9842-4640-9f33-b814f2a5ee51","clientTimeZone":null,"createdAt":"2026-11-14T09:01:06.732Z","updatedAt":"2026-11-14T09:01:07.663Z","startedAt":"2026-11-14T09:01:06.732Z","deadlineAt":"2026-11-14T…
 PASS resuming a completed run returns it unchanged
-POST /runs/20261114T084810-e633/resume -> 409 {"ok":false,"error":{"id":"no-session","summary":"the request did not name a live session that can own the run","hint":"pass session_id of a session that is open in the host process running the control plane; a run needs a live parent agent to create its child agents. Read the discovery file for the URL and token.","detail":"no live agent: session_id is required; an HTTP-started run needs an open …
+POST /runs/20261114T090106-a188/resume -> 409 {"ok":false,"error":{"id":"no-session","summary":"the request did not name a live session that can own the run","hint":"pass session_id of a session that is open in the host process running the control plane; a run needs a live parent agent to create its child agents. Read the discovery file for the URL and token.","detail":"no live agent: session_id is required; an HTTP-started run needs an open …
 PASS resume without a session is refused
 GET /runs/20260101T000000-none -> 404 {"ok":false,"error":{"id":"unknown-run","summary":"no run with that id is recorded in this state directory","hint":"call superagent_list to see recorded run ids. If the run was started with a different DSH_HOME or stateDir, point this host at the same directory.","detail":"unknown run 20260101T000000-none; call superagent_list to see recorded run ids"}}
 PASS an unknown run is a 404 with the classifier
@@ -42,7 +42,7 @@ discovery file still present after exit: False
 --- host stderr (superagent lines) ---
 
 [dsh-superagent] registered 5 tools; state C:\Windows\TEMP\dsh-e2e2-home\state\superagent; control port 0
-[dsh-superagent] control plane listening on http://127.0.0.1:49672 (token in C:\Windows\TEMP\dsh-e2e2-home\state\supera
+[dsh-superagent] control plane listening on http://127.0.0.1:54536 (token in C:\Windows\TEMP\dsh-e2e2-home\state\supera
 gent\control.json)
 probe exit: 0
 

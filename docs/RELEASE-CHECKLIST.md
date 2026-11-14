@@ -189,9 +189,11 @@ an offline test.
 - **Fix.** Public repository at
   <https://github.com/LittleChenLiya/dsh-superagent>; `repository`, `homepage`, and
   `bugs` point at it; version `0.9.0`; `CHANGELOG.md` ships in the package.
-  `exports` advertises only the plugin entry point, because the internal
-  subpaths shipped without types. `npm publish --dry-run` prints a 10-file,
-  42.0 kB tarball. Name availability on the registry is still unverified because
+  `exports` advertises the plugin entry point plus `cordis.patch.yml` (the
+  bundle patch the host resolves by path); internals stay private because the
+  internal subpaths ship without types. `npm publish --dry-run` prints an
+  11-file, 55.2 kB tarball (182.4 kB unpacked) with no runtime dependencies.
+  Name availability on the registry is still unverified because
   that needs a registry lookup at publish time.
 - **Effort.** S.
 

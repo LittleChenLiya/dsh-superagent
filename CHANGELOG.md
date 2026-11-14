@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.0 — unreleased
+## 0.9.0 — 2026-11-14
 
 Hardening pass before the first publish. No behaviour change for the happy
 path except the new spending caps and the cost line.
