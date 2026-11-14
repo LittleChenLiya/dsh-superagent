@@ -205,6 +205,11 @@ test('the control plane is off by default and starts runs through a live session
     assert.equal(closed.status, 409)
     assert.equal(closed.json.error.id, 'no-session')
 
+    // A client error must be a 400, not a 500 that blames the host.
+    const emptyGoal = await request('POST', '/runs', { goal: '   ', session_id: 'session-live' })
+    assert.equal(emptyGoal.status, 400)
+    assert.equal(emptyGoal.json.error.id, 'no-goal')
+
     const started = await request('POST', '/runs', {
       goal: 'say hi',
       session_id: 'session-live',
@@ -244,6 +249,34 @@ test('the control plane is off by default and starts runs through a live session
     await fsp.rm(stateDir, { recursive: true, force: true })
     await fsp.rm(offDir, { recursive: true, force: true })
     await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('an HTTP start without a subagents service is a 503, not a silent success', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  let disposer = null
+  const ctx = {
+    tools: { register: () => {} },
+    effect: execute => {
+      disposer = execute()
+    },
+    get: service => (service === 'agents' ? { get: id => ({ id }) } : undefined),
+  }
+  try {
+    apply(ctx, { stateDir, controlPort: 0 })
+    const discovery = await waitForJson(path.join(stateDir, 'control.json'))
+    const response = await fetch(`${discovery.url}/runs`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${discovery.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ goal: 'say hi', session_id: 'session-live' }),
+    })
+    assert.equal(response.status, 503)
+    const body = await response.json()
+    assert.equal(body.error.id, 'no-subagents')
+    assert.match(body.error.hint, /subagents/i)
+  } finally {
+    if (disposer) await disposer().catch(() => {})
+    await fsp.rm(stateDir, { recursive: true, force: true })
   }
 })
 

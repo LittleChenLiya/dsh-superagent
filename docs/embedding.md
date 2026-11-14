@@ -85,7 +85,10 @@ All responses are JSON with this envelope:
 ```
 
 `text` is produced by the same formatter as the tool results, so an embedder can
-show it verbatim without reimplementing the layout.
+show it verbatim without reimplementing the layout. The one difference is the
+closing next-step line on a background start: the tool says "poll with
+`superagent_status`", the HTTP reply names `GET /runs/:id`. The run block above
+it is identical.
 
 ### `GET /`
 
@@ -101,8 +104,11 @@ Route index, useful as a reachability probe:
 
 ```json
 {"ok":true,"data":{"service":"dsh-superagent","version":"0.9.0","pid":34728,
- "hostname":"…","stateDir":"…","startedAt":"…","uptimeSeconds":3,"activeRuns":1}}
+ "hostname":"…","stateDir":"…","startedAt":"…","uptimeSeconds":3,"runs":"GET /runs"}}
 ```
+
+Liveness only: a probe must not reclaim runs or sweep the state directory, so
+this endpoint does no state work. Ask `GET /runs` what is running.
 
 ### `GET /runs?limit=20`
 
@@ -149,6 +155,19 @@ in the host process that owns this control plane.
   missing session is refused as `no-session` rather than started in a state
   nothing can cancel or resume.
 
+**Where does `session_id` come from?** It is the id of a session that is open
+in the host — the same value that appears as `parentSessionId` on any run
+started from that session. Root session directories are named
+`session-<uuid>` under `$DSH_HOME/sessions/<workspace>/`, so
+`session-<uuid>` is the id; child sessions use the bare uuid and are refused by
+the recursion guard. The plugin does not expose a session list, because the
+host owns that registry; if you need one, read the newest directory under that
+sessions path.
+
+`wait` is capped at 300 s **on this transport**, while `superagent_status`
+accepts longer waits. A long HTTP poll holds one connection; the server allows
+64.
+
 ### `POST /runs/:id/cancel`
 
 Same semantics as `superagent_cancel`, including cross-process cooperative
@@ -172,6 +191,7 @@ from "the run is broken":
 | --- | --- | --- |
 | 400 | `bad-json` | Body is not a JSON object. |
 | 400 | `bad-run-id` | Empty run id in the path. |
+| 400 | `no-goal` | `goal` is missing or blank. Same id the tool returns. |
 | 401 | `unauthorized` | Missing or wrong bearer token. The hint names the discovery file. |
 | 403 | `forbidden-host` | `Host` header is not `127.0.0.1` / `localhost`. Blocks DNS rebinding. |
 | 404 | `not-found` | No such route. |
@@ -182,14 +202,18 @@ from "the run is broken":
 | 409 | `quota` | `maxActiveRuns` is full. |
 | 409 | `budget` | The run hit a spending cap. |
 | 413 | `body-too-large` | Body over 64 KB. |
-| 500 | host error ids | Classified by `lib/errors.js`, same text as the tools. |
+| 500 | `corrupt`, `unclassified`, … | Classified by `lib/errors.js`, same text as the tools. A damaged run file is ours to fix, not the caller's. |
 | 503 | `not-ready` | Request arrived before the socket finished binding. |
+| 503 | `no-subagents` | This profile has no subagent service, so no run can start. Enable it and restart the host. |
 
 ## 6. Security model
 
 - **Loopback only.** Bound to `127.0.0.1`; no option to expose it.
 - **Token per process.** 32 random bytes, base64url, constant-time compared.
-  Written to a `0600` file in the state directory, and nowhere else.
+  Written to a `0600` file in the state directory, and nowhere else. On POSIX
+  that mode is enforced; on Windows `mode` is advisory and the state
+  directory's ACL decides who can read it — which is the same boundary that
+  already lets a process read and write run files.
 - **Host header check.** A rebinding page that resolves its own domain to
   `127.0.0.1` sends its own `Host` and is refused with 403.
 - **No CORS headers.** A page on another origin cannot read replies, and a
@@ -246,6 +270,10 @@ console.log(await response.json())
 
 - The server starts at mount, once the state directory exists, and stops when
   the plugin is disposed (host shutdown or profile unload).
+- A dispose that lands while the port is still binding waits for the start to
+  settle and closes it; a start that sees the stop request closes itself before
+  publishing a discovery file. Mounting and immediately shutting down never
+  leaves an orphaned listener.
 - On stop, the listening socket is closed and `control.json` is removed **only
   if it still names this process**. A second host that took over the file is not
   left with a dangling discovery entry.

@@ -26,6 +26,12 @@ path except the new spending caps and the cost line.
 - The contract, security model, and client examples are in
   [docs/embedding.md](docs/embedding.md); verified against real
   `dsh@0.2.2-rc.1` with 17 checks in `docs/e2e/transcripts/control-plane.log`.
+- Review fixes before release: a dispose that lands while the port is still
+  binding now closes it instead of leaving an orphaned listener; a failed
+  discovery write closes the server instead of running unreachable; `/health`
+  does no state work, so a liveness probe cannot reclaim runs; a blank goal is
+  a 400 `no-goal` and a profile without a subagent service is a 503
+  `no-subagents` instead of a 500.
 
 ### Renamed to `dsh-superagent`
 

@@ -18,7 +18,7 @@ async function startPlane(overrides = {}) {
   const actions = {
     async health() {
       calls.push(['health'])
-      return { activeRuns: 1 }
+      return { runs: 'GET /runs' }
     },
     async list(query) {
       calls.push(['list', query])
@@ -184,7 +184,7 @@ test('routes map to the plugin actions and pass their arguments through', async 
 
     const health = await call(`${base}/health`, { token })
     assert.equal(health.status, 200)
-    assert.equal(health.json.data.activeRuns, 1)
+    assert.equal(health.json.data.runs, 'GET /runs')
     assert.equal(health.json.data.version, '9.9.9-test')
 
     const index = await call(`${base}/`, { token })
@@ -224,6 +224,11 @@ test('errors keep the readable classifier and a matching status code', async () 
 
     const unknownPath = await call(`${base}/volumes`, { token })
     assert.equal(unknownPath.status, 404)
+
+    // A bad escape is the caller's mistake; it must not surface as a 500.
+    const badEncoding = await call(`${base}/runs/%zz`, { token })
+    assert.equal(badEncoding.status, 400)
+    assert.equal(badEncoding.json.error.id, 'bad-run-id')
   } finally {
     await plane.stop()
     await fsp.rm(stateRoot, { recursive: true, force: true })
@@ -248,6 +253,42 @@ test('an oversized body is refused with 413 instead of being buffered', async ()
     assert.equal(response.json.ok, false)
   } finally {
     await plane.stop()
+    await fsp.rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test('a stop that races a start never leaves a listener or a discovery file', async () => {
+  const stateRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-control-'))
+  const plane = createControlPlane({
+    port: 0,
+    stateRoot,
+    version: '0.0.0',
+    log: () => {},
+    actions: {},
+  })
+  try {
+    const starting = plane.start()
+    const stopping = plane.stop()
+    const results = await Promise.allSettled([starting, stopping])
+    // Whatever the ordering, the end state is the same: not listening, nothing
+    // published. A dispose during mount must not leave an orphaned socket.
+    assert.equal(plane.url, null)
+    assert.deepEqual((await fsp.readdir(stateRoot)).filter(name => name.startsWith('control')), [])
+    assert.equal(results[1].status, 'fulfilled')
+  } finally {
+    await plane.stop()
+    await fsp.rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test('a plane stopped before it started refuses to bind', async () => {
+  const stateRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-control-'))
+  const plane = createControlPlane({ port: 0, stateRoot, version: '0.0.0', log: () => {}, actions: {} })
+  try {
+    await plane.stop()
+    await assert.rejects(plane.start(), /has been stopped/)
+    assert.deepEqual((await fsp.readdir(stateRoot)).filter(name => name.startsWith('control')), [])
+  } finally {
     await fsp.rm(stateRoot, { recursive: true, force: true })
   }
 })

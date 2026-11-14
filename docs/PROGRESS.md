@@ -346,9 +346,47 @@ the identical session check, child guard, quota, budgets, lock, and recovery as
 - `npm test`: **80 tests** (7 new in `test/control.test.mjs`, 1 end-to-end in
   `test/plugin.test.mjs`), two consecutive full runs, 80/80.
 
+### Adversarial review, round 1 (same day)
+
+Three read-only reviewers on separate lenses (auth/socket security, lifecycle
+and concurrency, documented contract vs code). Findings that were real and are
+fixed:
+
+1. **Dispose racing mount left a listener.** `stop()` could run while `start()`
+   was still binding; `start()` then installed the server after the cleanup and
+   nobody owned it. `start()`/`stop()` are now serialized through a `starting`
+   promise plus a `stopRequested` flag: a stop waits for the binding to settle,
+   and a start that sees the stop closes itself before writing discovery. Two
+   tests cover both orders.
+2. **A failed discovery write left an unreachable server.** It listened but
+   nobody could find the token. It now closes and reports the filesystem cause.
+3. **`/health` reclaimed runs.** It called `activeCount()` → `sweepOrphans()`,
+   so a liveness probe could mutate state and do a full directory scan. It is
+   now pure liveness; `GET /runs` answers "what is running".
+4. **Client errors were 500s.** A blank goal (`no-goal`) is now 400, and a
+   profile without a subagent service (`no-subagents`) is 503, not 500. The
+   classifier already had the ids; the status mapping was missing them.
+   `corrupt` moved from 409 to 500: a damaged file is ours to fix, not the
+   caller's.
+5. **Docs drifted from code** in four places: the health example still showed
+   `activeRuns`; `0600` was stated without the Windows-ACL caveat; the error
+   table lacked `no-goal` and `no-subagents`; and the "same text as the tool"
+   claim ignored the different next-step line on a background start. All fixed,
+   plus a "where does `session_id` come from" paragraph — the one real
+   discoverability gap for a first embedder.
+
+Checked and found already safe: auth runs before any route (including `/`); a
+duplicated or comma-joined `Authorization` header fails the single-token regex;
+`timingSafeEqual` on the documented 43-char token; the `Host` check covers the
+three loopback spellings; no CORS headers; the body cap is enforced while the
+stream is drained; `%2e%2e` or `%2F` in a run id cannot escape the runs
+directory because `store.read` validates against
+`/^[0-9A-Za-z][0-9A-Za-z-]{3,63}$/`; and the request handler cannot produce an
+unhandled rejection. A malformed percent escape used to become a 500; it is now
+a 400 `bad-run-id`.
+
 ### Next
 
-1. Two adversarial rounds on the control surface (auth bypass, socket leaks,
-  event-loop lifetime, concurrent starts across processes).
+1. A second adversarial round after the web-profile pass.
 2. Web-profile E2E pass (same plugin, browser-driven).
 3. H1–H3 release mechanics; a paid default-route run once a key exists (B8).
