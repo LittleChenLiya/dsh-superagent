@@ -1,5 +1,5 @@
 {
-  "name": "dsh-superagent",
+  "name": "@xiangyixie/dsh-superagent",
   "version": "0.9.0",
   "description": "Long-horizon autonomous runs for DeepSeek Harness: one goal, model-planned parallel subtasks, one merged report, durable across restarts.",
   "type": "module",

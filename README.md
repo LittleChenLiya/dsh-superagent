@@ -15,11 +15,13 @@ hooks into the host. No runtime dependencies.
 
 ### Naming
 
-The package and its five tools share one prefix on purpose: `dsh-superagent`
-registers `superagent_*`. The earlier working name was `dsh-longhaul` with
-`longhaul_*` tools; nothing was ever published, so the old names do not exist
-anywhere and there is no alias layer. If you find an old snippet that calls
-`longhaul_start`, replace the prefix — the arguments are unchanged.
+The package is published as `@xiangyixie/dsh-superagent` — npm already has a
+`dsh-super-agent` that is too close to the unscoped name, so the scope keeps
+the name instead of renaming the project. The five tools are unchanged:
+`superagent_*`. The earlier working name was `dsh-longhaul` with `longhaul_*`
+tools; nothing was ever published, so the old names do not exist anywhere and
+there is no alias layer. If you find an old snippet that calls `longhaul_start`,
+replace the prefix — the arguments are unchanged.
 
 ## Requirements
 
@@ -51,19 +53,19 @@ your `PATH`, use `npx @deepseek-ai/dsh@0.2.2-rc.1` instead.
 
 ```bash
 # 1. install the plugin into a profile (web, headless, ... whatever you run)
-dsh plugin --profile web add dsh-superagent
+dsh plugin --profile web add @xiangyixie/dsh-superagent
 
 # 2. confirm the bundle row exists in the merged config
 dsh --profile web --dump-config
 ```
 
-`add dsh-superagent` resolves the published package. For an offline machine or
-a pinned artifact, install a packed tarball instead — it is byte-identical to
-what the registry serves:
+`add @xiangyixie/dsh-superagent` resolves the published package. For an offline
+machine or a pinned artifact, install a packed tarball instead — it is
+byte-identical to what the registry serves:
 
 ```bash
-npm pack                                  # writes dsh-superagent-<version>.tgz
-dsh plugin --profile web add ./dsh-superagent-<version>.tgz
+npm pack                                  # writes xiangyixie-dsh-superagent-<version>.tgz
+dsh plugin --profile web add ./xiangyixie-dsh-superagent-<version>.tgz
 ```
 
 If you are working on the plugin itself, install the checkout instead:
@@ -79,9 +81,9 @@ Look for this block in the dump. If it is missing, the plugin is installed but
 not mounted, and no `superagent_*` tool will exist:
 
 ```yaml
-# == dsh-superagent
+# == @xiangyixie/dsh-superagent
 - id: superagent
-  name: dsh-superagent
+  name: @xiangyixie/dsh-superagent
 ```
 
 ```bash
@@ -297,7 +299,7 @@ files as the tools, need no session, and add no runtime dependency.
 Run them from the installed copy inside the profile:
 
 ```bash
-PKG="${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/dsh-superagent"
+PKG="${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/@xiangyixie/dsh-superagent"
 node "$PKG/bin/watch.js"                          # live panel, Ctrl-C to stop
 node "$PKG/bin/report.js" --out report.html       # self-contained HTML page
 ```
@@ -485,7 +487,7 @@ appears to "hang" until the ignored-abort child returns.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `dsh-superagent` block; reinstall with `dsh plugin --profile <p> add dsh-superagent` and read the host log for `[dsh-superagent]` lines. |
+| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent` and read the host log for `[dsh-superagent]` lines. |
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |
 | `[error] the subagent service is unavailable` | The profile has no `subagents` service, so the plugin has nothing to spawn. | Use a profile built on the base bundle (`web` or `headless` from the stock image), or add the subagent plugin to the profile. |

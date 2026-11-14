@@ -3,7 +3,7 @@
 # Inserts one tools-only plugin row at PROFILE scope, so every session in the
 # profile can start a run. The package never edits the profile's `bundles`
 # list — that entry is the operator's action (`dsh plugin --profile <name> add
-# dsh-superagent`).
+# @xiangyixie/dsh-superagent`).
 - insert:
     - id: superagent
-      name: dsh-superagent
+      name: '@xiangyixie/dsh-superagent'

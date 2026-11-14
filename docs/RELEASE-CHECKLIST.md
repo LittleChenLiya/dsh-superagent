@@ -249,7 +249,7 @@ an offline test.
   cancelled subtasks looked failed. (G) a host without `subagents` silently
   mounted nothing. (H) `exports` exposed subpaths without types.
 - **Fix.** README rewritten around `npx @deepseek-ai/dsh@0.2.2-rc.1`,
-  `dsh plugin --profile web add dsh-superagent`, `DEEPSEEK_API_KEY`, Node
+  `dsh plugin --profile web add @xiangyixie/dsh-superagent`, `DEEPSEEK_API_KEY`, Node
   `>=24.9`, and real expected output. Pricing accepts the exact `provider/model`
   key and falls back to the bare model name. Resume rebuilds limits. State
   initialization failures are reported by every tool. New error classes and

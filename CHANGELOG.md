@@ -5,6 +5,15 @@
 Hardening pass before the first publish. No behaviour change for the happy
 path except the new spending caps, the cost line, and two operator utilities.
 
+### Published as `@xiangyixie/dsh-superagent`
+
+- npm already carries a `dsh-super-agent` that its similarity check treats as
+  the same name as the unscoped one, so the first release goes out under the
+  author scope. The project, the repository, the plugin row id (`superagent`),
+  the five tools (`superagent_*`), the state directory, and both bin names are
+  unchanged; only the install specifier differs:
+  `dsh plugin --profile web add @xiangyixie/dsh-superagent`.
+
 ### Watch panel and HTML report
 
 - `dsh-superagent-watch` draws one line per run — id, status, calls used against
@@ -193,7 +202,7 @@ profile configures one.
   the default route's `DEEPSEEK_API_KEY` (not a DashScope key).
 - Quickstart no longer tells people to `npm i -g dsh` (that is an unrelated
   package); it uses `npx @deepseek-ai/dsh@0.2.2-rc.1` and
-  `dsh plugin --profile web add dsh-superagent`.
+  `dsh plugin --profile web add @xiangyixie/dsh-superagent`.
 - `usage: accounting pending` while a run is active; `usage: not recorded` only
   on a finished run whose logs are unreadable. `interrupted` runs print the
   `superagent_resume` next step, cancelled runs show unstarted subtasks as
