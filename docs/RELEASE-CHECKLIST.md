@@ -181,13 +181,15 @@ an offline test.
   files.
 - **Effort.** S.
 
-### 13. Publish metadata `[~]`
+### 13. Publish metadata `[x]`
 
-- **Problem.** No `CHANGELOG`, version still `0.1.0`, npm name never checked.
+- **Problem.** No `repository`, no `homepage`, no `CHANGELOG`, version still
+  `0.1.0`, and the npm name was never checked for availability.
 - **Who is hit.** Reviewers and packagers.
-- **Fix so far.** Version `0.9.0`, `CHANGELOG.md` shipped in the package,
-  `./errors` export added. `repository` / `homepage` are still empty **on
-  purpose**: the workspace has no git remote, and inventing a URL would be
-  worse than leaving it out. The owner needs to supply the repo URL.
-  `npm publish --dry-run` is the last check before tagging.
+- **Fix.** Public repository at
+  <https://github.com/LittleChenLiya/dsh-longhaul>; `repository`, `homepage`, and
+  `bugs` point at it; version `0.9.0`; `CHANGELOG.md` ships in the package;
+  `./errors` export added. `npm publish --dry-run` prints a 9-file, 29.3 kB
+  tarball. Name availability on the registry is still unverified because that
+  needs a registry lookup at publish time.
 - **Effort.** S.

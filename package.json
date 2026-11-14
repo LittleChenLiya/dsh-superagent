@@ -3,6 +3,14 @@
   "version": "0.9.0",
   "description": "Long-horizon autonomous runs for DeepSeek Harness: one goal, model-planned parallel subtasks, one merged report, durable across restarts.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LittleChenLiya/dsh-longhaul.git"
+  },
+  "homepage": "https://github.com/LittleChenLiya/dsh-longhaul#readme",
+  "bugs": {
+    "url": "https://github.com/LittleChenLiya/dsh-longhaul/issues"
+  },
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
