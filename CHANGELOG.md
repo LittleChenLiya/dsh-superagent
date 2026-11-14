@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.2 — 2026-11-14
+
+Documentation only; no code change. npm renders the README from the tarball, so
+this version exists to put the rewritten opening on the package page.
+
+- The first screen now answers three questions in order: what the plugin is for,
+  when it is the wrong tool, and the first command to run after installing.
+- `Naming` moved from the top to just above `Development`. The copyright line
+  and the "personal project, not affiliated with DeepSeek" statement moved to
+  the top, where they are read.
+- `Known limits` gained the isolation boundary: children use the host's
+  credentials and filesystem and are only as sandboxed as the host makes them.
+
 ## 0.9.1 — 2026-11-14
 
 Metadata-only release. No code or behaviour change; the only file contents that
