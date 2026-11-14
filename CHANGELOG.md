@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.1 — 2026-11-14
+
+Metadata-only release. No code or behaviour change; the only file contents that
+differ are `package.json`, `README.md`, and this changelog.
+
+- Added the `author` field (`Admire (LittleChenLiya)`), matching the copyright
+  line in `LICENSE`. npm shows it on the package page from this version on;
+  0.9.0 shipped without it.
+- The README "License" section now names the copyright holder, links
+  `LICENSE`, and says that the npm scope `@xiangyixie` and the GitHub account
+  `LittleChenLiya` are the same author.
+
 ## 0.9.0 — 2026-11-14
 
 Hardening pass before the first publish. No behaviour change for the happy

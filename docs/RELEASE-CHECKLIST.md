@@ -188,7 +188,7 @@ an offline test.
 - **Who is hit.** Reviewers and packagers.
 - **Fix.** Public repository at
   <https://github.com/LittleChenLiya/dsh-superagent>; `repository`, `homepage`, and
-  `bugs` point at it; version `0.9.0`; `CHANGELOG.md` ships in the package.
+  `bugs` point at it; version `0.9.1`; `CHANGELOG.md` ships in the package.
   `exports` advertises the plugin entry point plus `cordis.patch.yml` (the
   bundle patch the host resolves by path); internals stay private because the
   internal subpaths ship without types. `npm pack --dry-run` prints a
