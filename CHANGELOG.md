@@ -58,7 +58,7 @@ published for this yet.
 - **Notification outbox.** A refused wake-up is retried with backoff
   (`notifyRetries`, `notifyRetryDelayMs`) and messages for one session stay in
   order.
-- Test suite: 133 -> 150.
+- Test suite: 133 -> 151.
 
 ## 0.9.3 — 2026-11-14
 

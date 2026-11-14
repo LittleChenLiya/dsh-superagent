@@ -755,9 +755,12 @@ be dispatched twice.
   same goal start again. Goals that differ after normalization keep their own
   runs, and `allow_duplicate: true` remains the explicit escape hatch.
 
-Evidence: `npm test` 150 pass, 0 fail, run twice, offline (no network, no API,
+Evidence: `npm test` 151 pass, 0 fail, run twice, offline (no network, no API,
 no spend). New tests in `test/orchestrator.test.mjs`: two concurrent starts of
 one goal create a single run and a single plan; two orchestrators on one real
 state directory return the same run id and leave one run file; a completed run
 of the same goal does not block a new start; different goals still get separate
-runs. `version` stays 0.9.3, nothing is published, no tag.
+runs. In `test/plugin.test.mjs`: a second `superagent_start` for the same goal
+prints `deduped: true`, the joined-run sentence, and the `superagent_status`
+next step, and `superagent_list` still shows one run. `version` stays 0.9.3,
+nothing is published, no tag.

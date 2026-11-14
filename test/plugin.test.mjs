@@ -766,3 +766,55 @@ test('attention, milestones, the report file, and scoped rules reach the tool ou
     await fsp.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   }
 })
+
+test('a second start for the same goal joins the active run and says so', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  const tools = new Map()
+  const release = []
+  const ctx = {
+    tools: { register: tool => tools.set(tool.name, tool) },
+    subagents: {
+      async startActivation(spec) {
+        if (spec.label !== 'superagent-plan') {
+          await new Promise(resolve => release.push(resolve))
+        }
+        const text = spec.label === 'superagent-plan'
+          ? JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] })
+          : 'the answer'
+        return {
+          childId: `child-${spec.label}`,
+          result: Promise.resolve({ output: [{ type: 'text', text }], stopReason: 'completed' }),
+          dispose: async () => {},
+        }
+      },
+    },
+    get: () => undefined,
+  }
+
+  try {
+    apply(ctx, { stateDir, notifyOnComplete: false })
+    const start = args => tools.get('superagent_start').execute(args, { agent: { id: 'session-1' } })
+
+    const first = await start({ goal: 'Explain  threads' })
+    const second = await start({ goal: 'explain threads' })
+
+    const firstId = /run (\S+) —/.exec(first)[1]
+    assert.equal(/run (\S+) —/.exec(second)[1], firstId)
+    assert.match(second, /deduped: true/)
+    assert.match(second, /joined it instead of starting a second one/)
+    assert.match(second, /next: superagent_status run_id="/)
+    assert.match(await tools.get('superagent_list').execute({}), /1 run\(s\):/)
+
+    release.forEach(resolve => resolve())
+    await new Promise(resolve => setTimeout(resolve, 100))
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    await fsp.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})

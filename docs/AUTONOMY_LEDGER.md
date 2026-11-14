@@ -25,7 +25,7 @@
 7. 文档：`docs/PROGRESS.md` 新节、`README.md` 工具说明、`CHANGELOG.md` Unreleased 段。
 8. 不发布、不改 version、不打 tag。
 
-状态：**已完成**。归一化 + `dedupeKey` + 跨进程 per-goal claim；`npm test` 150 全绿、连续两遍、离线。细节与证据见 `docs/PROGRESS.md` 的 2026-11-15 节。
+状态：**已完成**。归一化 + `dedupeKey` + 跨进程 per-goal claim；`npm test` 151 全绿、连续两遍、离线。细节与证据见 `docs/PROGRESS.md` 的 2026-11-15 节。
 
 ### 后续顺序（第 6 节建议）
 2 完成后 → 4（暂时性错误退避 + 恢复备注）→ 3（attention 结构化汇报）→ 5（milestones）→ 8（reports/artifacts）→ 6（人的操作优先，单独一轮）→ 7（记忆分层补齐）→ 9（出站保序）。
