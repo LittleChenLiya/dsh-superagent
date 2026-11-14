@@ -39,6 +39,25 @@ test('an unclassified error keeps the original text and offers one safe action',
   assert.equal(detail, 'something nobody has seen before')
 })
 
+test('a missing credential names the default route key, not a DashScope key', () => {
+  const text = 'MISSING_CREDENTIAL: llm-deepseek: no API key for provider route "deepseek-official"'
+  const { id, hint } = classifyError(text)
+  assert.equal(id, 'missing-credential')
+  assert.match(hint, /DEEPSEEK_API_KEY/)
+  assert.match(hint, /never stores a key/)
+})
+
+test('an unknown model is not reported as an auth problem', () => {
+  const { id, hint } = classifyError('unknown model "deepseek-flsh" for provider deepseek-official')
+  assert.equal(id, 'unknown-model')
+  assert.match(hint, /childProvider|childModel/)
+})
+
+test('a missing state directory is a filesystem problem, not an unknown run', () => {
+  assert.equal(classifyError("ENOENT: no such file or directory, mkdir 'C:\\state'").id, 'filesystem')
+  assert.equal(classifyError("ENOTDIR: not a directory, mkdir 'C:\\state\\nested'").id, 'filesystem')
+})
+
 test('describeError always returns summary, hint and the untouched detail', () => {
   const text = describeError(new Error("Cannot read properties of undefined (reading 'maxDepth')"))
   const lines = text.split('\n')

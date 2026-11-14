@@ -131,3 +131,36 @@ test('the state directory remembers the hostname that created it', async () => {
   assert.equal((await store.readOwner()).hostname, 'machine-a')
   await fsp.rm(dir, { recursive: true, force: true })
 })
+
+test('a run lock lets exactly one process win', async () => {
+  const { store, dir } = await tempStore()
+  const first = { pid: 1111, hostname: 'machine-a', at: new Date().toISOString() }
+
+  assert.deepEqual(await store.acquireLock('20260101T000000-lock', first), { acquired: true, holder: first })
+  const second = await store.acquireLock('20260101T000000-lock', { pid: 2222, hostname: 'machine-b', at: 'now' })
+  assert.equal(second.acquired, false)
+  assert.equal(second.holder.pid, 1111)
+
+  await store.releaseLock('20260101T000000-lock')
+  assert.equal((await store.acquireLock('20260101T000000-lock', first)).acquired, true)
+  await fsp.rm(dir, { recursive: true, force: true })
+})
+
+test('mount cleanup drops locks of finished runs', async () => {
+  const { store, dir } = await tempStore()
+  await store.write({ id: '20260101T000000-done', createdAt: '2026-01-01T00:00:00.000Z', status: 'completed' })
+  await store.acquireLock('20260101T000000-done', { pid: 1, hostname: 'machine-a', at: 'now' })
+
+  await store.cleanup()
+
+  const names = await fsp.readdir(store.runsDir)
+  assert.equal(names.includes('20260101T000000-done.lock'), false)
+  await fsp.rm(dir, { recursive: true, force: true })
+})
+
+test('a missing runs directory is reported instead of looking empty', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-store-'))
+  const store = createStore(path.join(dir, 'vanished'))
+  await assert.rejects(() => store.list(), /cannot read the run state directory.*ENOENT/)
+  await fsp.rm(dir, { recursive: true, force: true })
+})

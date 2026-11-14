@@ -188,8 +188,71 @@ an offline test.
 - **Who is hit.** Reviewers and packagers.
 - **Fix.** Public repository at
   <https://github.com/LittleChenLiya/dsh-superagent>; `repository`, `homepage`, and
-  `bugs` point at it; version `0.9.0`; `CHANGELOG.md` ships in the package;
-  `./errors` export added. `npm publish --dry-run` prints a 9-file, 29.3 kB
-  tarball. Name availability on the registry is still unverified because that
-  needs a registry lookup at publish time.
+  `bugs` point at it; version `0.9.0`; `CHANGELOG.md` ships in the package.
+  `exports` advertises only the plugin entry point, because the internal
+  subpaths shipped without types. `npm publish --dry-run` prints a 10-file,
+  42.0 kB tarball. Name availability on the registry is still unverified because
+  that needs a registry lookup at publish time.
 - **Effort.** S.
+
+---
+
+## P0 — found by the independent pre-release review
+
+### 14. Mount and resume could run the same run twice `[x]`
+
+- **Problem.** (B1) `recover()` rewrote *any* active run, so starting a second
+  profile on a shared state directory marked the first profile's live run
+  `interrupted`; the live process then saved `running` again, and a resume ran
+  the same subtasks. (B2) `superagent_resume` checked only this process's
+  memory, skipped the start gate, and skipped the `maxActiveRuns` quota, so two
+  resumes (in one process or across two) could both schedule the same run.
+- **Fix.** One `ownership()` verdict is shared by `recover`, `sweepOrphans`, and
+  `resume`: a fresh heartbeat, a live local pid, or a live process holding the
+  lock means "leave it alone". Resume takes the same serial gate as start,
+  claims `<runId>.lock` with `wx`, re-reads under the lock, refuses a live
+  owner, and applies the quota. A remote lock older than 10 minutes is treated
+  as dead. Covered by two orchestrators on one real state directory.
+- **Effort.** M.
+
+### 15. Spending caps could be bypassed, and cancel could hang `[x]`
+
+- **Problem.** (B3) `spentCalls` was summed from `subtask.usage`, which only
+  exists after a child finishes *and* its session log is readable; with an
+  unreadable log the counters stayed at 0, so `maxModelCallsPerRun: 2` still
+  produced four workers and an aggregator. (I1) a child that ignores abort could
+  hold `cancel` forever. (I2) the terminal status was saved before the notify
+  outcome, leaving a window with no notify row. (I3) a resumed run kept
+  `notified: true`, so it never woke the session again.
+- **Fix.** A spawn is counted and saved *before* the child exists, so it is
+  always in the budget even with no readable usage; finished attempts and
+  heartbeats replace the per-child snapshot when the log is readable. Spawning
+  is abortable and a late child is disposed. The terminal status and its notify
+  outcome land in one save; waking the session is bounded. Resume resets
+  `notified`/`notify`/`cancelPending` and rebuilds `limits` from the current
+  config.
+- **Effort.** M.
+
+### 16. A stranger following the README usually failed `[x]`
+
+- **Problem.** (A) The README assumed the author's machine: no DSH install step
+  (`npm i -g dsh` installs an unrelated package), a `file:` install, the wrong
+  key name (`DASHSCOPE_API_KEY` for a `deepseek-official` route), and Node
+  `>=22.19` where the host requires `>=24.9`. (B) pricing keys never matched the
+  `provider/model` ids in the usage log. (C) the README promised that raising a
+  cap and resuming worked, but limits were frozen at start. (D) a broken
+  stateDir was swallowed and shown as "no runs recorded". (E)
+  `MISSING_CREDENTIAL` and unknown model ids were unclassified. (F) new runs
+  showed alarming `usage: not recorded`, `interrupted` had no next step, and
+  cancelled subtasks looked failed. (G) a host without `subagents` silently
+  mounted nothing. (H) `exports` exposed subpaths without types.
+- **Fix.** README rewritten around `npx @deepseek-ai/dsh@0.2.2-rc.1`,
+  `dsh plugin --profile web add dsh-superagent`, `DEEPSEEK_API_KEY`, Node
+  `>=24.9`, and real expected output. Pricing accepts the exact `provider/model`
+  key and falls back to the bare model name. Resume rebuilds limits. State
+  initialization failures are reported by every tool. New error classes and
+  hints. `usage: accounting pending` while active, a `next:` line for
+  `interrupted`, `skipped`/`cancelled` subtask wording, and split elapsed time.
+  `subagents` is optional and `start` explains the missing service. `exports`
+  reduced to `.` and `./package.json`.
+- **Effort.** M.

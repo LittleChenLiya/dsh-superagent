@@ -21,24 +21,50 @@ anywhere and there is no alias layer. If you find an old snippet that calls
 
 ## Requirements
 
-- DeepSeek Harness `>= 0.2.2-rc.1 < 0.3.0` with the base bundle (`tools`,
-  `agents`, `subagents` services).
-- Node `>= 22.19.0` (uses `zlib.zstdDecompressSync` for token accounting).
-- A model route that can call tools, and its API key in the environment.
+- Node `>= 24.9.0`. DeepSeek Harness refuses to start below that, so this
+  plugin does too.
+- DeepSeek Harness `>= 0.2.2-rc.1 < 0.3.0` with the base bundle (the `tools`,
+  `agents`, and `subagents` services).
+- A model route that can call tools, and that route's API key in the
+  environment. The default profile uses `deepseek-official` / `deepseek-flash`
+  and reads `DEEPSEEK_API_KEY`.
 
 ## Quickstart
 
-Five minutes, from nothing to a finished run.
+Five minutes, from nothing to a finished run. Every command is written to be
+copied from a clean machine.
+
+### 0. Do not install `dsh` from npm by name
 
 ```bash
-# 1. install into a profile (use any profile you already run: web, headless, ...)
-dsh plugin --profile web add file:/absolute/path/to/dsh-superagent
+# WRONG: npm's `dsh` is unrelated ("a shell written in JavaScript")
+npm i -g dsh
+
+# RIGHT: run the DeepSeek Harness by its scoped package, pinned
+npx @deepseek-ai/dsh@0.2.2-rc.1 --version
+```
+
+The rest of this page writes `dsh` for that command; if the binary is not on
+your `PATH`, use `npx @deepseek-ai/dsh@0.2.2-rc.1` instead.
+
+```bash
+# 1. install the plugin into a profile (web, headless, ... whatever you run)
+dsh plugin --profile web add dsh-superagent
 
 # 2. confirm the bundle row exists in the merged config
 dsh --profile web --dump-config
 ```
 
-Look for this block in the output. If it is missing, the plugin is installed but
+If you are working on the plugin itself, install the checkout instead:
+
+```bash
+dsh plugin --profile web add file:/absolute/path/to/dsh-superagent
+```
+
+`file:` installs copy the package; re-run the `add` after changing the source,
+or the profile keeps running the old copy.
+
+Look for this block in the dump. If it is missing, the plugin is installed but
 not mounted, and no `superagent_*` tool will exist:
 
 ```yaml
@@ -49,9 +75,14 @@ not mounted, and no `superagent_*` tool will exist:
 
 ```bash
 # 3. start the host with the key in the environment that starts it
-export DASHSCOPE_API_KEY=sk-...          # PowerShell: $env:DASHSCOPE_API_KEY="sk-..."
+export DEEPSEEK_API_KEY=sk-...          # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 dsh --profile web
 ```
+
+The key must be the one for the route the profile actually uses. A profile
+pointing at DashScope uses `DASHSCOPE_API_KEY`; a profile pointing at a
+self-hosted gateway uses whatever that route names. See
+[Other routes](#other-routes) if you want to add one.
 
 In the session, ask for a run:
 
@@ -64,8 +95,8 @@ run 20261114T051233-a1b2 — completed
 goal: Explain the difference between process and thread in 300 words, with one concrete example
 plan: planned; subtasks 2/2 completed; max 3 in parallel; 2 attempt(s) each
 elapsed: 18.4s
-usage: input 4120 (+980 prompt tokens served from cache), output 455, calls 4 (qwen-flash: 4 call(s) 4120 in / 455 out)
-cost: ¥0.0014 (estimate; all models priced)
+usage: input 4120 (+980 prompt tokens served from cache), output 455, calls 4 (deepseek-official/deepseek-flash: 4 call(s) 4120 in / 455 out)
+cost: not computed — no price configured for deepseek-official/deepseek-flash; add a pricing entry in cordis.patch.yml to get an estimate
   [1] completed (attempts 1) Processes vs threads
   [2] completed (attempts 1) Concrete example
 
@@ -73,12 +104,21 @@ report:
 ...
 ```
 
-If you see `usage: not recorded` or `cost: not computed`, the run still worked;
-those two lines are covered in [Troubleshooting](#troubleshooting).
+There is no built-in price for the default DeepSeek route; see
+[Spending limits and prices](#spending-limits-and-prices) to add one, after
+which the same run also prints `cost: ...`. `usage: not recorded` only appears
+on a finished run whose child logs cannot be read at all — see
+[Troubleshooting](#troubleshooting).
+
+If `wait_seconds` runs out before the run finishes, the reply ends with
+`next: superagent_status run_id="..." wait_seconds=120`. Call it again; the run
+keeps going either way.
 
 To check recovery without a real crash: kill the host while a run is active,
-start it again, then `superagent_status` shows `interrupted` and `superagent_resume`
-finishes it.
+start it again, then `superagent_status` shows `interrupted` and
+`superagent_resume` finishes it. A run that is only `interrupted` when no live
+process owns it: while the original host is still running, its run is left
+alone and the next mount reports it as active, not as interrupted.
 
 ## Configuration
 
@@ -98,14 +138,16 @@ Row config in `<profile>/cordis.patch.yml`:
 | `provider` | `spawn` | Subagent backend used for planner, workers, aggregator. |
 | `childProvider` | parent's | Optional provider route override for child agents. |
 | `childModel` | parent's | Optional model override for child agents. |
+| `childPreset` | none | Agent preset for child agents. A preset owns the child's tool set; this host has no per-run tool filter. |
+| `maxSubagentDepth` | `1` | How deep children may delegate. `1` forbids grandchildren; `provider-managed` leaves it to the backend. |
 | `maxSubtasks` | `8` | Cap on planned subtasks (tool can lower it, hard max 16). |
 | `maxParallel` | `3` | Subtasks executing at once (hard max 8). |
-| `maxActiveRuns` | `2` | Active runs per host; further `superagent_start` calls are rejected. |
+| `maxActiveRuns` | `2` | Active runs per host; further `superagent_start` and `superagent_resume` calls are rejected. |
 | `attempts` | `2` | Attempts per subtask before it is marked failed. |
 | `deadlineMinutes` | `120` | Wall-clock budget; on expiry the run ends `partial` or `failed`. |
 | `maxModelCallsPerRun` | `80` | Hard cap on child model calls per run; `0` disables. |
 | `maxTokensPerRun` | `2000000` | Hard cap on prompt + completion tokens per run; `0` disables. |
-| `pricing` | `qwen-flash` list price | Per-1M-token prices used for the cost line. |
+| `pricing` | empty for DeepSeek routes | Per-1M-token prices, keyed exactly as the usage log names the model (`provider/model`). |
 | `resultCapBytes` | `32768` | Bytes kept per subtask report. |
 | `notifyOnComplete` | `true` | Wake the owning session once when a run finishes while nobody is polling. |
 | `keepRuns` | `0` | Delete terminal runs older than this many days at mount; `0` keeps everything. |
@@ -124,8 +166,28 @@ specific route, set both keys and restart the host:
 ```
 
 Nothing about a model id is compiled into the plugin. API keys are read from
-the environment variable named by the route (`DASHSCOPE_API_KEY`,
-`HAODUO_API_KEY`); the plugin never stores a key.
+the environment variable named by the route; the plugin never stores a key. The
+default profile's route is `deepseek-official` and reads `DEEPSEEK_API_KEY`.
+
+### Other routes
+
+The example above assumes a DashScope route is installed in the profile. It is
+not part of the base bundle: the default profile has no `dashscope` provider and
+`DASHSCOPE_API_KEY` alone will not create one. Add the route first (see the
+harness docs for LLM plugins), then name it in `childProvider`.
+
+### Child tools and recursion
+
+`maxSubagentDepth: 1` is passed to the host as `maxDepth`, so a worker cannot
+create its own children. This is enforced by the host, not by prompting, and a
+provider that cannot enforce it makes `superagent_start` fail with an explicit
+error instead of silently running unbounded.
+
+There is **no** enforced tool allowlist on `dsh@0.2.2-rc.1`. The host's
+subagent start request has no tool filter, and its own `subagent` tool rejects a
+`toolFilter` config and points at agent presets. `childPreset` is therefore the
+supported way to narrow a child's tools; without a dedicated preset, workers
+inherit the session's tools (minus `superagent_*`, which they are refused).
 
 ### Spending limits and prices
 
@@ -138,28 +200,38 @@ checked before every child is spawned, so a retry loop cannot walk past them:
     maxModelCallsPerRun: 40
     maxTokensPerRun: 500000
     pricing:
-      qwen-flash:
-        input: 0.15          # price per 1M uncached prompt tokens
-        output: 1.5          # price per 1M completion tokens
-        cacheRead: 0.03      # optional; defaults to the input price
+      deepseek-official/deepseek-flash:
+        input: 0.28          # price per 1M uncached prompt tokens (example)
+        output: 0.42         # price per 1M completion tokens (example)
+        cacheRead: 0.028     # optional; defaults to the input price
         currency: CNY
 ```
 
-When a budget is hit, no new child starts, the run ends `partial` with
-`error: ... budget reached ...`, and the reports that already finished are still
-merged. `superagent_resume` continues from there after you raise the cap.
+The pricing key is matched against the model id in the usage log, which is
+`provider/model` — `superagent_status` prints it on the `usage:` line, so copy
+the key from there. A key is matched exactly first, then by its bare model name,
+so `qwen-flash` also prices `dashscope/qwen-flash` when there is no exact entry.
+The plugin ships no price for any route, because a stale price is worse than a
+missing one.
 
-Costs are estimates from this table, never from a built-in guess. A model that
-is not listed is reported as `unpriced` and excluded from the total, so the
+When a budget is hit, no new child starts, the run stops, and the reports that
+already finished are still merged. The run ends `partial` when at least one
+subtask completed and `failed` when none did. `superagent_resume` rebuilds the
+limits from the current config, keeps everything already spent, and continues
+from there — that is how you raise a cap.
+
+A spawn counts as one model call even when the child's session log cannot be
+read, so the call budget keeps working on a host whose log layout changed.
+Token accounting still needs the log; when it is unavailable, the run prints a
+`usage note:` saying the figures are a lower bound.
+
+Costs are estimates from the table above, never from a built-in guess. A model
+that is not listed is reported as `unpriced` and excluded from the total, so the
 number you see is always a lower bound:
 
 ```
 cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
 ```
-
-The default table contains only `qwen-flash` (¥0.15 / ¥1.5 per 1M, DashScope
-list price). Check the provider's current price page before trusting it, and
-override it in the config above.
 
 ## Tools
 
@@ -181,20 +253,35 @@ temp file plus rename, so a kill during a save cannot leave a half-written run.
 Statuses: `queued`, `planning`, `running`, `aggregating`, `completed`,
 `partial`, `failed`, `cancelled`, `interrupted`.
 
-At mount the plugin rewrites any run still marked active by a previous process
-to `interrupted` and resets its in-flight subtasks to `pending`. `superagent_resume`
-then re-runs only what did not finish. The planner's plan is reused, so a
-resumed run does not pay for planning twice.
+At mount the plugin marks a run as `interrupted` **only when it has no live
+owner** (see below) and resets its in-flight subtasks to `pending`.
+`superagent_resume` then re-runs only what did not finish. The planner's plan is
+reused, so a resumed run does not pay for planning twice.
 
-Two side files live next to the run:
+A state directory can be shared by two profiles or two machines. Recovery
+therefore never decides from this process's memory alone: a run whose owner is
+still alive — fresh heartbeat, live local pid, or a live process holding its
+lock — is left untouched, cancel marker included. Two processes rewriting one
+run would make the surviving child keep spending while the file says
+`interrupted`, and a resume would then run the same subtasks twice.
+
+Resuming is exclusive for the same reason. `superagent_resume` takes the same
+serial gate as `superagent_start`, claims `<runId>.lock` (created atomically),
+and refuses a run that still has a live owner or that would exceed
+`maxActiveRuns`.
+
+Three side files live next to the run:
 
 | File | Meaning |
 | --- | --- |
 | `<runId>.cancel` | A cancel was requested by some process. The owner polls it once per second and stops its children. Removed when the run ends. |
+| `<runId>.lock` | The process that is allowed to schedule this run. Created with `wx`, so exactly one process wins. A lock left by a dead local pid is broken immediately; a lock from another machine is broken once it is older than 10 minutes, since its pid cannot be checked. |
 | `<runId>.json.corrupt-<ts>` | The state file was not valid JSON and was moved aside, not deleted. The run is skipped by `superagent_list` and reported by id with this path. |
 
 If a run's file is damaged, nothing else breaks: other runs list normally, and
-starting a new run works. Inspect the `.corrupt-` file, then delete it.
+starting a new run works. Inspect the `.corrupt-` file, then delete it. A file
+that cannot be read at all (permission, too many open files, disk full) is
+reported as such instead of being shown as an unknown run.
 
 ### Orphaned runs and the active-run quota
 
@@ -211,6 +298,10 @@ them, with two different rules:
   another machine, so it is ignored and only the heartbeat decides. This is the
   case for a state directory on a network share or a synced folder.
 
+In both cases a lock held by a live local process also vetoes reclamation, and
+mount-time recovery uses exactly the same rules — a run is never rewritten
+while anybody can still be working on it.
+
 Reclamation is never silent: the run becomes `interrupted`, its `reclaimed`
 field records the exact basis (`pid 1234 is not running and its heartbeat
 stopped at ...`, or `the state directory is shared with <host> ...`), the reason
@@ -223,14 +314,21 @@ run is never mistaken for an orphan.
 ### Notification boundaries
 
 `notifyOnComplete` writes one message back into the owning session when a run
-finishes **and nobody is polling**. Two cases report instead of notifying:
+finishes. Two cases report instead of notifying:
 
-- a caller was inside `superagent_status` (no message, to avoid duplicate noise);
+- a caller in the same host process was inside `superagent_status` and receives
+  the terminal report itself (no message, to avoid duplicate noise). A poller in
+  a *different* process does not suppress the message: it can time out just
+  before the run ends, and then the only notification would be lost;
 - the owning session is gone (headless users who closed it): the run records
   `notify.delivered = false` with the reason, `superagent_status` prints
   `notify: not delivered — ...`, and `superagent_list` marks the row
   `(result not delivered to the session)`. The report is always readable with
   `superagent_status`.
+
+Waking the session is bounded (15 s), and the heartbeat keeps running until the
+terminal state is written, so a slow wake-up cannot make another process treat a
+live run as orphaned.
 
 ### Retention
 
@@ -261,16 +359,21 @@ shared state directory.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| `superagent_*` tools do not exist | The bundle row is not mounted. | Run `--dump-config` and check for the `dsh-superagent` block; reinstall with `dsh plugin --profile <p> add file:<abs path>`. |
-| `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DASHSCOPE_API_KEY` / `HAODUO_API_KEY` before starting `dsh`, then restart. |
+| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `dsh-superagent` block; reinstall with `dsh plugin --profile <p> add dsh-superagent` and read the host log for `[dsh-superagent]` lines. |
+| `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
+| `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |
+| `[error] the subagent service is unavailable` | The profile has no `subagents` service, so the plugin has nothing to spawn. | Use a profile built on the base bundle (`web` or `headless` from the stock image), or add the subagent plugin to the profile. |
+| `[error] subagent provider "..." cannot enforce maxSubagentDepth` | The route's subagent backend cannot cap delegation. | Keep `provider: spawn`, or set `maxSubagentDepth: provider-managed` if you accept the backend's own limit. |
 | `[error] the Windows file sandbox could not start a child process` | Host sandbox launcher failure (`windows-acl-run: ...`), not your goal or key. The subtask is retried once. | Retry the run; if it repeats, restart the host, or disable the Windows ACL sandbox in the profile, then run the `diagnose-windows-sandbox-acl` skill. |
-| `[error] the run was not started because the active-run limit is already in use` | `maxActiveRuns` is full. | Wait, cancel one, or raise `maxActiveRuns`. |
-| `[error] the run stopped because it reached its spending cap` | `maxModelCallsPerRun` or `maxTokensPerRun` was hit. | Read the partial report; raise the cap only if the spend is expected. |
-| `usage: not recorded` | No child session log was readable (runs created before accounting, or a moved `sessions` directory). | Nothing to fix on old runs; new runs record usage. |
-| `cost: not computed — no price configured for X` | The model is not in the `pricing` table. | Add its per-1M prices under `pricing.<model>`. |
+| `[error] the run was not started because the active-run limit is already in use` | `maxActiveRuns` is full, including runs from another profile that shares the state directory. | Wait, cancel one, or raise `maxActiveRuns`. |
+| `[error] the run stopped because it reached its spending cap` | `maxModelCallsPerRun` or `maxTokensPerRun` was hit. | Read the partial report; raise the cap in the config, then `superagent_resume` continues with the new limits. |
+| `usage: not recorded` | The run finished and no child session log could be read (moved `sessions` directory, or a run created before accounting). | Nothing to fix on old runs; new runs record usage. While a run is still active the line says accounting is pending instead. |
+| `usage note: N child session log(s) could not be read` | Part of the usage was unreadable; the token figures are a lower bound. The call budget still counted those children. | Check that `$DSH_HOME/sessions` exists and is readable by the host process. |
+| `cost: not computed — no price configured for X` | The model is not in the `pricing` table. | Add its per-1M prices under `pricing["provider/model"]`, copying the id from the `usage:` line. |
 | `cost: at least ... (no price for X)` | Some children used an unpriced model. | Same as above; the figure covers only the priced part. |
 | `[error] a saved run file is damaged` | A state file was truncated or invalid JSON. | The bytes were kept at `<runId>.json.corrupt-<ts>`; inspect, then delete. |
 | `cancel requested ... not confirmed` | The owning process did not acknowledge within 5 s. | Check `superagent_status`; if the owner is gone, restart the host so recovery marks the run `cancelled`, then `superagent_resume` if you want it to continue. |
+| `[error] ... still owned by a live process` | Another profile is running this run, so resuming here would duplicate the work. | Let it finish, or `superagent_cancel` it first. |
 
 Every tool error has three lines: `[error]` a sentence, `hint:` one next step,
 and `detail:` the untouched host message, so nothing is hidden.

@@ -6,6 +6,16 @@ import test from 'node:test'
 
 import { apply, inject, name } from '../lib/index.js'
 
+/** A promise that resolves when `open()` is called, with no polling. */
+function gate() {
+  let open
+  const opened = new Promise(resolve => {
+    open = resolve
+  })
+  return { opened, open: () => open() }
+}
+
+
 /**
  * Mount the plugin against a fake host: only `tools.register`, `subagents`, and
  * `agents` are provided, which is the whole injected surface.
@@ -38,7 +48,7 @@ test('the plugin mounts, registers five tools, and runs a goal end to end', asyn
     apply(ctx, { stateDir, notifyOnComplete: false })
 
     assert.equal(name, 'dsh-superagent')
-    assert.deepEqual(inject, ['tools', 'agents', 'subagents'])
+    assert.deepEqual(inject, ['tools', 'agents'])
     assert.deepEqual(
       [...tools.keys()].sort(),
       ['superagent_cancel', 'superagent_list', 'superagent_resume', 'superagent_start', 'superagent_status'],
@@ -70,6 +80,50 @@ test('the plugin mounts, registers five tools, and runs a goal end to end', asyn
   }
 })
 
+test('without a subagents service the tools still mount and explain what is missing', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  const tools = new Map()
+  const ctx = {
+    tools: { register: tool => tools.set(tool.name, tool) },
+    get: () => undefined,
+  }
+
+  try {
+    apply(ctx, { stateDir })
+    assert.equal(tools.size, 5, 'the tools must not vanish when the service is optional')
+
+    const started = await tools.get('superagent_start').execute({ goal: 'needs workers' }, { agent: { id: 'session-1' } })
+    assert.match(started, /subagent service is unavailable/)
+    assert.match(started, /hint: /)
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await fsp.rm(stateDir, { recursive: true, force: true })
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('an unusable state directory is reported instead of an empty run list', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const blocked = path.join(dir, 'not-a-directory')
+  await fsp.writeFile(blocked, 'this is a file', 'utf8')
+  const tools = new Map()
+  const ctx = { tools: { register: tool => tools.set(tool.name, tool) }, get: () => undefined }
+
+  try {
+    apply(ctx, { stateDir: path.join(blocked, 'nested') })
+    const listed = await tools.get('superagent_list').execute({})
+    assert.match(listed, /^\[error\]/)
+    assert.match(listed, /state directory/i)
+    assert.doesNotMatch(listed, /no superagent runs recorded/)
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('a run that finishes with its session gone says the result was not delivered', async () => {
   const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
   const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
@@ -77,22 +131,32 @@ test('a run that finishes with its session gone says the result was not delivere
   process.env.DSH_HOME = home
 
   const tools = new Map()
+  // Resolved when the plugin actually tries to wake the session. That is the
+  // event this test waits for instead of sleeping and polling.
+  const notifyAttempted = gate()
+  const subagents = {
+    async startActivation(spec) {
+      const text = spec.label === 'superagent-plan'
+        ? JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] })
+        : 'the answer'
+      return {
+        childId: `child-${spec.label}`,
+        result: Promise.resolve({ output: [{ type: 'text', text }], stopReason: 'completed' }),
+        dispose: async () => {},
+      }
+    },
+  }
   const ctx = {
     tools: { register: tool => tools.set(tool.name, tool) },
-    subagents: {
-      async startActivation(spec) {
-        const text = spec.label === 'superagent-plan'
-          ? JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] })
-          : 'the answer'
-        return {
-          childId: `child-${spec.label}`,
-          result: Promise.resolve({ output: [{ type: 'text', text }], stopReason: 'completed' }),
-          dispose: async () => {},
-        }
-      },
+    get: name => {
+      if (name === 'subagents') return subagents
+      if (name === 'agents') {
+        notifyAttempted.open()
+        // No live sessions: the owning session cannot be woken.
+        return { get: () => undefined }
+      }
+      return undefined
     },
-    // No live sessions: the owning session cannot be woken.
-    get: () => undefined,
   }
 
   try {
@@ -100,12 +164,10 @@ test('a run that finishes with its session gone says the result was not delivere
     const started = await tools.get('superagent_start').execute({ goal: 'notify nobody' }, { agent: { id: 'session-gone' } })
     const runId = /run (\S+) —/.exec(started)[1]
 
-    let status = ''
-    for (let attempt = 0; attempt < 100; attempt++) {
-      status = await tools.get('superagent_status').execute({ run_id: runId })
-      if (/— (completed|partial|failed)/.test(status)) break
-      await new Promise(resolve => setTimeout(resolve, 20))
-    }
+    await notifyAttempted.opened
+    // No waiter existed when the run settled, so the wake-up was attempted and
+    // its failure must be visible.
+    const status = await tools.get('superagent_status').execute({ run_id: runId, wait_seconds: 10 })
     assert.match(status, /— completed/)
     assert.match(status, /notify: not delivered — the owning session session-gone is no longer live/)
     assert.match(status, /report:/)

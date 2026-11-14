@@ -21,9 +21,11 @@ const BASE_CONFIG = {
 function memoryStore({ ownerHost = null } = {}) {
   const runs = new Map()
   const cancels = new Set()
+  const locks = new Map()
   const store = {
     runs,
     cancels,
+    locks,
     owner: ownerHost ? { hostname: ownerHost, createdAt: '2026-01-01T00:00:00.000Z' } : null,
     async init() {},
     async list() {
@@ -52,6 +54,17 @@ function memoryStore({ ownerHost = null } = {}) {
     async writeOwner(owner) {
       store.owner = owner
     },
+    async acquireLock(id, holder) {
+      if (locks.has(id)) return { acquired: false, holder: locks.get(id) }
+      locks.set(id, holder)
+      return { acquired: true, holder }
+    },
+    async readLock(id) {
+      return locks.get(id) ?? null
+    },
+    async releaseLock(id) {
+      locks.delete(id)
+    },
   }
   return store
 }
@@ -79,7 +92,18 @@ function makeSpawner(handle) {
   return { spawnChild, calls }
 }
 
-function orchestratorWith({ store = memoryStore(), spawner, config = {}, readUsage = async () => ({ inputTokens: 10, outputTokens: 2, totalTokens: 12, modelCalls: 1, models: { 'test/model': { inputTokens: 10, outputTokens: 2, calls: 1 } } }) }) {
+function orchestratorWith({
+  store = memoryStore(),
+  spawner,
+  config = {},
+  readUsage = async () => ({
+    inputTokens: 10,
+    outputTokens: 2,
+    totalTokens: 12,
+    modelCalls: 1,
+    models: { 'test/model': { inputTokens: 10, outputTokens: 2, calls: 1 } },
+  }),
+}) {
   const notifications = []
   const orchestrator = createOrchestrator({
     store,
@@ -93,6 +117,13 @@ function orchestratorWith({ store = memoryStore(), spawner, config = {}, readUsa
 }
 
 const parent = { id: 'session-parent' }
+
+/** Resolve on the first worker spawn, so a test can act without sleeping. */
+function gate() {
+  let open
+  const opened = new Promise(resolve => { open = resolve })
+  return { opened, open }
+}
 
 test('plan is decomposed and subtasks run in parallel within the limit', async () => {
   let running = 0
@@ -167,10 +198,12 @@ test('an unparsable plan degrades to a single subtask', async () => {
 })
 
 test('cancel stops the run and keeps partial state on disk', async () => {
+  const started = gate()
   const { spawnChild } = makeSpawner(async (spec, childId) => {
     if (spec.label === 'superagent-plan') {
       return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }] }))
     }
+    started.open()
     return new Promise((_resolve, reject) => {
       spec.signal.addEventListener('abort', () => reject(new Error(`aborted ${childId}`)), { once: true })
     })
@@ -178,12 +211,43 @@ test('cancel stops the run and keeps partial state on disk', async () => {
   const { orchestrator, store } = orchestratorWith({ spawner: { spawnChild } })
 
   const run = await orchestrator.start({ goal: 'cancel me', parentSessionId: parent.id, parent })
-  await new Promise(resolve => setTimeout(resolve, 50))
+  await started.opened
   const cancelled = await orchestrator.cancel(run.id)
 
   assert.equal(cancelled.status, 'cancelled')
   assert.equal((await store.read(run.id)).status, 'cancelled')
   assert.equal(cancelled.report, null)
+})
+
+test('cancel returns promptly even when a child ignores its abort signal', async () => {
+  const started = gate()
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    }
+    started.open()
+    // Neither the result nor dispose ever settles: this is the child that used
+    // to hang cancel() forever.
+    return new Promise(() => {})
+  })
+  const stubborn = {
+    spawnChild: async spec => {
+      const handle = await spawnChild(spec)
+      return { ...handle, dispose: () => new Promise(() => {}) }
+    },
+    calls: [],
+  }
+  const { orchestrator, store } = orchestratorWith({ spawner: stubborn })
+
+  const run = await orchestrator.start({ goal: 'stubborn child', parentSessionId: parent.id, parent })
+  await started.opened
+  const began = Date.now()
+  const cancelled = await orchestrator.cancel(run.id)
+  const elapsed = Date.now() - began
+
+  assert.ok(elapsed < 6000, `cancel took ${elapsed}ms`)
+  assert.equal(cancelled.status, 'cancelled')
+  assert.equal((await store.read(run.id)).status, 'cancelled')
 })
 
 test('a third active run is rejected by the quota', async () => {
@@ -204,7 +268,26 @@ test('a third active run is rejected by the quota', async () => {
   )
   await orchestrator.cancel(first.id)
   release.forEach(resolve => resolve())
-  await new Promise(resolve => setTimeout(resolve, 20))
+})
+
+test('an invalid maxActiveRuns falls back instead of removing the quota', async () => {
+  const release = []
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    }
+    await new Promise(resolve => release.push(resolve))
+    return completed('late')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, config: { maxActiveRuns: 'abc' } })
+
+  const first = await orchestrator.start({ goal: 'first', parentSessionId: parent.id, parent })
+  await assert.rejects(
+    () => orchestrator.start({ goal: 'second', parentSessionId: parent.id, parent }),
+    /quota exceeded/,
+  )
+  await orchestrator.cancel(first.id)
+  release.forEach(resolve => resolve())
 })
 
 test('resume keeps completed subtasks and retries the failed one', async () => {
@@ -234,6 +317,167 @@ test('resume keeps completed subtasks and retries the failed one', async () => {
   assert.equal((await store.read(run.id)).status, 'completed')
 })
 
+test('two concurrent resumes schedule the run only once', async () => {
+  const store = memoryStore()
+  await store.write(interruptedRun())
+  const { spawnChild, calls } = makeSpawner(async spec => (spec.label === 'superagent-plan'
+    ? completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    : completed('resumed')))
+  const { orchestrator } = orchestratorWith({ store, spawner: { spawnChild } })
+
+  const results = await Promise.allSettled([
+    orchestrator.resume('20260101T000000-res1', parent),
+    orchestrator.resume('20260101T000000-res1', parent),
+  ])
+
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1)
+  const rejected = results.find(result => result.status === 'rejected')
+  assert.match(String(rejected.reason), /still active in this process/)
+  await orchestrator.idle()
+  assert.equal(calls.filter(call => call.label === 'superagent-1').length, 1)
+  assert.equal((await store.read('20260101T000000-res1')).status, 'completed')
+})
+
+test('two orchestrators sharing one state directory cannot resume the same run twice', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-lock-'))
+  try {
+    const first = createStore(dir)
+    await first.init()
+    await first.write(interruptedRun())
+    const release = []
+    const workerStarted = gate()
+    const spawnerFor = tag => makeSpawner(async spec => {
+      if (spec.label === 'superagent-plan') {
+        return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+      }
+      workerStarted.open()
+      await new Promise(resolve => release.push(resolve))
+      return completed(`done by ${tag}`)
+    })
+    const a = orchestratorWith({ store: first, spawner: spawnerFor('a') }).orchestrator
+    const b = orchestratorWith({ store: createStore(dir), spawner: spawnerFor('b') }).orchestrator
+
+    const results = await Promise.allSettled([
+      a.resume('20260101T000000-res1', parent),
+      b.resume('20260101T000000-res1', parent),
+    ])
+
+    assert.equal(results.filter(result => result.status === 'fulfilled').length, 1)
+    const rejected = results.find(result => result.status === 'rejected')
+    assert.match(String(rejected.reason), /already being started by|still owned by a live process/)
+    await workerStarted.opened
+    release.forEach(resolve => resolve())
+    await a.idle()
+    await b.idle()
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a lock left by a host that never released it is reclaimed once it is old', async () => {
+  const store = memoryStore()
+  await store.write(interruptedRun())
+  store.locks.set('20260101T000000-res1', {
+    pid: 4242,
+    hostname: 'another-machine',
+    at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+  })
+  const { spawnChild } = makeSpawner(async spec => (spec.label === 'superagent-plan'
+    ? completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    : completed('resumed')))
+  const { orchestrator } = orchestratorWith({ store, spawner: { spawnChild } })
+
+  await orchestrator.resume('20260101T000000-res1', parent)
+  await orchestrator.idle()
+
+  assert.equal((await store.read('20260101T000000-res1')).status, 'completed')
+})
+
+test('resume rebuilds the limits from the current config', async () => {
+  const store = memoryStore()
+  await store.write(interruptedRun({
+    limits: { maxSubtasks: 4, maxParallel: 1, deadlineMinutes: 10, attempts: 1, maxModelCalls: 1, maxTokens: 0 },
+  }))
+  const { spawnChild } = makeSpawner(async spec => (spec.label === 'superagent-plan'
+    ? completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    : completed('resumed')))
+  // The old cap of 1 call would block the planner immediately; the current
+  // config allows three, which is exactly enough for plan + worker.
+  const { orchestrator } = orchestratorWith({ store, spawner: { spawnChild }, config: { maxModelCallsPerRun: 3 } })
+
+  const resumed = await orchestrator.resume('20260101T000000-res1', parent)
+  assert.equal(resumed.limits.maxModelCalls, 3)
+  const finished = await orchestrator.status('20260101T000000-res1', 10)
+  assert.equal(finished.status, 'completed')
+})
+
+test('a resume keeps everything already spent against the budget', async () => {
+  const store = memoryStore()
+  await store.write(interruptedRun({
+    counters: { spawns: 2, unreadable: {} },
+    limits: { maxSubtasks: 4, maxParallel: 1, deadlineMinutes: 10, attempts: 1, maxModelCalls: 2, maxTokens: 0 },
+  }))
+  const { spawnChild, calls } = makeSpawner(async () => completed('should not run'))
+  const { orchestrator } = orchestratorWith({ store, spawner: { spawnChild }, config: { maxModelCallsPerRun: 2 } })
+
+  await orchestrator.resume('20260101T000000-res1', parent)
+  const finished = await orchestrator.status('20260101T000000-res1', 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.match(finished.error ?? '', /budget reached/)
+  assert.equal(calls.length, 0, 'spent calls are not reset by a resume')
+})
+
+test('a run still owned by another live process cannot be resumed here', async () => {
+  const store = memoryStore()
+  const release = []
+  const owner = orchestratorWith({
+    store,
+    spawner: {
+      spawnChild: async spec => {
+        if (spec.label === 'superagent-plan') {
+          return { childId: `plan-${Math.random()}`, result: Promise.resolve(completed('{"subtasks":[{"title":"A","prompt":"do A"}]}')), dispose: async () => {} }
+        }
+        await new Promise(resolve => release.push(resolve))
+        return { childId: `work-${release.length}`, result: Promise.resolve(completed('late')), dispose: async () => {} }
+      },
+    },
+  }).orchestrator
+  const other = orchestratorWith({ store, spawner: makeSpawner(async () => completed('never')) }).orchestrator
+
+  const run = await owner.start({ goal: 'owned elsewhere', parentSessionId: parent.id, parent })
+  await assert.rejects(
+    () => other.resume(run.id, parent),
+    /still owned by a live process/,
+  )
+  assert.equal(ACTIVE_STATUSES.has((await store.read(run.id)).status), true)
+
+  await owner.cancel(run.id)
+  release.forEach(resolve => resolve())
+})
+
+test('resume respects the active-run quota', async () => {
+  const store = memoryStore()
+  await store.write(interruptedRun())
+  const release = []
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    }
+    await new Promise(resolve => release.push(resolve))
+    return completed('late')
+  })
+  const { orchestrator } = orchestratorWith({ store, spawner: { spawnChild }, config: { maxActiveRuns: 1 } })
+
+  const active = await orchestrator.start({ goal: 'occupy the quota', parentSessionId: parent.id, parent })
+  await assert.rejects(
+    () => orchestrator.resume('20260101T000000-res1', parent),
+    /quota exceeded/,
+  )
+  await orchestrator.cancel(active.id)
+  release.forEach(resolve => resolve())
+})
+
 test('recovery marks a run left active by a dead host as interrupted', async () => {
   const store = memoryStore()
   await store.write({
@@ -261,23 +505,69 @@ test('recovery marks a run left active by a dead host as interrupted', async () 
   assert.equal(run.subtasks[0].status, 'pending')
 })
 
+test('recovery leaves a run alone while its owner is still alive', async () => {
+  const store = memoryStore()
+  // Stale heartbeat, live pid: a wedged process may still resume, so the run
+  // must not be rewritten under it.
+  await store.write(orphan({ ownerPid: process.pid }))
+  await store.requestCancel('20260101T000000-orph')
+  const { orchestrator } = orchestratorWith({ store, spawner: makeSpawner(async () => completed('x')) })
+
+  assert.deepEqual(await orchestrator.recover(), [])
+  const run = await store.read('20260101T000000-orph')
+  assert.equal(run.status, 'running')
+  assert.equal(store.cancels.has('20260101T000000-orph'), true, 'the owner still has to see the cancel marker')
+})
+
+test('recovery leaves a run alone while its heartbeat is fresh', async () => {
+  const store = memoryStore()
+  await store.write(orphan({ ownerPid: 2147483647, heartbeatAt: new Date().toISOString() }))
+  const { orchestrator } = orchestratorWith({ store, spawner: makeSpawner(async () => completed('x')) })
+
+  assert.deepEqual(await orchestrator.recover(), [])
+  assert.equal((await store.read('20260101T000000-orph')).status, 'running')
+})
+
 test('a finished run notifies the owning session once', async () => {
   const { spawnChild } = makeSpawner(async spec => {
     if (spec.label === 'superagent-plan') return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
     return completed('done')
   })
-  const { orchestrator, notifications } = orchestratorWith({ spawner: { spawnChild } })
+  const { orchestrator, store, notifications } = orchestratorWith({ spawner: { spawnChild } })
 
   const run = await orchestrator.start({ goal: 'notify', parentSessionId: parent.id, parent })
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const stored = await orchestrator.list()
-    if (stored[0] && stored[0].notify) break
-    await new Promise(resolve => setTimeout(resolve, 20))
-  }
+  await orchestrator.idle()
+
   assert.deepEqual(notifications, [run.id])
-  const stored = (await orchestrator.list())[0]
+  const stored = await store.read(run.id)
+  assert.equal(stored.status, 'completed')
   assert.equal(stored.notify.delivered, true)
   assert.equal(stored.notify.reason, null)
+})
+
+test('a resumed run notifies again when it finishes', async () => {
+  let failB = true
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }] }))
+    }
+    if (spec.label === 'superagent-2' && failB) return failed()
+    return completed(`ok ${spec.label}`)
+  })
+  const { orchestrator, store, notifications } = orchestratorWith({ spawner: { spawnChild }, config: { maxParallel: 2 } })
+
+  const run = await orchestrator.start({ goal: 'notify twice', parentSessionId: parent.id, parent })
+  await orchestrator.idle()
+  assert.equal((await store.read(run.id)).status, 'partial')
+  assert.deepEqual(notifications, [run.id])
+
+  failB = false
+  await orchestrator.resume(run.id, parent)
+  await orchestrator.idle()
+
+  assert.equal((await store.read(run.id)).status, 'completed')
+  assert.deepEqual(notifications, [run.id, run.id])
+  assert.equal((await store.read(run.id)).notify.delivered, true)
 })
 
 test('planner JSON extraction tolerates fences and prose', () => {
@@ -293,14 +583,23 @@ test('capText trims to a byte budget and says so', () => {
   assert.equal(capText('short', 10), 'short')
 })
 
+test('capText never leaves a replacement character when it splits a character', () => {
+  const capped = capText('中文'.repeat(10), 10)
+  assert.equal(capped.includes('\uFFFD'), false, capped)
+  assert.ok(capped.startsWith('中文中'), capped)
+  assert.match(capped, /truncated: 51 bytes omitted/)
+})
+
 test('a cancel from another process stops the owning run through the marker file', async () => {
   const store = memoryStore()
+  const started = gate()
   const owner = orchestratorWith({
     store,
     spawner: makeSpawner(async (spec, childId) => {
       if (spec.label === 'superagent-plan') {
         return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
       }
+      started.open()
       return new Promise((_resolve, reject) => {
         spec.signal.addEventListener('abort', () => reject(new Error(`aborted ${childId}`)), { once: true })
       })
@@ -312,14 +611,11 @@ test('a cancel from another process stops the owning run through the marker file
   }).orchestrator
 
   const run = await owner.start({ goal: 'cancel across processes', parentSessionId: parent.id, parent })
-  await new Promise(resolve => setTimeout(resolve, 50))
+  await started.opened
 
   const cancelled = await other.cancel(run.id)
   assert.equal(cancelled.status, 'cancelled')
   assert.equal((await store.read(run.id)).status, 'cancelled')
-  for (let attempt = 0; attempt < 50 && store.cancels.has(run.id); attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 20))
-  }
   assert.equal(store.cancels.has(run.id), false, 'the owner should clear the marker once the run is terminal')
 })
 
@@ -376,9 +672,57 @@ test('the model-call budget stops new children and keeps the work that finished'
   assert.equal(finished.status, 'partial')
   assert.match(finished.error ?? '', /budget reached/)
   assert.equal(finished.subtasks[0].status, 'completed')
-  assert.equal(finished.subtasks[1].status, 'failed')
+  assert.equal(finished.subtasks[1].status, 'pending', 'a subtask the budget never started is resumable, not failed')
   assert.equal(calls.filter(call => call.label === 'superagent-2').length, 0)
   assert.equal(calls.filter(call => call.label === 'superagent-3').length, 0)
+})
+
+test('the call budget still stops a run when child usage cannot be read at all', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [
+          { title: 'A', prompt: 'do A' },
+          { title: 'B', prompt: 'do B' },
+          { title: 'C', prompt: 'do C' },
+        ],
+      }))
+    }
+    return completed(`ok ${spec.label}`)
+  })
+  const { orchestrator, store } = orchestratorWith({
+    spawner: { spawnChild },
+    readUsage: async () => null,
+    config: { maxParallel: 1, maxModelCallsPerRun: 2 },
+  })
+
+  const run = await orchestrator.start({ goal: 'no session log', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'partial')
+  assert.match(finished.error ?? '', /budget reached/)
+  assert.equal(calls.length, 2, `spawns: ${calls.map(call => call.label).join(',')}`)
+  // Nothing measured: the run must say so, not pretend it spent zero tokens.
+  assert.equal(finished.usage, null)
+  const stored = await store.read(run.id)
+  assert.ok(Object.keys(stored.counters.unreadable).length >= 2)
+})
+
+test('usage from a failed attempt is still counted against the run', async () => {
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }] }))
+    }
+    if (spec.label === 'superagent-2') return failed()
+    return completed('ok from A')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, config: { maxParallel: 2 } })
+
+  const run = await orchestrator.start({ goal: 'count the retries', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  // planner + A + two failed attempts of B = 4 model calls.
+  assert.equal(finished.usage.modelCalls, 4)
 })
 
 test('a finished run carries a cost estimate from the configured prices', async () => {
@@ -398,6 +742,46 @@ test('a finished run carries a cost estimate from the configured prices', async 
   assert.ok(finished.cost.total > 0)
   assert.deepEqual(finished.cost.unpriced, [])
   assert.equal(finished.cost.complete, true)
+})
+
+test('a run whose child activation never returns can still be cancelled', async () => {
+  const started = gate()
+  const { orchestrator, store } = orchestratorWith({
+    spawner: {
+      // The provider accepted the request and never answers, not even to the
+      // abort signal. This used to leave the run active forever.
+      spawnChild: async () => {
+        started.open()
+        return new Promise(() => {})
+      },
+    },
+  })
+
+  const run = await orchestrator.start({ goal: 'stuck provider', parentSessionId: parent.id, parent })
+  await started.opened
+  const began = Date.now()
+  const cancelled = await orchestrator.cancel(run.id)
+
+  assert.ok(Date.now() - began < 6000, `cancel took ${Date.now() - began}ms`)
+  assert.equal(cancelled.status, 'cancelled')
+  assert.equal((await store.read(run.id)).status, 'cancelled')
+})
+
+test('a usage model keyed provider/model is priced by a bare-model entry', () => {
+  const usage = {
+    modelCalls: 2,
+    models: { 'dashscope/qwen-flash': { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, calls: 2 } },
+  }
+  const cost = computeCost(usage, { 'qwen-flash': { input: 0.15, output: 1.5, currency: 'CNY' } })
+  assert.equal(cost.complete, true)
+  assert.equal(Number(cost.byModel['dashscope/qwen-flash'].toFixed(4)), 0.15)
+
+  // An exact route key still wins over the bare fallback.
+  const exact = computeCost(usage, {
+    'dashscope/qwen-flash': { input: 1, output: 1 },
+    'qwen-flash': { input: 9, output: 9 },
+  })
+  assert.equal(Number(exact.byModel['dashscope/qwen-flash'].toFixed(2)), 1)
 })
 
 test('cost leaves unpriced models out of the total instead of guessing', () => {
@@ -453,6 +837,17 @@ function orphan(overrides = {}) {
     usage: null,
     ...overrides,
   }
+}
+
+function interruptedRun(overrides = {}) {
+  return orphan({
+    id: '20260101T000000-res1',
+    status: 'interrupted',
+    finishedAt: '2026-01-01T00:10:00.000Z',
+    error: 'host process stopped while the run was active',
+    subtasks: [{ index: 1, title: 'A', prompt: 'do A', status: 'pending', attempts: 0 }],
+    ...overrides,
+  })
 }
 
 test('a local orphan with a dead pid is reclaimed and its quota freed', async () => {
