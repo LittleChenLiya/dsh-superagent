@@ -34,9 +34,7 @@ anywhere and there is no alias layer. If you find an old snippet that calls
 ## Quickstart
 
 Five minutes, from nothing to a finished run. Every command below runs on a
-clean machine; the one exception is the bare registry name in step 1, because
-the package is not published yet — the tarball form directly under it is
-byte-identical to what the registry will serve.
+clean machine.
 
 ### 0. Do not install `dsh` from npm by name
 
@@ -59,9 +57,9 @@ dsh plugin --profile web add dsh-superagent
 dsh --profile web --dump-config
 ```
 
-The package is not on the npm registry yet, so `add dsh-superagent` answers
-404. Until it is, install the packed tarball — the same content the registry
-will serve:
+`add dsh-superagent` resolves the published package. For an offline machine or
+a pinned artifact, install a packed tarball instead — it is byte-identical to
+what the registry serves:
 
 ```bash
 npm pack                                  # writes dsh-superagent-<version>.tgz

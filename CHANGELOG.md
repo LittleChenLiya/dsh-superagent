@@ -20,7 +20,7 @@ path except the new spending caps, the cost line, and two operator utilities.
   cumulative model-call and cost curves; explicit failure, cancellation, and
   interruption annotations; and a run table.
 - Neither utility adds a dependency. The package is still `dependencies: {}`;
-  the tarball grows from 11 to 15 files (72.9 kB packed, 239.0 kB unpacked).
+  the tarball grows from 11 to 15 files (73.4 kB packed, 240.7 kB unpacked).
 
 ### Embedding surface (local HTTP)
 
