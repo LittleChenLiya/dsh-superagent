@@ -98,7 +98,7 @@ test('plan is decomposed and subtasks run in parallel within the limit', async (
   let running = 0
   let peak = 0
   const { spawnChild } = makeSpawner(async spec => {
-    if (spec.label === 'longhaul-plan') {
+    if (spec.label === 'superagent-plan') {
       return completed(JSON.stringify({
         subtasks: [
           { title: 'A', prompt: 'do A' },
@@ -124,16 +124,16 @@ test('plan is decomposed and subtasks run in parallel within the limit', async (
   assert.equal(finished.plan.mode, 'planned')
   assert.ok(peak <= 3 && peak >= 2, `peak concurrency was ${peak}`)
   assert.equal(finished.usage.inputTokens, 50)
-  assert.equal(finished.report, 'result for longhaul-aggregate')
+  assert.equal(finished.report, 'result for superagent-aggregate')
   assert.equal((await store.read(run.id)).status, 'completed')
 })
 
 test('a subtask that keeps failing produces a partial run after retries', async () => {
   const { spawnChild, calls } = makeSpawner(async spec => {
-    if (spec.label === 'longhaul-plan') {
+    if (spec.label === 'superagent-plan') {
       return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }] }))
     }
-    if (spec.label === 'longhaul-2') return failed('refusal')
+    if (spec.label === 'superagent-2') return failed('refusal')
     return completed('ok from A')
   })
   const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, config: { maxParallel: 2 } })
@@ -145,14 +145,14 @@ test('a subtask that keeps failing produces a partial run after retries', async 
   assert.equal(finished.subtasks[0].status, 'completed')
   assert.equal(finished.subtasks[1].status, 'failed')
   assert.equal(finished.subtasks[1].attempts, 2)
-  assert.equal(calls.filter(call => call.label === 'longhaul-2').length, 2)
+  assert.equal(calls.filter(call => call.label === 'superagent-2').length, 2)
   assert.match(finished.subtasks[1].error ?? '', /error/)
   assert.match(finished.report, /ok from A/)
 })
 
 test('an unparsable plan degrades to a single subtask', async () => {
   const { spawnChild } = makeSpawner(async spec => {
-    if (spec.label === 'longhaul-plan') return completed('I would split this into: 1) research 2) write')
+    if (spec.label === 'superagent-plan') return completed('I would split this into: 1) research 2) write')
     return completed('done')
   })
   const { orchestrator } = orchestratorWith({ spawner: { spawnChild } })
@@ -168,7 +168,7 @@ test('an unparsable plan degrades to a single subtask', async () => {
 
 test('cancel stops the run and keeps partial state on disk', async () => {
   const { spawnChild } = makeSpawner(async (spec, childId) => {
-    if (spec.label === 'longhaul-plan') {
+    if (spec.label === 'superagent-plan') {
       return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }] }))
     }
     return new Promise((_resolve, reject) => {
@@ -189,7 +189,7 @@ test('cancel stops the run and keeps partial state on disk', async () => {
 test('a third active run is rejected by the quota', async () => {
   const release = []
   const { spawnChild } = makeSpawner(async spec => {
-    if (spec.label === 'longhaul-plan') {
+    if (spec.label === 'superagent-plan') {
       return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
     }
     await new Promise(resolve => release.push(resolve))
@@ -210,10 +210,10 @@ test('a third active run is rejected by the quota', async () => {
 test('resume keeps completed subtasks and retries the failed one', async () => {
   let failB = true
   const { spawnChild } = makeSpawner(async spec => {
-    if (spec.label === 'longhaul-plan') {
+    if (spec.label === 'superagent-plan') {
       return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }] }))
     }
-    if (spec.label === 'longhaul-2' && failB) return failed()
+    if (spec.label === 'superagent-2' && failB) return failed()
     return completed(`ok ${spec.label}`)
   })
   const { orchestrator, store } = orchestratorWith({ spawner: { spawnChild }, config: { maxParallel: 2 } })
@@ -263,7 +263,7 @@ test('recovery marks a run left active by a dead host as interrupted', async () 
 
 test('a finished run notifies the owning session once', async () => {
   const { spawnChild } = makeSpawner(async spec => {
-    if (spec.label === 'longhaul-plan') return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    if (spec.label === 'superagent-plan') return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
     return completed('done')
   })
   const { orchestrator, notifications } = orchestratorWith({ spawner: { spawnChild } })
@@ -298,7 +298,7 @@ test('a cancel from another process stops the owning run through the marker file
   const owner = orchestratorWith({
     store,
     spawner: makeSpawner(async (spec, childId) => {
-      if (spec.label === 'longhaul-plan') {
+      if (spec.label === 'superagent-plan') {
         return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
       }
       return new Promise((_resolve, reject) => {
@@ -353,7 +353,7 @@ test('recovery turns a run with a pending cancel into cancelled, not interrupted
 
 test('the model-call budget stops new children and keeps the work that finished', async () => {
   const { spawnChild, calls } = makeSpawner(async spec => {
-    if (spec.label === 'longhaul-plan') {
+    if (spec.label === 'superagent-plan') {
       return completed(JSON.stringify({
         subtasks: [
           { title: 'A', prompt: 'do A' },
@@ -377,13 +377,13 @@ test('the model-call budget stops new children and keeps the work that finished'
   assert.match(finished.error ?? '', /budget reached/)
   assert.equal(finished.subtasks[0].status, 'completed')
   assert.equal(finished.subtasks[1].status, 'failed')
-  assert.equal(calls.filter(call => call.label === 'longhaul-2').length, 0)
-  assert.equal(calls.filter(call => call.label === 'longhaul-3').length, 0)
+  assert.equal(calls.filter(call => call.label === 'superagent-2').length, 0)
+  assert.equal(calls.filter(call => call.label === 'superagent-3').length, 0)
 })
 
 test('a finished run carries a cost estimate from the configured prices', async () => {
   const { spawnChild } = makeSpawner(async spec => {
-    if (spec.label === 'longhaul-plan') return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    if (spec.label === 'superagent-plan') return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
     return completed('done')
   })
   const { orchestrator } = orchestratorWith({
@@ -419,7 +419,7 @@ test('cost leaves unpriced models out of the total instead of guessing', () => {
 })
 
 test('a corrupt run file is reported with the path it was moved to', async () => {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'longhaul-orch-'))
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-orch-'))
   const store = createStore(dir)
   await store.init()
   await fsp.writeFile(path.join(store.runsDir, '20260101T000000-bad.json'), '{"goal":', 'utf8')
@@ -461,7 +461,7 @@ test('a local orphan with a dead pid is reclaimed and its quota freed', async ()
 
   const { orchestrator } = orchestratorWith({
     store,
-    spawner: makeSpawner(async spec => (spec.label === 'longhaul-plan'
+    spawner: makeSpawner(async spec => (spec.label === 'superagent-plan'
       ? completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
       : completed('fresh run'))),
     config: { maxActiveRuns: 1 },
@@ -517,7 +517,7 @@ test('on a shared state directory the pid is ignored and the heartbeat decides',
 
   const { orchestrator } = orchestratorWith({
     store,
-    spawner: makeSpawner(async spec => (spec.label === 'longhaul-plan'
+    spawner: makeSpawner(async spec => (spec.label === 'superagent-plan'
       ? completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
       : completed('done'))),
     config: { maxActiveRuns: 1 },

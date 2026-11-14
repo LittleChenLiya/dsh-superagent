@@ -7,7 +7,7 @@ import test from 'node:test'
 import { createStore, resolveStateRoot } from '../lib/store.js'
 
 async function tempStore() {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'longhaul-store-'))
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-store-'))
   const store = createStore(dir)
   await store.init()
   return { store, dir }
@@ -87,7 +87,7 @@ test('state root follows DSH_HOME and prefers an explicit path', () => {
   const previous = process.env.DSH_HOME
   process.env.DSH_HOME = path.join(os.tmpdir(), 'dsh-home-test')
   try {
-    assert.equal(resolveStateRoot(), path.join(process.env.DSH_HOME, 'state', 'longhaul'))
+    assert.equal(resolveStateRoot(), path.join(process.env.DSH_HOME, 'state', 'superagent'))
     assert.equal(resolveStateRoot(path.join(os.tmpdir(), 'custom')), path.join(os.tmpdir(), 'custom'))
   } finally {
     if (previous === undefined) delete process.env.DSH_HOME

@@ -11,8 +11,8 @@ import { apply, inject, name } from '../lib/index.js'
  * `agents` are provided, which is the whole injected surface.
  */
 test('the plugin mounts, registers five tools, and runs a goal end to end', async () => {
-  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'longhaul-plugin-'))
-  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'longhaul-home-'))
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
   const previousHome = process.env.DSH_HOME
   process.env.DSH_HOME = home
 
@@ -21,7 +21,7 @@ test('the plugin mounts, registers five tools, and runs a goal end to end', asyn
     tools: { register: tool => tools.set(tool.name, tool) },
     subagents: {
       async startActivation(spec) {
-        const text = spec.label === 'longhaul-plan'
+        const text = spec.label === 'superagent-plan'
           ? JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] })
           : 'the answer'
         return {
@@ -37,14 +37,14 @@ test('the plugin mounts, registers five tools, and runs a goal end to end', asyn
   try {
     apply(ctx, { stateDir, notifyOnComplete: false })
 
-    assert.equal(name, 'dsh-longhaul')
+    assert.equal(name, 'dsh-superagent')
     assert.deepEqual(inject, ['tools', 'agents', 'subagents'])
     assert.deepEqual(
       [...tools.keys()].sort(),
-      ['longhaul_cancel', 'longhaul_list', 'longhaul_resume', 'longhaul_start', 'longhaul_status'],
+      ['superagent_cancel', 'superagent_list', 'superagent_resume', 'superagent_start', 'superagent_status'],
     )
 
-    const started = await tools.get('longhaul_start').execute(
+    const started = await tools.get('superagent_start').execute(
       { goal: 'say hi', wait_seconds: 10 },
       { agent: { id: 'session-1' } },
     )
@@ -54,11 +54,11 @@ test('the plugin mounts, registers five tools, and runs a goal end to end', asyn
     assert.match(started, /usage: not recorded/)
     assert.doesNotMatch(started, /\[error/)
 
-    const listed = await tools.get('longhaul_list').execute({})
+    const listed = await tools.get('superagent_list').execute({})
     assert.match(listed, /1 run\(s\):/)
     assert.match(listed, /state: \d+ file\(s\), [\d.]+ (B|KB|MB) in /)
 
-    const missing = await tools.get('longhaul_status').execute({ run_id: '20260101T000000-none' })
+    const missing = await tools.get('superagent_status').execute({ run_id: '20260101T000000-none' })
     assert.match(missing, /^\[error\] no run with that id/)
     assert.match(missing, /^hint: /m)
     assert.match(missing, /^detail: /m)
@@ -71,8 +71,8 @@ test('the plugin mounts, registers five tools, and runs a goal end to end', asyn
 })
 
 test('a run that finishes with its session gone says the result was not delivered', async () => {
-  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'longhaul-plugin-'))
-  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'longhaul-home-'))
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
   const previousHome = process.env.DSH_HOME
   process.env.DSH_HOME = home
 
@@ -81,7 +81,7 @@ test('a run that finishes with its session gone says the result was not delivere
     tools: { register: tool => tools.set(tool.name, tool) },
     subagents: {
       async startActivation(spec) {
-        const text = spec.label === 'longhaul-plan'
+        const text = spec.label === 'superagent-plan'
           ? JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] })
           : 'the answer'
         return {
@@ -97,12 +97,12 @@ test('a run that finishes with its session gone says the result was not delivere
 
   try {
     apply(ctx, { stateDir, notifyOnComplete: true })
-    const started = await tools.get('longhaul_start').execute({ goal: 'notify nobody' }, { agent: { id: 'session-gone' } })
+    const started = await tools.get('superagent_start').execute({ goal: 'notify nobody' }, { agent: { id: 'session-gone' } })
     const runId = /run (\S+) —/.exec(started)[1]
 
     let status = ''
     for (let attempt = 0; attempt < 100; attempt++) {
-      status = await tools.get('longhaul_status').execute({ run_id: runId })
+      status = await tools.get('superagent_status').execute({ run_id: runId })
       if (/— (completed|partial|failed)/.test(status)) break
       await new Promise(resolve => setTimeout(resolve, 20))
     }
@@ -110,7 +110,7 @@ test('a run that finishes with its session gone says the result was not delivere
     assert.match(status, /notify: not delivered — the owning session session-gone is no longer live/)
     assert.match(status, /report:/)
 
-    const listed = await tools.get('longhaul_list').execute({})
+    const listed = await tools.get('superagent_list').execute({})
     assert.match(listed, /\(result not delivered to the session\)/)
   } finally {
     if (previousHome === undefined) delete process.env.DSH_HOME

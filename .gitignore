@@ -12,7 +12,7 @@ node_modules/
 
 # local run state; it normally lives under $DSH_HOME, never in the repo
 state/
-**/state/longhaul/
+**/state/superagent/
 *.cancel
 *.corrupt-*
 

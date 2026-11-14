@@ -1,15 +1,15 @@
 {
-  "name": "dsh-longhaul",
+  "name": "dsh-superagent",
   "version": "0.9.0",
   "description": "Long-horizon autonomous runs for DeepSeek Harness: one goal, model-planned parallel subtasks, one merged report, durable across restarts.",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/LittleChenLiya/dsh-longhaul.git"
+    "url": "git+https://github.com/LittleChenLiya/dsh-superagent.git"
   },
-  "homepage": "https://github.com/LittleChenLiya/dsh-longhaul#readme",
+  "homepage": "https://github.com/LittleChenLiya/dsh-superagent#readme",
   "bugs": {
-    "url": "https://github.com/LittleChenLiya/dsh-longhaul/issues"
+    "url": "https://github.com/LittleChenLiya/dsh-superagent/issues"
   },
   "main": "lib/index.js",
   "exports": {

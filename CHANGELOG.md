@@ -5,16 +5,26 @@
 Hardening pass before the first publish. No behaviour change for the happy
 path except the new spending caps and the cost line.
 
+### Renamed to `dsh-superagent`
+
+- The package, repository, plugin row id (`superagent`), default state
+  directory (`state/superagent`), log prefix, and all five tools
+  (`superagent_*`) moved from the working name `dsh-longhaul`.
+- Nothing was ever published under the old name, so there is no migration and
+  no compatibility alias: `longhaul_*` calls simply do not exist. A run started
+  under the old default state directory is still readable by pointing
+  `stateDir` at it.
+
 ### Cancellation
 
-- `longhaul_cancel` now stops the run when it is called from a different
+- `superagent_cancel` now stops the run when it is called from a different
   process. The caller writes a `<runId>.cancel` marker; the owning process polls
   it once per second, aborts its children, disposes their activations, and
   records `cancelled`. The caller waits up to 5 s and reports
   `cancel requested ... not confirmed` instead of claiming a success it cannot
   observe.
 - Recovery converts a marked run to `cancelled` rather than `interrupted`, and
-  `longhaul_resume` clears a stale marker.
+  `superagent_resume` clears a stale marker.
 
 ### Spending
 
@@ -41,10 +51,10 @@ path except the new spending caps and the cost line.
 ### Notifications and retention
 
 - The notify outcome is recorded on the run (`delivered`, `reason`) and shown
-  by `longhaul_status` / `longhaul_list` when a finished run could not reach its
+  by `superagent_status` / `superagent_list` when a finished run could not reach its
   session.
 - New opt-in `keepRuns` deletes terminal runs older than N days at mount.
-  `longhaul_list` prints the state directory's file count and size.
+  `superagent_list` prints the state directory's file count and size.
 
 ### Tests
 

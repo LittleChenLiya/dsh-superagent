@@ -1,4 +1,4 @@
-# Release checklist — dsh-longhaul
+# Release checklist — dsh-superagent
 
 Ordered by **external usability**: item 1 is what a stranger hits first, item 12
 is housekeeping. "User" below means "someone who installed the plugin and did
@@ -14,7 +14,7 @@ an offline test.
 
 ### 1. Cross-process cancel only edits the state file `[x]`
 
-- **Problem.** `longhaul_cancel` called from a different host process rewrote
+- **Problem.** `superagent_cancel` called from a different host process rewrote
   `<runId>.json` to `cancelled`, but the process that owns the run kept
   planning, spawning workers, and spending tokens. The user saw "cancelled"
   while the run continued. The run's owner also overwrote the file on its next
@@ -154,7 +154,7 @@ an offline test.
   heartbeat is older than 90 s **and** its owner pid is gone; a live pid vetoes
   reclamation. When the directory is shared or the owner is unknown, the pid is
   ignored and the heartbeat alone decides. Every reclamation writes
-  `run.reclaimed.basis`, prints it in `longhaul_status`, and logs one line.
+  `run.reclaimed.basis`, prints it in `superagent_status`, and logs one line.
   Heartbeat is refreshed every 30 s by the owning process.
 - **Effort.** M.
 
@@ -165,8 +165,8 @@ an offline test.
   suppressed — correct, but invisible.
 - **Who is hit.** Headless users who close the session before the run ends.
 - **Fix.** The outcome is stored on the run (`notify.delivered`,
-  `notify.reason`). A failure is shown by `longhaul_status`
-  (`notify: not delivered — ...`) and marked in `longhaul_list`
+  `notify.reason`). A failure is shown by `superagent_status`
+  (`notify: not delivered — ...`) and marked in `superagent_list`
   (`(result not delivered to the session)`). The polling rule is documented.
 - **Effort.** S.
 
@@ -176,7 +176,7 @@ an offline test.
   pruned old runs.
 - **Who is hit.** Long-running installs.
 - **Fix.** Opt-in `keepRuns` (days) deletes terminal runs older than the window
-  at mount, never active ones, and logs the removed ids. `longhaul_list` prints
+  at mount, never active ones, and logs the removed ids. `superagent_list` prints
   the state directory's file count and size, plus the number of quarantined
   files.
 - **Effort.** S.
@@ -187,7 +187,7 @@ an offline test.
   `0.1.0`, and the npm name was never checked for availability.
 - **Who is hit.** Reviewers and packagers.
 - **Fix.** Public repository at
-  <https://github.com/LittleChenLiya/dsh-longhaul>; `repository`, `homepage`, and
+  <https://github.com/LittleChenLiya/dsh-superagent>; `repository`, `homepage`, and
   `bugs` point at it; version `0.9.0`; `CHANGELOG.md` ships in the package;
   `./errors` export added. `npm publish --dry-run` prints a 9-file, 29.3 kB
   tarball. Name availability on the registry is still unverified because that

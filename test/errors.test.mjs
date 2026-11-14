@@ -20,10 +20,10 @@ test('quota, budget, auth, network and disk errors each get their own next step'
   assert.equal(classifyError("EPERM: operation not permitted, rename 'a' -> 'b'").id, 'filesystem')
 })
 
-test('an unknown run points at longhaul_list', () => {
-  const { id, hint } = classifyError('unknown run 20260101T000000-abcd; call longhaul_list')
+test('an unknown run points at superagent_list', () => {
+  const { id, hint } = classifyError('unknown run 20260101T000000-abcd; call superagent_list')
   assert.equal(id, 'unknown-run')
-  assert.match(hint, /longhaul_list/)
+  assert.match(hint, /superagent_list/)
 })
 
 test('a host API shape error is called a version mismatch', () => {
