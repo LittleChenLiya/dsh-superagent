@@ -690,3 +690,74 @@ The CHANGELOG now states the rule this release follows: a documentation change
 that alters what a reader would do gets its own patch version; typos ride along
 with the next code release; a doc-only version leaves `lib/` and `bin/`
 byte-identical and updates the README's pinned install line to itself.
+## 2026-11-14 — round 11: the section-6 list from the comparison research
+
+Starting from the stage-2/3 baseline (133 tests, adversarial review and real
+profile self-test already closed), this round implemented the items section 6 of
+the comparison research marks as worth doing, in its ROI order.
+
+- Duplicate dispatch: a per-goal claim (`goal-<hash>` lock) wraps list, check,
+  and write, so two processes sharing a state directory cannot both start the
+  same goal. `allow_duplicate` is the escape hatch.
+- Transient backoff: 2s/4s/8s for quota, rate limit, timeout, and 5xx. A
+  non-transient failure keeps the previous short delay, because an existing test
+  encodes that contract and the point of the item is not to spend on a limit.
+- Recovery note: `run.recovery` records the previous status, reason, and failed
+  subtask lines; the worker prompt asks for `git status`, `git log`, and remote
+  state to be checked before repeating an action.
+- Attention: one fenced block, parsed by the same balanced-region approach as
+  the memory block, stripped from the result and report, stored on the run, and
+  used as the first line of the notification.
+- Milestones and the report artifact: four timestamps in status, report written
+  atomically to `reports/<runId>.md` with its own `.gitignore`.
+- Human-priority quota: `resume` bypasses `maxActiveRuns`; the existing test was
+  rewritten to assert the new contract (same test count, inverted expectation).
+- Layered memory: `rules` and `profile` are read before the run scope and never
+  written by a run; `superagent_memory` takes `scope`.
+- Outbox: one message per run, in order per session, retried with backoff.
+
+Deliberately not done (item 10 of the report): Ticket/Policy/Source objects, a
+web UI, worktree isolation, and a background-shell policy. Each would add a
+subsystem this plugin does not need to satisfy its contract, and two of them
+assume host APIs this version does not expose.
+
+`npm test`: 146 pass, 0 fail. No new files, so the `files` whitelist and the
+`npm test` file list are unchanged.
+
+## 2026-11-15 — dispatch idempotence: one run per goal
+
+Item 2 of the section-6 list, closed on its own: the same piece of work must not
+be dispatched twice.
+
+- **Normalization.** `normalizeGoal` trims the goal, collapses every run of
+  whitespace to one space, and lowercases it; `dedupeKeyOf` is its sha256 hex.
+  `run.dedupeKey` is stored at start, and a run written before this change is
+  keyed from its `goal` on read, so an existing state directory still dedupes.
+  The empty-goal path is untouched (`no-goal` before any of this).
+- **Active reuse.** `start` returns the newest run with the same key whose status
+  is in `ACTIVE_STATUSES` (`queued`, `planning`, `running`, `aggregating`) as
+  `{ ...run, deduped: true }`. The check sits before the quota check, so a
+  duplicate call creates no run, spawns no plan, and does not consume
+  `maxActiveRuns` or the spawn counters. `superagent_start` prints
+  `deduped: true — an active run with the same goal already exists…`, and the
+  existing `next: superagent_status run_id=… wait_seconds=…` line follows.
+- **Cross-process.** list → check → write is wrapped in a per-goal claim
+  (`goal-<sha256 prefix>.lock`), taken inside the start serial gate so the
+  decision is serialized even between hosts sharing one state directory. The
+  winner writes the run record before it releases the claim, so the loser finds
+  that record under its own claim and joins it. A claim whose local pid is gone
+  is broken, a claim from another machine is broken once it is 10 minutes old,
+  and a live-but-slow holder is waited for up to 5s before the start proceeds
+  unguarded rather than refuse a real start. The mount-time cleanup skips
+  `goal-*` locks, since they have no run file to check.
+- **Terminal runs do not block.** Only `ACTIVE_STATUSES` are matched, so
+  `completed`, `partial`, `failed`, `cancelled`, and `interrupted` runs let the
+  same goal start again. Goals that differ after normalization keep their own
+  runs, and `allow_duplicate: true` remains the explicit escape hatch.
+
+Evidence: `npm test` 150 pass, 0 fail, run twice, offline (no network, no API,
+no spend). New tests in `test/orchestrator.test.mjs`: two concurrent starts of
+one goal create a single run and a single plan; two orchestrators on one real
+state directory return the same run id and leave one run file; a completed run
+of the same goal does not block a new start; different goals still get separate
+runs. `version` stays 0.9.3, nothing is published, no tag.

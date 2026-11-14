@@ -667,3 +667,102 @@ test('a run that finishes with its session gone says the result was not delivere
     await fsp.rm(home, { recursive: true, force: true })
   }
 })
+
+test('attention, milestones, the report file, and scoped rules reach the tool output', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  const tools = new Map()
+  const prompts = []
+  const messages = []
+  const subagents = {
+    async startActivation(spec) {
+      prompts.push({ label: spec.label, prompt: spec.request?.prompt?.[0]?.text ?? '' })
+      let text
+      if (spec.label === 'superagent-plan') {
+        text = JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }] })
+      } else if (spec.label === 'superagent-aggregate') {
+        text = 'Final report body.'
+      } else if (spec.label === 'superagent-2') {
+        text = 'Findings from B.\n\n'
+          + '```attention\n{"question":"Which region?","options":["eu","us"],"reason":"the reports disagree"}\n```'
+      } else {
+        text = 'Findings from A.'
+      }
+      return {
+        childId: `child-${spec.label}`,
+        result: Promise.resolve({ output: [{ type: 'text', text }], stopReason: 'completed' }),
+        dispose: async () => {},
+      }
+    },
+  }
+  /** Resolves when the plugin actually wakes the session. */
+  let onMessage
+  const notified = new Promise(resolve => { onMessage = resolve })
+  const live = {
+    id: 'session-1',
+    followup: async message => {
+      messages.push(message.content[0].text)
+      onMessage()
+    },
+  }
+  const ctx = {
+    tools: { register: tool => tools.set(tool.name, tool) },
+    get: name => {
+      if (name === 'subagents') return subagents
+      if (name === 'agents') return { get: id => (id === 'session-1' ? live : undefined) }
+      return undefined
+    },
+  }
+
+  try {
+    apply(ctx, { stateDir, notifyOnComplete: true, maxNotificationsPerHour: 5 })
+
+    const owner = { agent: { id: 'session-1' } }
+    const rule = await tools.get('superagent_memory').execute({
+      action: 'set',
+      scope: 'rules',
+      key: 'style',
+      text: 'never use tabs',
+    }, owner)
+    assert.doesNotMatch(rule, /^\[error/)
+    const rules = await tools.get('superagent_memory').execute({ action: 'list', scope: 'rules' }, owner)
+    assert.match(rules, /never use tabs/)
+
+    const started = await tools.get('superagent_start').execute(
+      { goal: 'needs a decision', max_parallel: 2 },
+      owner,
+    )
+    const runId = /run (\S+) —/.exec(started)?.[1]
+    assert.ok(runId, started)
+    // A status call made while the run is active is a watcher, and a watched run
+    // is deliberately not announced; wait for the wake-up instead.
+    await Promise.race([
+      notified,
+      new Promise((_resolve, reject) => {
+        setTimeout(() => reject(new Error('no notification was delivered')), 10_000)
+      }),
+    ])
+    const finished = await tools.get('superagent_status').execute({ run_id: runId, wait_seconds: 10 })
+
+    assert.match(finished, /— completed/)
+    assert.match(finished, /needs your decision: Which region\?/)
+    assert.match(finished, /milestones: plan_ready@\d{2}:\d{2}:\d{2} → running@\d{2}:\d{2}:\d{2}/)
+    assert.match(finished, /report file: .*reports[\\/][0-9A-Za-z-]+\.md/)
+    assert.doesNotMatch(finished, /```attention/)
+
+    const plan = prompts.find(item => item.label === 'superagent-plan')
+    assert.match(plan.prompt, /Project rules \(scope "rules"\):\n- \[today\] note style: never use tabs/)
+
+    assert.equal(messages.length, 1)
+    assert.match(messages[0], /^\[superagent\] needs your decision on run /)
+    assert.match(messages[0], /Which region\?/)
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    await fsp.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})

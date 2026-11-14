@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { createNotifyPolicy } from '../lib/notify.js'
+import { createNotifyPolicy, createOutbox } from '../lib/notify.js'
 
 function run(id, status = 'completed') {
   return { id, status, goal: `goal ${id}`, subtasks: [], finishedAt: '2026-11-14T00:00:00.000Z' }
@@ -69,3 +69,53 @@ test('the policy leaves no lock file behind', async () => {
     await assert.rejects(fsp.access(`${stateFile}.lock`), { code: 'ENOENT' })
   })
 })
+
+test('a rejected delivery is retried with the same message', async () => {
+  const attempts = []
+  const outbox = createOutbox({
+    retries: 2,
+    delayMs: 0,
+    sleep: async () => {},
+  })
+  const result = await outbox.enqueue('session-a', async () => {
+    attempts.push(`try ${attempts.length + 1}`)
+    if (attempts.length < 3) throw new Error('session busy')
+    return 'delivered'
+  })
+
+  assert.equal(result, 'delivered')
+  assert.equal(attempts.length, 3)
+})
+
+test('a delivery that keeps failing reports the last error after its retries', async () => {
+  let calls = 0
+  const outbox = createOutbox({ retries: 1, delayMs: 0, sleep: async () => {} })
+  await assert.rejects(
+    () => outbox.enqueue('session-b', async () => {
+      calls++
+      throw new Error(`refused ${calls}`)
+    }),
+    /refused 2/,
+  )
+  assert.equal(calls, 2)
+})
+
+test('messages for one session stay in order even while an earlier one retries', async () => {
+  const order = []
+  const outbox = createOutbox({ retries: 1, delayMs: 0, sleep: async () => {} })
+
+  const first = outbox.enqueue('session-c', async () => {
+    order.push('first-start')
+    await new Promise(resolve => setTimeout(resolve, 10))
+    order.push('first-end')
+    return 'first'
+  })
+  const second = outbox.enqueue('session-c', async () => {
+    order.push('second')
+    return 'second'
+  })
+
+  assert.deepEqual(await Promise.all([first, second]), ['first', 'second'])
+  assert.deepEqual(order, ['first-start', 'first-end', 'second'])
+})
+

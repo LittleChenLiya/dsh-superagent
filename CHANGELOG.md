@@ -33,6 +33,32 @@ published for this yet.
 - New config: `memory`, `memoryScope`, `memoryMaxEntries`, `memoryMaxAgeDays`,
   `memoryDigestEntries`, `memoryDigestChars`, `maxNotificationsPerHour`,
   `autoResumeRounds`, `childModelFallback`.
+- **Duplicate dispatch is collapsed.** The same active goal (case and whitespace
+  ignored) returns the existing run id with `deduped: true`, under a per-goal
+  claim so two processes sharing a state directory cannot both start it.
+  `allow_duplicate: true` on `superagent_start` (or `allow_duplicate` on the
+  control `start` body) opts out.
+- **Transient backoff.** A rate-limit, quota, timeout, or 5xx failure now waits
+  2s, then 4s, then 8s before the next attempt instead of retrying immediately.
+- **Recovery note.** A resumed run tells each worker what failed and instructs it
+  to inspect files, `git status`, `git log`, and remote state before repeating an
+  externally visible action.
+- **Structured attention.** A worker or the aggregator may append one fenced
+  `attention` block. It is stripped from the report, stored as `attention.items`,
+  shown as `needs your decision:` in status, and leads the notification.
+- **Milestones.** `plan_ready`, `running`, `aggregating`, and `settled` are
+  recorded with timestamps and shown in `superagent_status`; nothing is pushed.
+- **Report file.** A terminal report is written atomically to
+  `<stateDir>/reports/<runId>.md` (directory carries `.gitignore: *`), recorded
+  in `run.artifacts`, and shown in status.
+- **Human-priority quota.** `superagent_resume` is no longer refused by
+  `maxActiveRuns`; the quota now bounds unattended starts only.
+- **Layered memory.** `rules` and `profile` scopes are read into planning and
+  aggregation ahead of the run scope; `superagent_memory` takes `scope`.
+- **Notification outbox.** A refused wake-up is retried with backoff
+  (`notifyRetries`, `notifyRetryDelayMs`) and messages for one session stay in
+  order.
+- Test suite: 133 -> 150.
 
 ## 0.9.3 — 2026-11-14
 

@@ -4,7 +4,15 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { capText, computeCost, createOrchestrator, extractPlan } from '../lib/orchestrator.js'
+import {
+  capText,
+  computeCost,
+  createOrchestrator,
+  dedupeKeyOf,
+  extractAttentionBlock,
+  extractPlan,
+  normalizeGoal,
+} from '../lib/orchestrator.js'
 import { createMemory } from '../lib/memory.js'
 import { ACTIVE_STATUSES, createStore } from '../lib/store.js'
 
@@ -105,6 +113,7 @@ function orchestratorWith({
     modelCalls: 1,
     models: { 'test/model': { inputTokens: 10, outputTokens: 2, calls: 1 } },
   }),
+  sleep,
 }) {
   const notifications = []
   const orchestrator = createOrchestrator({
@@ -115,6 +124,7 @@ function orchestratorWith({
     memory,
     notify: run => notifications.push(run.id),
     log: () => {},
+    ...(sleep ? { sleep } : {}),
   })
   return { orchestrator, store, notifications }
 }
@@ -459,7 +469,7 @@ test('a run still owned by another live process cannot be resumed here', async (
   release.forEach(resolve => resolve())
 })
 
-test('resume respects the active-run quota', async () => {
+test('resume is a human action and is not refused by the active-run quota', async () => {
   const store = memoryStore()
   await store.write(interruptedRun())
   const release = []
@@ -473,11 +483,13 @@ test('resume respects the active-run quota', async () => {
   const { orchestrator } = orchestratorWith({ store, spawner: { spawnChild }, config: { maxActiveRuns: 1 } })
 
   const active = await orchestrator.start({ goal: 'occupy the quota', parentSessionId: parent.id, parent })
-  await assert.rejects(
-    () => orchestrator.resume('20260101T000000-res1', parent),
-    /quota exceeded/,
-  )
+  // maxActiveRuns is 1 and already used. A resume must still proceed: the
+  // quota exists to bound unattended starts, not to lock a person out.
+  const resumed = await orchestrator.resume('20260101T000000-res1', parent)
+  assert.equal(resumed.id, '20260101T000000-res1')
+  assert.equal(ACTIVE_STATUSES.has(resumed.status), true)
   await orchestrator.cancel(active.id)
+  await orchestrator.cancel(resumed.id)
   release.forEach(resolve => resolve())
 })
 
@@ -1138,3 +1150,284 @@ test('a permanent failure is not re-run by the self-heal round', async () => {
   assert.equal(spawner.calls.filter(call => call.label === 'superagent-1').length, 1)
   assert.equal(finished.selfHeal, null)
 })
+
+test('goal identity ignores case and repeated whitespace', () => {
+  assert.equal(normalizeGoal('  Ship   The Release\n'), 'ship the release')
+  assert.equal(dedupeKeyOf('Ship  the release'), dedupeKeyOf('ship the RELEASE'))
+  assert.equal(dedupeKeyOf('   '), null)
+})
+
+test('an active run is returned for the same goal unless a duplicate is allowed', async () => {
+  const store = memoryStore()
+  const release = []
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    }
+    await new Promise(resolve => release.push(resolve))
+    return completed('late')
+  })
+  const { orchestrator } = orchestratorWith({ store, spawner: { spawnChild }, config: { maxActiveRuns: 3 } })
+
+  const first = await orchestrator.start({ goal: 'Ship  the release', parentSessionId: parent.id, parent })
+  const again = await orchestrator.start({ goal: 'ship the RELEASE', parentSessionId: parent.id, parent })
+
+  assert.equal(again.id, first.id)
+  assert.equal(again.deduped, true)
+  assert.equal((await store.list()).length, 1)
+
+  const second = await orchestrator.start({
+    goal: 'ship the release',
+    parentSessionId: parent.id,
+    parent,
+    allowDuplicate: true,
+  })
+  assert.notEqual(second.id, first.id)
+  assert.equal((await store.list()).length, 2)
+
+  await orchestrator.cancel(first.id)
+  await orchestrator.cancel(second.id)
+  release.forEach(resolve => resolve())
+})
+
+test('a transient failure backs off exponentially before the next attempt', async () => {
+  const waits = []
+  const { spawnChild } = makeSpawner(async spec => (spec.label === 'superagent-plan'
+    ? completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    : { output: [], stopReason: 'error', diagnostic: 'rate limit reached' }))
+  const { orchestrator } = orchestratorWith({
+    spawner: { spawnChild },
+    config: { attempts: 3, maxParallel: 1, autoResumeRounds: 0 },
+    sleep: async ms => {
+      waits.push(ms)
+      await new Promise(resolve => setTimeout(resolve, 1))
+    },
+  })
+
+  const run = await orchestrator.start({ goal: 'backoff', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.deepEqual(waits.filter(ms => ms >= 2000), [2000, 4000])
+})
+
+test('a resumed run tells its workers what failed and to check what already happened', async () => {
+  const store = memoryStore()
+  await store.write(interruptedRun({
+    error: 'host process stopped while the run was active',
+    subtasks: [{ index: 1, title: 'deploy', prompt: 'deploy it', status: 'failed', attempts: 1, error: 'timeout' }],
+  }))
+  const spawner = makeSpawner(async () => completed('resumed result'))
+  const { orchestrator } = orchestratorWith({ store, spawner })
+
+  const resumed = await orchestrator.resume('20260101T000000-res1', parent)
+  const finished = await orchestrator.status(resumed.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  const worker = spawner.calls.find(call => call.label === 'superagent-1')
+  assert.match(worker.prompt, /Recovery note/)
+  assert.match(worker.prompt, /host process stopped while the run was active/)
+  assert.match(worker.prompt, /deploy: timeout/)
+  assert.match(worker.prompt, /Do not assume nothing happened/)
+})
+
+test('the attention block is parsed, stripped, and recorded on the run', async () => {
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }],
+      }))
+    }
+    if (spec.label === 'superagent-2') {
+      return completed(
+        'Everything I could do is done.\n\n'
+        + '```attention\n{"question":"Which region?","options":["eu","us"],"reason":"the reports disagree"}\n```',
+      )
+    }
+    return completed('worker result')
+  })
+  const { orchestrator } = orchestratorWith({ spawner, config: { maxParallel: 2, attempts: 1 } })
+
+  const run = await orchestrator.start({ goal: 'needs a decision', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.attention.items.length, 1)
+  assert.equal(finished.attention.items[0].source, 'subtask-2')
+  assert.equal(finished.attention.items[0].question, 'Which region?')
+  assert.deepEqual(finished.attention.items[0].options, ['eu', 'us'])
+  assert.equal(finished.subtasks[1].result, 'Everything I could do is done.')
+  assert.doesNotMatch(finished.report, /```attention/)
+  assert.match(spawner.calls.find(call => call.label === 'superagent-1').prompt, /```attention/)
+})
+
+test('a malformed attention block is stripped instead of shown', () => {
+  const parsed = extractAttentionBlock('Report.\n\n```attention\nnot json\n```')
+  assert.equal(parsed.text, 'Report.')
+  assert.equal(parsed.attention, null)
+  assert.match(parsed.error, /not valid JSON/)
+})
+
+test('a completed run records its milestones in order', async () => {
+  const spawner = makeSpawner(async spec => (spec.label === 'superagent-plan'
+    ? completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    : completed('done')))
+  const { orchestrator } = orchestratorWith({ spawner })
+
+  const run = await orchestrator.start({ goal: 'milestones', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.deepEqual(
+    finished.milestones.map(milestone => milestone.name),
+    ['plan_ready', 'running', 'aggregating', 'settled'],
+  )
+})
+
+test('the final report is written next to the run state with a gitignore', async () => {
+  await withMemoryRoot(async root => {
+    const store = createStore(path.join(root, 'state'))
+    await store.init()
+    const spawner = makeSpawner(async spec => {
+      if (spec.label === 'superagent-plan') {
+        return completed(JSON.stringify({
+          subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }],
+        }))
+      }
+      return completed('Final report body.')
+    })
+    const { orchestrator } = orchestratorWith({ store, spawner })
+
+    const run = await orchestrator.start({ goal: 'artifact', parentSessionId: parent.id, parent })
+    const finished = await orchestrator.status(run.id, 10)
+
+    assert.equal(finished.status, 'completed')
+    const artifact = finished.artifacts.find(item => item.kind === 'report')
+    assert.ok(artifact, 'a report artifact is recorded')
+    assert.equal(path.basename(artifact.path), `${run.id}.md`)
+    assert.equal(await fsp.readFile(artifact.path, 'utf8'), 'Final report body.\n')
+    const ignore = await fsp.readFile(path.join(path.dirname(artifact.path), '.gitignore'), 'utf8')
+    assert.equal(ignore, '*\n')
+  })
+})
+
+test('rules and profile notes are layered ahead of what runs learned', async () => {
+  await withMemoryRoot(async root => {
+    const memory = createMemory(root)
+    await memory.set({ scope: 'rules', key: 'style', kind: 'note', text: 'never use tabs' })
+    await memory.set({ scope: 'profile', key: 'language', kind: 'note', text: 'answer in Chinese' })
+    await memory.set({ key: 'deploy-target', kind: 'decision', text: 'staging is in eu-west' })
+
+    const spawner = makeSpawner(async spec => (spec.label === 'superagent-plan'
+      ? completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+      : completed('done')))
+    const { orchestrator } = orchestratorWith({ spawner, memory })
+
+    const run = await orchestrator.start({ goal: 'layered', parentSessionId: parent.id, parent })
+    await orchestrator.status(run.id, 10)
+
+    const plan = spawner.calls.find(call => call.label === 'superagent-plan')
+    assert.match(plan.prompt, /Project rules \(scope "rules"\):\n- \[today\] note style: never use tabs/)
+    assert.match(plan.prompt, /User profile \(scope "profile"\):\n- \[today\] note language: answer in Chinese/)
+    assert.match(plan.prompt, /staging is in eu-west/)
+    const context = spawner.calls.find(call => call.label === 'superagent-plan').prompt
+    assert.ok(context.indexOf('never use tabs') < context.indexOf('staging is in eu-west'))
+    assert.deepEqual(run.memory.scopes, ['rules', 'profile', 'default'])
+  })
+})
+
+test('two concurrent starts for one goal create a single run', async () => {
+  const store = memoryStore()
+  const release = []
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    }
+    await new Promise(resolve => release.push(resolve))
+    return completed('late')
+  })
+  const { orchestrator } = orchestratorWith({ store, spawner: { spawnChild }, config: { maxActiveRuns: 3 } })
+
+  const [first, second] = await Promise.all([
+    orchestrator.start({ goal: 'Ship the release', parentSessionId: parent.id, parent }),
+    orchestrator.start({ goal: '  ship   THE release ', parentSessionId: parent.id, parent }),
+  ])
+
+  assert.equal(second.id, first.id)
+  assert.equal([first.deduped, second.deduped].filter(Boolean).length, 1)
+  assert.equal((await store.list()).length, 1)
+  // The second call planned nothing of its own.
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(calls.filter(call => call.label === 'superagent-plan').length, 1)
+
+  await orchestrator.cancel(first.id)
+  release.forEach(resolve => resolve())
+  await orchestrator.idle()
+})
+
+test('two orchestrators on one state directory dispatch one goal once', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-dedupe-'))
+  try {
+    const shared = createStore(dir)
+    await shared.init()
+    const release = []
+    const spawner = () => makeSpawner(async spec => {
+      if (spec.label === 'superagent-plan') {
+        return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+      }
+      if (spec.label === 'superagent-aggregate') return completed('the summary')
+      await new Promise(resolve => release.push(resolve))
+      return completed('done')
+    })
+    const a = orchestratorWith({ store: shared, spawner: spawner(), config: { maxActiveRuns: 3 } }).orchestrator
+    const b = orchestratorWith({ store: createStore(dir), spawner: spawner(), config: { maxActiveRuns: 3 } }).orchestrator
+
+    const [fromA, fromB] = await Promise.all([
+      a.start({ goal: 'Ship the release', parentSessionId: parent.id, parent }),
+      b.start({ goal: 'ship  the RELEASE', parentSessionId: parent.id, parent }),
+    ])
+
+    assert.equal(fromB.id, fromA.id)
+    assert.equal([fromA.deduped, fromB.deduped].filter(Boolean).length, 1)
+    assert.equal((await shared.list()).length, 1)
+
+    release.forEach(resolve => resolve())
+    await a.idle()
+    await b.idle()
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a finished run of the same goal does not block a new start', async () => {
+  const spawner = makeSpawner(async spec => (spec.label === 'superagent-plan'
+    ? completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    : completed('done')))
+  const { orchestrator, store } = orchestratorWith({ spawner, config: { maxActiveRuns: 3 } })
+
+  const first = await orchestrator.start({ goal: 'Ship the release', parentSessionId: parent.id, parent })
+  assert.equal((await orchestrator.status(first.id, 10)).status, 'completed')
+
+  const again = await orchestrator.start({ goal: 'ship  THE release', parentSessionId: parent.id, parent })
+
+  assert.notEqual(again.id, first.id)
+  assert.equal(again.deduped, undefined)
+  assert.equal((await store.list()).length, 2)
+  await orchestrator.status(again.id, 10)
+})
+
+test('goals that differ after normalization still get their own runs', async () => {
+  const spawner = makeSpawner(async spec => (spec.label === 'superagent-plan'
+    ? completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    : completed('done')))
+  const { orchestrator, store } = orchestratorWith({ spawner, config: { maxActiveRuns: 3 } })
+
+  const first = await orchestrator.start({ goal: 'write the docs', parentSessionId: parent.id, parent })
+  const second = await orchestrator.start({ goal: 'write the tests', parentSessionId: parent.id, parent })
+
+  assert.notEqual(second.id, first.id)
+  assert.equal(second.deduped, undefined)
+  assert.equal((await store.list()).length, 2)
+  await orchestrator.status(first.id, 10)
+  await orchestrator.status(second.id, 10)
+})
+

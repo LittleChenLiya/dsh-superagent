@@ -204,8 +204,8 @@ Row config in `<profile>/cordis.patch.yml`:
 | `maxSubagentDepth` | `1` | How deep children may delegate. `1` forbids grandchildren; `provider-managed` leaves it to the backend. |
 | `maxSubtasks` | `8` | Cap on planned subtasks. A tool argument can only lower it, never raise it; hard max 16. |
 | `maxParallel` | `3` | Subtasks executing at once. A tool argument can only lower it; hard max 8. |
-| `maxActiveRuns` | `2` | Active runs per state directory, across profiles and hosts that share it; further `superagent_start` and `superagent_resume` calls are rejected. |
-| `attempts` | `2` | Attempts per subtask before it is marked failed. |
+| `maxActiveRuns` | `2` | Active runs per state directory, across profiles and hosts that share it; further `superagent_start` calls are rejected. `superagent_resume` is a human action and is not refused by this quota. |
+| `attempts` | `2` | Attempts per subtask before it is marked failed. A failure that looks transient (quota, rate limit, timeout, 5xx) waits 2s, then 4s, then 8s before the next attempt. |
 | `deadlineMinutes` | `120` | Wall-clock budget; on expiry the run ends `partial` or `failed`. |
 | `maxModelCallsPerRun` | `80` | Hard cap on child model calls per run; `0` disables. |
 | `maxTokensPerRun` | `2000000` | Hard cap on prompt + completion tokens per run; `0` disables. |
@@ -213,10 +213,12 @@ Row config in `<profile>/cordis.patch.yml`:
 | `resultCapBytes` | `32768` | Bytes kept per subtask report. |
 | `notifyOnComplete` | `true` | Master switch for proactive messages. Off means the plugin never wakes the session. |
 | `maxNotificationsPerHour` | `3` | Proactive messages allowed per hour. Runs above the cap are folded into one summary; `0` disables the cap. |
+| `notifyRetries` | `2` | Extra delivery attempts when the host refuses a wake-up; messages for one session are delivered in order. |
+| `notifyRetryDelayMs` | `2000` | First delay between those attempts; it doubles per attempt, capped at 60s. |
 | `autoResumeRounds` | `1` | Extra rounds that retry subtasks which failed in a way that looks transient, before the failure is reported; `0` disables. |
 | `childModelFallback` | none | Model used on such a retry (quota, rate limit, timeout). Unset keeps the configured route. |
 | `memory` | `true` | Cross-run notebook. See [Cross-run memory](#cross-run-memory). |
-| `memoryScope` | `default` | Notebook file per scope, so unrelated projects can stay apart. |
+| `memoryScope` | `default` | Notebook file per scope, so unrelated projects can stay apart. Run notes are written here; `rules` and `profile` are read into every run. |
 | `memoryMaxEntries` | `60` | Notes kept before the notebook is compacted. |
 | `memoryMaxAgeDays` | `30` | Notes older than this are ignored, then compacted away. |
 | `memoryDigestEntries` | `12` | Notes injected into a prompt. |
@@ -313,20 +315,42 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
 
 ## Tools
 
-- `superagent_start(goal, max_subtasks?, max_parallel?, deadline_minutes?, wait_seconds?)`
-  starts a run and returns immediately with a run id. `wait_seconds` blocks for
-  a terminal state instead.
-- `superagent_status(run_id, wait_seconds?)` returns status, per-subtask outcome,
-  measured token usage, estimated cost, and the final report.
+- `superagent_start(goal, max_subtasks?, max_parallel?, deadline_minutes?, allow_duplicate?, wait_seconds?)`
+  starts a run and returns immediately with a run id. Starting a goal that an
+  active run already has returns that run id marked `deduped: true` instead of
+  paying for a second plan: the goal is compared after trimming, collapsing runs
+  of whitespace, and ignoring case, and the check runs under a per-goal claim keyed
+  in the state directory, so two processes that share it still start one run.
+  `allow_duplicate: true` starts another one. A finished run never blocks the same
+  goal from being started again. `wait_seconds` blocks for a terminal state.
+- `superagent_status(run_id, wait_seconds?)` returns status, milestones,
+  per-subtask outcome, measured token usage, estimated cost, the report file
+  path, and the final report.
 - `superagent_list(limit?)` lists runs, newest first, plus the state directory's
   file count and size.
 - `superagent_cancel(run_id)` stops the run, from any process; see below.
 - `superagent_resume(run_id, wait_seconds?)` continues an `interrupted`, `failed`,
-  `partial`, or `cancelled` run; completed subtasks are kept.
-- `superagent_memory(action, key?, kind?, text?, limit?)` lists, adds, corrects,
-  or forgets notebook notes. `set` with an existing key supersedes it; `forget`
-  retracts it. The tool is additive: the five tools above keep their arguments
-  and output.
+  `partial`, or `cancelled` run; completed subtasks are kept. Workers are told
+  what failed and to check what the earlier attempt already did.
+- `superagent_memory(action, key?, kind?, text?, scope?, limit?)` lists, adds,
+  corrects, or forgets notebook notes. `set` with an existing key supersedes it;
+  `forget` retracts it. `scope` addresses `rules` (project rules), `profile`
+  (user preferences), or the run scope. The tool is additive: the five run tools
+  keep their arguments and output.
+
+## Progress, decisions, and artifacts
+
+- **Milestones.** Every run records `plan_ready`, `running`, `aggregating`, and
+  `settled` with a timestamp, shown in `superagent_status`. They never produce a
+  proactive message; progress stays visible without becoming noisy.
+- **Attention.** A worker or the aggregator may append one fenced `attention`
+  block with a question that only the user can answer. It is stripped from the
+  report, stored on the run as `attention.items`, shown as `needs your decision:`
+  in status, and leads the notification when the run finishes.
+- **Report file.** A terminal run writes its report to
+  `<stateDir>/reports/<runId>.md` with an atomic rename, so the outcome has a
+  path that can be opened or attached. The directory carries a `.gitignore` with
+  `*`, and the path is recorded in `run.artifacts` and shown in status.
 
 ## Cross-run memory
 
@@ -360,6 +384,13 @@ run (`memoryWrite.reason`) and never fails the run.
 since the aggregator will run again), before planning. The composed context is
 stored on the run as `memory.digest`, injected into the planner and aggregator
 prompts, and summarised in `superagent_status`.
+
+**Layers.** Three scopes are read, in order: `rules` (project rules), `profile`
+(user preferences), then `memoryScope` (what earlier runs learned). The first
+two are curated with `superagent_memory` and are never written by a run, so a
+rule cannot be overwritten by a model's observation. Each layer is labelled in
+the prompt and bounded on its own; `memory.scopes` on the run lists what was
+read.
 
 **Size.** Each note is capped at 400 characters after redaction. A prompt sees at
 most `memoryDigestEntries` notes inside `memoryDigestChars` characters, plus six
