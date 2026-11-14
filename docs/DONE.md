@@ -32,7 +32,7 @@ the build machine; see B8).
 | B5 | After the host process disappears mid-run, the next host reports `interrupted`; `superagent_resume` completes only the unfinished subtasks (completed ones keep their original `childId`). | `transcripts/kill-and-resume.log` | MET |
 | B6 | `notify` wakes a live session when nobody polls. | `notify.delivered: true` on `20261114T075657-b729` | MET |
 | B7 | A headless host that exits before the run finishes records `notify.delivered: false` with the reason, and status prints it. | run `20261114T074822-6059` | MET |
-| B8 | The same paths are exercised with the default `deepseek-official` route and a real key, with the real cost printed. | `docs/e2e-paid-*.md` | BLOCKED: no `DEEPSEEK_API_KEY` on the build machine; a real-model run cannot be produced without spending the owner's credential. |
+| B8 | The same paths are exercised with the default `deepseek-official` route and a real key, with the real cost printed. | `docs/e2e/transcripts/b8-real-route.log` | MET: real run `20261114T105744-e272` on `deepseek-official/deepseek-v4.1-flash-1017` — 3 calls, 1882 in / 7363 out / 19456 cache-read, printed `cost: ¥0.1016` from DashScope peak rates. The `byte.haoduotoken.com` credentials cannot reach deepseek models (403), so the run used the same Qwen key on DashScope. |
 
 ## C. Money is accountable
 

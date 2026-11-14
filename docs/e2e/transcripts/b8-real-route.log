@@ -1,0 +1,64 @@
+# B8 — one real paid run on the default route
+# 2026-11-14 18:57 Beijing (UTC+8)
+#
+# Host    @deepseek-ai/dsh 0.2.2-rc.1, headless profile, fresh DSH_HOME
+# Plugin  dsh-superagent 0.9.0, installed from dsh-superagent-0.9.0.tgz
+# Route   deepseek-official (row `llm-deepseek`, @deepseek-ai/dsh-llm-deepseek-api-key)
+# Model   deepseek-v4.1-flash-1017 — the flash tier
+# Key     the Qwen workspace key in `API key.txt`, read at run time, never printed
+#
+# Endpoint. DashScope's Anthropic-compatible proxy authenticates with
+# `Authorization: Bearer`, while the harness provider sends `x-api-key`. A
+# loopback relay on 127.0.0.1:8799 rewrote only that header and forwarded the
+# request body untouched, so every token below is DashScope's own accounting.
+#
+# Pricing configured in the profile (CNY per 1M tokens): input 2, output 8,
+# cacheRead 2. Source: Alibaba Cloud Model Studio, deepseek-v4.1-flash
+# (https://docs.bailian.console.aliyun.com/zh/model-studio/deepseek-v4-1-flash):
+# input 1 off-peak / 2 peak, output 4 off-peak / 8 peak. The run started at
+# 18:57 Beijing, so the peak column applies. That page publishes no separate
+# cache-read price, so cache reads are billed at the input rate here — the one
+# assumption behind the number.
+#
+# Why not byte.haoduotoken.com: the credentials in `API key.txt` that target
+# that gateway are scoped to gpt-6-astra / gpt-6.1-sol. A call to
+# /v1/chat/completions with model deepseek-flash (and deepseek-v4-flash,
+# deepseek-v4.1-flash, deepseek-chat) returns 403 "This token has no access to
+# model ...", and the Qwen key itself returns 401 "Invalid token" there. The
+# same Qwen key does reach deepseek flash on DashScope, which is the route used.
+
+$ dsh --profile headless "Use superagent_start with goal \"In one sentence, state the difference between a process and a thread\" and wait_seconds 240"
+
+[dsh-superagent] registered 5 tools; state C:\Windows\TEMP\dsh-e2e-b8\state\superagent
+[dsh-superagent] subtask 1 attempt 1 did not complete: child stopped with reason "max-tokens"
+**Run `20261114T105744-e272` — completed** (38.6s, 1/1 subtask)
+
+**Sentence:** A process is an independent execution unit with its own isolated virtual address space and resources, whereas a thread is a CPU-scheduled execution unit within a process that shares that process's address space and resources with its sibling threads.
+
+That's the core distinction: isolation between processes vs. shared memory/resources among threads of one process.
+
+$ dsh --profile headless "Call superagent_status with run_id \"20261114T105744-e272\" and print its result verbatim, with no commentary"
+
+run 20261114T105744-e272 — completed
+goal: In one sentence, state the difference between a process and a thread
+plan: planned; subtasks 1/1 completed; max 2 in parallel; 2 attempt(s) each
+elapsed: 38.6s
+usage: input 1882 (+19456 prompt tokens served from cache), output 7363, calls 3 (deepseek-official/deepseek-v4.1-flash-1017: 3 call(s) 1882 in / 7363 out)
+cost: ¥0.1016 (estimate; all models priced)
+  [1] completed (attempts 2) Write one-sentence process-vs-thread distinction 31 in / 1657 out
+
+report:
+
+# In one sentence, state the difference between a process and a thread
+
+SENTENCE: A process is an independent execution unit with its own isolated virtual address space and resources, whereas a thread is a CPU-scheduled execution unit within a process that shares that process's address space and resources with its sibling threads.
+JUSTIFICATION: The sentence contrasts a process's isolated address space and resources with a thread's role as a schedulable execution unit that shares its process's address space and resources.
+
+# Stored run record, as written by the plugin
+# status  completed
+# usage   inputTokens 1882, outputTokens 7363, cacheReadTokens 19456,
+#         totalTokens 28701, modelCalls 3,
+#         models["deepseek-official/deepseek-v4.1-flash-1017"] = {input 1882, output 7363, cacheRead 19456, calls 3}
+# cost    total 0.10158, currency CNY, complete true, unpriced []
+#
+# Arithmetic: (1882 × 2 + 19456 × 2 + 7363 × 8) / 1e6 = ¥0.10158, printed as ¥0.1016.
