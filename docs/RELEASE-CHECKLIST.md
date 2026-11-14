@@ -1,4 +1,4 @@
-# Release checklist — dsh-superagent
+﻿# Release checklist — dsh-superagent
 
 Ordered by **external usability**: item 1 is what a stranger hits first, item 12
 is housekeeping. "User" below means "someone who installed the plugin and did
@@ -192,7 +192,7 @@ an offline test.
   `exports` advertises the plugin entry point plus `cordis.patch.yml` (the
   bundle patch the host resolves by path); internals stay private because the
   internal subpaths ship without types. `npm publish --dry-run` prints an
-  11-file, 55.2 kB tarball (182.4 kB unpacked) with no runtime dependencies.
+  11-file, 53.9 kB tarball (178.3 kB unpacked) with no runtime dependencies.
   Name availability on the registry is still unverified because
   that needs a registry lookup at publish time.
 - **Effort.** S.
