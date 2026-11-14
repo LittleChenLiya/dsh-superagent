@@ -401,8 +401,50 @@ transition) and now asserts "still active"; the old "no error" assertion
 contradicted `orchestrator.cancel`'s audit note and now asserts on the rendered
 text instead, which is what a reader actually sees.
 
+### Second adversarial round (same day)
+
+Two independent reviewers: one on `lib/control.js` and its wiring, one on
+docs-vs-code truth. Findings fixed here, each with a test or a doc correction:
+
+- **The plane started before the state directory existed.** `recover()` creates
+  it and `ready` awaits that, but `control.start()` ran at mount. On a fresh
+  `DSH_HOME` the discovery write failed with `ENOENT` and the surface stayed off
+  for the whole host lifetime. It now starts only after `ready`, skips when the
+  state directory is unusable, and logs the real cause.
+- **Discovery ownership was keyed on pid alone.** A reloaded plugin runs two
+  planes in one pid; the old disposer could delete the new file. The document now
+  carries a 12-hex `instanceId` and deletion is guarded by it.
+- The tmp file is opened with `wx` + `0600`, so a planted symlink cannot
+  redirect a file containing the token; a crash between write and rename leaves
+  no token file behind.
+- Concurrent `start()` calls share one in-flight bind instead of opening two
+  listeners; `finally` only clears its own attempt.
+- `GET /health` is an exact route (`/health/x` is 404). `GET /runs?limit` now
+  limits `data.runs`, not just the printed rows. `/health` and `/` are documented
+  as the two replies without `text`.
+- A worker session is refused by `superagent_cancel` too (previously only start
+  and resume), and the refusal text says so. Covered by a new test that holds a
+  worker open and calls all three tools as that child.
+- `controlPort: ""`, `" "`, or `true` no longer coerces to `0`/`1`; only a number
+  or a digit string enables the listener.
+- A blank `goal` is answered with 400 `no-goal` before the session check, as the
+  docs promise. `recursion` is 409, not 500.
+- `requestTimeout` never bounded a long poll — it bounds *receiving* a request.
+  The comment and docs now say that; the value is 60 s.
+- **Tool args could widen the operator's caps.** `max_subtasks` etc. were
+  `override ?? config`; they are now `min(override, config)`.
+- **A live local pid lost its run lock after 10 minutes.** Staleness now applies
+  only when the holder cannot be checked (another machine or an unknown pid).
+- Docs: tarball install written into the Quickstart until the registry exists;
+  A2/A5 restated honestly; lock/ownership wording, per-state-directory quota,
+  error-shape examples, npm-safe absolute doc links, and `DSH_HOME` fallbacks
+  fixed; CHANGELOG counts refreshed (87 tests, 19 error shapes, 60 s).
+
+Evidence: `npm test` 87/87, real-host control run re-passed 17/17 after the
+lifecycle change (`transcripts/control-plane.log`), cross-process cancel 9/9.
+
 ### Next
 
-1. A second adversarial round after the web-profile pass.
+1. Release mechanics audit (package contents, version, links, tarball).
 2. Web-profile E2E pass (same plugin, browser-driven).
-3. H1–H3 release mechanics; a paid default-route run once a key exists (B8).
+3. H1–H3 close-out; a paid default-route run once a key exists (B8).
