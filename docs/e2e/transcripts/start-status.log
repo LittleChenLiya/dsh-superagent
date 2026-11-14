@@ -1,0 +1,22 @@
+﻿node : [e2e-stub-llm] registered route e2e-stub
+所在位置 行:15 字符: 4153
++ ... anscripts'; node $dsh --profile headless "[e2e:status run=20261114T08 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([e2e-stub-llm] registered route e2e-stub:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[dsh-superagent] registered 5 tools; state C:\Windows\TEMP\dsh-e2e2-home\state\superagent
+run 20261114T080127-372d — completed
+goal: Compare two sorting strategies on the stub fixture and report one number for each.
+plan: planned; subtasks 2/2 completed; max 3 in parallel; 2 attempt(s) each
+elapsed: 3.5s
+usage: input 1420 (+128 prompt tokens served from cache), output 350, calls 4 (e2e-stub/stub-flash: 4 call(s) 1420 in / 350 out)
+cost: $0.0225 (estimate; all models priced)
+  [1] completed (attempts 1) Alpha 400 in / 100 out
+  [2] completed (attempts 1) Beta 400 in / 100 out
+
+report:
+
+FINAL REPORT: both strategies were measured.
+Alpha: 3 operations.
+Beta: 7 operations.

@@ -18,6 +18,9 @@ state/
 
 # logs and editor/OS noise
 *.log
+# ...except the E2E transcripts: DONE.md cites them as evidence, so they must
+# exist in the repository a stranger clones.
+!docs/e2e/transcripts/*.log
 .DS_Store
 Thumbs.db
 .idea/

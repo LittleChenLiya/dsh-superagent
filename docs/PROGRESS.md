@@ -286,3 +286,69 @@ another machine still wins.
    start/status/cancel without importing `lib/`.
 2. Web-profile E2E pass (same plugin, browser-driven).
 3. A paid default-route run once a key exists (B8), then a release commit.
+
+## 2026-11-14 — round 4: the embedding surface (G3)
+
+Chose **local HTTP over `node:http`**, not MCP: no new dependency, no second
+process to supervise, and the same five operations the tools already expose.
+New `lib/control.js` is transport only — routing, auth, discovery, limits — and
+every action is a callback into `lib/index.js`, so an HTTP start goes through
+the identical session check, child guard, quota, budgets, lock, and recovery as
+`superagent_start`.
+
+### Design decisions worth keeping
+
+- **Off by default.** `controlPort: null` means no socket. `0` means an
+  ephemeral port. Any other malformed value is refused with a log line rather
+  than coerced into a listener. A plugin must not open a port because it was
+  installed.
+- **Loopback only, token per process.** 32 random bytes in
+  `<stateDir>/control.json` (mode `0600`), constant-time compare, `Host` header
+  must name `127.0.0.1`/`localhost` (DNS-rebinding block), no CORS headers,
+  64 KB body cap, 320 s request timeout, 64 connections.
+- **No synthetic parent.** `POST /runs` requires `session_id` of a live session
+  because the host creates children through that agent. A run with no owner is
+  refused as `no-session`; inventing a parent would create work nothing can
+  cancel or resume.
+- **Transport errors are not host errors.** `HttpError` carries its own id and
+  hint, so a 401 says "read the token from control.json" instead of the generic
+  "call superagent_list and retry" text meant for a broken run.
+- **Discovery is removed only if it still names this pid**, so a second host
+  that took over the file is not left dangling.
+
+### Found while verifying (all fixed in this round)
+
+1. The discovery file is UTF-8 without a BOM, as JSON must be, but Windows
+   PowerShell 5.1 reads `Get-Content` as ANSI and garbles a non-ASCII hostname,
+   which made the harness think the file was malformed. Documented in
+   `docs/embedding.md` (`-Encoding UTF8`); no code change — adding a BOM would
+   break `JSON.parse`.
+2. A probe script that used global `fetch` and then `process.exit()` aborted
+   with a libuv assertion (`UV_HANDLE_CLOSING`) on Windows. The probe now uses
+   `node:http` with `agent: false` and exits through `process.exitCode`. This is
+   part of the embedding guidance: sockets are per request.
+3. The first probe run passed a doubled `session-session-…` id: root session
+   directories are already named `session-<uuid>`, while child directories use
+   the bare uuid. Recorded in the E2E doc so the next session does not re-learn
+   it.
+
+### Evidence
+
+- `docs/e2e/transcripts/control-plane.log`: real `dsh@0.2.2-rc.1`, tarball
+  installed into the fresh profile, `controlPort: 0`. **17/17 checks**: route
+  index, health, 401 without/with a wrong token, 409 `no-session` for a missing
+  and a closed session, `POST /runs` → 202, `GET /runs/:id?wait=60` →
+  `completed` with a report and measured usage, list contains it, cancel on a
+  terminal run says "nothing to cancel", resume returns it unchanged, 404
+  `unknown-run`, discovery file removed after the host exits.
+- `docs/embedding.md`: the contract (routes, envelope, error table, security
+  model, lifecycle, curl/PowerShell/Node examples, versioning, non-goals).
+- `npm test`: **80 tests** (7 new in `test/control.test.mjs`, 1 end-to-end in
+  `test/plugin.test.mjs`), two consecutive full runs, 80/80.
+
+### Next
+
+1. Two adversarial rounds on the control surface (auth bypass, socket leaks,
+  event-loop lifetime, concurrent starts across processes).
+2. Web-profile E2E pass (same plugin, browser-driven).
+3. H1–H3 release mechanics; a paid default-route run once a key exists (B8).

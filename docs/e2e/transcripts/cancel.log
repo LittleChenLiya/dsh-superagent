@@ -1,0 +1,20 @@
+﻿node : [e2e-stub-llm] registered route e2e-stub
+所在位置 行:15 字符: 4225
++ ... StartNew(); node $dsh --profile headless "[e2e:cancel] cancel timing  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([e2e-stub-llm] registered route e2e-stub:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[dsh-superagent] registered 5 tools; state C:\Windows\TEMP\dsh-e2e2-home\state\superagent
+[dsh-superagent] subtask 2 attempt 1 threw: aborted
+cancel tool returned after 1988ms; cancel sequence finished: cancelled 20261114T075753-9851
+
+run 20261114T075753-9851 — cancelled
+goal: Compare two sorting strategies on the stub fixture and report one number for each.
+plan: planned; subtasks 1/2 completed; max 2 in parallel; 2 attempt(s) each
+elapsed: 3.1s
+usage: input 520 (+64 prompt tokens served from cache), output 130, calls 2 (e2e-stub/stub-flash: 2 call(s) 520 in / 130 out)
+usage note: 1 child session log(s) could not be read, so the token figures above cover only the readable ones; the model-call budget counted those children as one call each instead of ignoring them
+cost: $0.0084 (estimate; all models priced)
+  [1] completed (attempts 1) Alpha 400 in / 100 out
+  [2] cancelled (attempts 1) Beta

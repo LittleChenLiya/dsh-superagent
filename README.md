@@ -169,6 +169,7 @@ Row config in `<profile>/cordis.patch.yml`:
 | `resultCapBytes` | `32768` | Bytes kept per subtask report. |
 | `notifyOnComplete` | `true` | Wake the owning session once when a run finishes while nobody is polling. |
 | `keepRuns` | `0` | Delete terminal runs older than this many days at mount; `0` keeps everything. |
+| `controlPort` | off | Loopback port for the embedding surface; `0` picks a free one. See [docs/embedding.md](docs/embedding.md). |
 
 ### Switching models
 
@@ -267,6 +268,37 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
 - `superagent_cancel(run_id)` stops the run, from any process; see below.
 - `superagent_resume(run_id, wait_seconds?)` continues an `interrupted`, `failed`,
   `partial`, or `cancelled` run; completed subtasks are kept.
+
+## Embedding over local HTTP
+
+The tools require a session. If another UI or script must start and watch runs
+without importing this package, set `controlPort`:
+
+```yaml
+- id: superagent
+  config:
+    controlPort: 0     # off by default; 0 = OS picks a free loopback port
+```
+
+The plugin then writes `<stateDir>/control.json` with the bound URL and a
+per-process bearer token (mode `0600`) and serves `GET /health`, `GET /runs`,
+`GET /runs/:id`, `POST /runs`, `POST /runs/:id/cancel`, and
+`POST /runs/:id/resume` on `127.0.0.1` only. Every reply carries the same text
+the tool would print; every run goes through the same quota, budgets, locks,
+and recovery as a tool-started run. `POST /runs` requires `session_id` of a
+session that is live in that host — a run needs a real parent agent for its
+children.
+
+```bash
+STATE="$DSH_HOME/state/superagent"
+URL=$(node -e "console.log(require('$STATE/control.json').url)")
+TOKEN=$(node -e "console.log(require('$STATE/control.json').token)")
+curl -s -H "Authorization: Bearer $TOKEN" "$URL/runs"
+```
+
+The full contract — routes, error ids, security model, lifecycle, client
+examples — is [docs/embedding.md](docs/embedding.md). It is opt-in, loopback
+only, and there is no remote or unauthenticated mode.
 
 ## State and recovery
 
@@ -404,6 +436,9 @@ appears to "hang" until the ignored-abort child returns.
 | `[error] a saved run file is damaged` | A state file was truncated or invalid JSON. | The bytes were kept at `<runId>.json.corrupt-<ts>`; inspect, then delete. |
 | `cancel requested ... not confirmed` | The owning process did not acknowledge within 5 s. | Check `superagent_status`; if the owner is gone, restart the host so recovery marks the run `cancelled`, then `superagent_resume` if you want it to continue. |
 | `[error] ... still owned by a live process` | Another profile is running this run, so resuming here would duplicate the work. | Let it finish, or `superagent_cancel` it first. |
+| `missing or wrong bearer token` (HTTP 401) | The embedder used a token from an earlier host start, or the wrong state directory's discovery file. | Read `token` from `<stateDir>/control.json` again; it is regenerated on every start. Read the file as UTF-8. |
+| `the request did not name a live session` (HTTP 409) | `POST /runs` or `/resume` was called without a `session_id`, or the session closed. | Pass the id of a session open in that host process; run the start from the session that should own it. |
+| `[dsh-superagent] control plane is not listening` in the host log | `controlPort` is already taken, or the value is invalid. | Use `controlPort: 0`, free the port, or remove the key; the tools keep working either way. |
 
 Every tool error has three lines: `[error]` a sentence, `hint:` one next step,
 and `detail:` the untouched host message, so nothing is hidden.
@@ -423,6 +458,10 @@ and `detail:` the untouched host message, so nothing is hidden.
   fails or the budget is exhausted.
 - Retention is opt-in (`keepRuns`); by default state accumulates, at up to
   32 KB per subtask plus the report per run.
+- The HTTP embedding surface is loopback-only, opt-in, and token-authenticated;
+  it cannot be exposed remotely, and there is no MCP server. A local process
+  running as the same user can read the token, which is the same trust boundary
+  as writing run files.
 
 ## Development
 
@@ -438,7 +477,8 @@ What "ready to publish" means is written down as checkable rows in
 Layout: `lib/index.js` (plugin, tool schemas, run formatting),
 `lib/orchestrator.js` (ordering, retries, budgets, cancel, resume),
 `lib/store.js` (atomic run files, cancel markers, quarantine),
-`lib/errors.js` (readable error text), `lib/usage.js` (session log parsing).
+`lib/errors.js` (readable error text), `lib/usage.js` (session log parsing),
+`lib/control.js` (optional loopback HTTP surface).
 
 ## License
 

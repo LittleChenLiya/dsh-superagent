@@ -1,0 +1,38 @@
+﻿=== before kill: id=20261114T080247-1b6e status=running
+  [1] Alpha completed child=3b6579d3-cc02-4a78-8099-b5c4ddb48c8d
+  [2] Beta running child=a4ab85fb-942b-4b58-b0ab-2b6a4cfa819e
+=== kill -9 pid 33204 ===
+[e2e-stub-llm] registered route e2e-stub
+[dsh-superagent] registered 5 tools; state C:\Windows\TEMP\dsh-e2e2-home\state\superagent
+run 20261114T080247-1b6e — interrupted
+goal: Compare two sorting strategies on the stub fixture and report one number for each.
+plan: planned; subtasks 1/2 completed; max 2 in parallel; 2 attempt(s) each
+elapsed: 5.9s
+usage: input 520 (+64 prompt tokens served from cache), output 130, calls 2 (e2e-stub/stub-flash: 2 call(s) 520 in / 130 out)
+cost: $0.0084 (estimate; all models priced)
+reclaimed: owner pid 33204 is not running and this state directory is local
+note: host process stopped while the run was active
+  [1] completed (attempts 1) Alpha 400 in / 100 out
+  [2] pending (attempts 1) Beta
+
+next: superagent_resume run_id="20261114T080247-1b6e"
+[e2e-stub-llm] registered route e2e-stub
+[dsh-superagent] registered 5 tools; state C:\Windows\TEMP\dsh-e2e2-home\state\superagent
+resume sequence finished: run 20261114T080247-1b6e — completed
+goal: Compare two sorting strategies on the stub fixture and report one number for each.
+plan: planned; subtasks 2/2 completed; max 2 in parallel; 2 attempt(s) each
+elapsed: 15.2s running, 24.1s since it was started (includes time stopped)
+usage: input 1420 (+128 prompt tokens served from cache), output 350, calls 4 (e2e-stub/stub-flash: 4 call(s) 1420 in / 350 out)
+cost: $0.0225 (estimate; all models priced)
+resumed at: 2026-11-14T08:02:56.014Z
+  [1] completed (attempts 1) Alpha 400 in / 100 out
+  [2] completed (attempts 1) Beta 400 in / 100 out
+
+report:
+
+FINAL REPORT: both strategies were measured.
+Alpha: 3 operations.
+Beta: 7 operations.
+=== after resume: status=completed
+  [1] Alpha completed child=3b6579d3-cc02-4a78-8099-b5c4ddb48c8d
+  [2] Beta completed child=eb25f959-9bd1-4f69-ae8d-c0db9395888e

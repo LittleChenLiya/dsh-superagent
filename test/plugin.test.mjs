@@ -124,6 +124,129 @@ test('an unusable state directory is reported instead of an empty run list', asy
   }
 })
 
+/** Await a file that another async task is creating, without a fixed sleep. */
+async function waitForJson(file, timeoutMs = 3000) {
+  const endsAt = Date.now() + timeoutMs
+  for (;;) {
+    try {
+      return JSON.parse(await fsp.readFile(file, 'utf8'))
+    } catch (error) {
+      if (error?.code !== 'ENOENT' || Date.now() >= endsAt) throw error
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+  }
+}
+
+test('the control plane is off by default and starts runs through a live session when enabled', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const offDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  const subagents = {
+    async startActivation(spec) {
+      const text = spec.label === 'superagent-plan'
+        ? JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] })
+        : 'the answer'
+      return {
+        childId: `child-${spec.label}`,
+        result: Promise.resolve({ output: [{ type: 'text', text }], stopReason: 'completed' }),
+        dispose: async () => {},
+      }
+    },
+  }
+  const agents = { 'session-live': { id: 'session-live' } }
+  let disposer = null
+  const ctx = {
+    tools: { register: () => {} },
+    // Cordis calls the effect body at once and keeps what it returns as the
+    // disposer; the fake must do the same or the test never stops the server.
+    effect: execute => {
+      disposer = execute()
+    },
+    get: service => {
+      if (service === 'subagents') return subagents
+      if (service === 'agents') return { get: id => agents[id] }
+      return undefined
+    },
+  }
+
+  try {
+    // Default config: no socket, no discovery file, nothing to clean up.
+    apply({ tools: { register: () => {} }, get: () => undefined }, { stateDir: offDir })
+    assert.deepEqual((await fsp.readdir(offDir)).filter(name => name.startsWith('control')), [])
+
+    apply(ctx, { stateDir, notifyOnComplete: false, controlPort: 0 })
+    const discovery = await waitForJson(path.join(stateDir, 'control.json'))
+    assert.match(discovery.url, /^http:\/\/127\.0\.0\.1:\d+$/)
+
+    const request = async (method, route, body) => {
+      const response = await fetch(`${discovery.url}${route}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${discovery.token}`,
+          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+      return { status: response.status, json: await response.json() }
+    }
+
+    const anonymous = await fetch(`${discovery.url}/runs`)
+    assert.equal(anonymous.status, 401)
+
+    // A run needs a live parent agent; there is no synthetic fallback.
+    const noSession = await request('POST', '/runs', { goal: 'say hi' })
+    assert.equal(noSession.status, 409)
+    assert.equal(noSession.json.error.id, 'no-session')
+
+    const closed = await request('POST', '/runs', { goal: 'say hi', session_id: 'session-closed' })
+    assert.equal(closed.status, 409)
+    assert.equal(closed.json.error.id, 'no-session')
+
+    const started = await request('POST', '/runs', {
+      goal: 'say hi',
+      session_id: 'session-live',
+      wait_seconds: 15,
+    })
+    assert.equal(started.status, 202)
+    assert.equal(started.json.data.run.status, 'completed')
+    assert.match(started.json.text, /report:/)
+    const runId = started.json.data.run.id
+    assert.equal(started.json.data.run.parentSessionId, 'session-live')
+
+    const listed = await request('GET', '/runs')
+    assert.equal(listed.status, 200)
+    assert.equal(listed.json.data.runs.length, 1)
+    assert.equal(listed.json.data.runs[0].id, runId)
+
+    const read = await request('GET', `/runs/${runId}`)
+    assert.equal(read.status, 200)
+    assert.equal(read.json.data.run.status, 'completed')
+
+    const noop = await request('POST', `/runs/${runId}/cancel`, {})
+    assert.equal(noop.status, 200)
+    assert.match(noop.json.text, /nothing to cancel/)
+
+    const resumed = await request('POST', `/runs/${runId}/resume`, { session_id: 'session-live' })
+    assert.equal(resumed.status, 202)
+    assert.equal(resumed.json.data.run.status, 'completed')
+
+    await disposer()
+    assert.deepEqual((await fsp.readdir(stateDir)).filter(name => name.startsWith('control')), [])
+  } finally {
+    // A failed assertion must not leave the listening socket holding the test
+    // process open, or the runner reports nothing and looks hung.
+    if (disposer) await disposer().catch(() => {})
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await fsp.rm(stateDir, { recursive: true, force: true })
+    await fsp.rm(offDir, { recursive: true, force: true })
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
 test('a host that loses its subagent service mid-run leaves the run resumable', async () => {
   const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
   const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))

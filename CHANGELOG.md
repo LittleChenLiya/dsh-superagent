@@ -5,6 +5,28 @@
 Hardening pass before the first publish. No behaviour change for the happy
 path except the new spending caps and the cost line.
 
+### Embedding surface (local HTTP)
+
+- New opt-in `controlPort` exposes the five operations as JSON over loopback:
+  `GET /health`, `GET /runs`, `GET /runs/:id`, `POST /runs`,
+  `POST /runs/:id/cancel`, `POST /runs/:id/resume`. Off by default; `0` picks a
+  free port. Another UI can start and watch runs without importing `lib/`.
+- Bound to `127.0.0.1` only, with a per-process bearer token written to
+  `<stateDir>/control.json` (mode `0600`), a `Host` check that blocks DNS
+  rebinding, no CORS headers, a 64 KB body cap, and a 320 s request timeout.
+- Every route goes through the same orchestrator as the tools: quota, budgets,
+  run locks, cross-process cancel, and recovery behave identically. `POST /runs`
+  requires `session_id` of a live session; a run still needs a real parent agent
+  for its children, and a missing session is refused as `no-session` rather than
+  started without an owner.
+- Replies carry the same `text` as the tool result, plus the stored run object
+  (`schemaVersion: 1`). Transport errors have their own ids (`unauthorized`,
+  `forbidden-host`, `no-session`, `body-too-large`, …) so a client can tell a
+  bad token from a broken run.
+- The contract, security model, and client examples are in
+  [docs/embedding.md](docs/embedding.md); verified against real
+  `dsh@0.2.2-rc.1` with 17 checks in `docs/e2e/transcripts/control-plane.log`.
+
 ### Renamed to `dsh-superagent`
 
 - The package, repository, plugin row id (`superagent`), default state

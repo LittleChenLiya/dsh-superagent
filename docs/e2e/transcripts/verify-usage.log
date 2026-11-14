@@ -1,0 +1,9 @@
+﻿run 20261114T080127-372d status completed
+  896a5784-69b0-46f2-af60-a1e66d6f46e2  in=120 out=30 cache=0 calls=1  session.v4.jsonl.zstd
+  68149090-9f8b-4bcc-bc2c-0b66934c3609  in=400 out=100 cache=64 calls=1  session.v4.jsonl.zstd
+  a59f20b3-521e-46ed-9b1b-6185e209ea3a  in=400 out=100 cache=64 calls=1  session.v4.jsonl.zstd
+  d93f6c13-a00c-46ef-9e46-ba79a1fd6a53  in=500 out=120 cache=0 calls=1  session.v4.jsonl.zstd
+independent: {"inputTokens":1420,"outputTokens":350,"cacheReadTokens":128,"calls":4}
+plugin     : {"inputTokens":1420,"outputTokens":350,"cacheReadTokens":128,"calls":4}
+cost by hand: USD 0.022480 for e2e-stub/stub-flash
+cost in run : {"total":0.02248,"currency":"USD","byModel":{"e2e-stub/stub-flash":0.02248},"unpriced":[],"complete":true}

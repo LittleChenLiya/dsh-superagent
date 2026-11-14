@@ -69,9 +69,9 @@ the build machine; see B8).
 | # | Check, answerable yes/no | Evidence | Status |
 | --- | --- | --- | --- |
 | F1 | Every README claim about host behaviour is exercised by a row above, or explicitly marked as a limitation. | claim table in `docs/e2e-2026-11-14.md` | MET |
-| F2 | README states what the plugin cannot do on `dsh@0.2.2-rc.1` (no tool allowlist, no nested delegation, no panel) and what it does not ship (no built-in prices). | README sections | MET |
+| F2 | README states what the plugin cannot do on `dsh@0.2.2-rc.1` (no tool allowlist, no nested delegation, no panel, no remote control plane, no MCP server) and what it does not ship (no built-in prices). | README sections | MET |
 | F3 | The README output block is labelled illustrative and links a real transcript; no number is presented as a measurement. | `docs/e2e-2026-11-14.md` | MET |
-| F4 | No documented config key is ignored by the code; every `DEFAULTS` key appears in the README table and vice versa. | 17 keys, exact match | MET |
+| F4 | No documented config key is ignored by the code; every `DEFAULTS` key appears in the README table and vice versa. | 18 keys, exact match | MET |
 
 ## G. Distribution
 
@@ -79,7 +79,7 @@ the build machine; see B8).
 | --- | --- | --- | --- |
 | G1 | `dsh plugin --profile web add dsh-superagent` installs the published package name (no `file:`), once the package exists on the registry. | post-publish transcript | BLOCKED: not published, by instruction |
 | G2 | `npm i -g dsh-superagent` is not offered as an install path (it is a plugin, not a CLI). | README | MET |
-| G3 | A stable embedding surface (MCP or local HTTP) lets another UI start/status/cancel runs without importing internals. | `docs/embedding.md` | BLOCKED: not built yet |
+| G3 | A stable embedding surface (MCP or local HTTP) lets another UI start/status/cancel runs without importing internals. | `docs/embedding.md` + 17/17 checks against real `dsh@0.2.2-rc.1` in `transcripts/control-plane.log` (start, status, list, cancel, resume, auth, discovery cleanup) | MET |
 
 ## H. Release mechanics
 

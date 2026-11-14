@@ -1,0 +1,9 @@
+﻿node : [e2e-stub-llm] registered route e2e-stub
+所在位置 行:15 字符: 4423
++ ... tempt.log'; node $dsh --profile headless "[e2e:start-wait] child atte ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([e2e-stub-llm] registered route e2e-stub:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[dsh-superagent] registered 5 tools; state C:\Windows\TEMP\dsh-e2e2-home\state\superagent
+stub finished: run 20261114T075956-602a — completed | goal: Compare two sorting strategies on the stub fixture and report one number for each. | plan: planned; subtasks 2/2 completed; max 3 in parallel; 2 attempt(s) each | elapsed: 0.7s

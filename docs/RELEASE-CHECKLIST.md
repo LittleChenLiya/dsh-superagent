@@ -278,14 +278,20 @@ an offline test.
   and numbers in [e2e-2026-11-14.md](e2e-2026-11-14.md).
 - **Effort.** M.
 
-### 18. Other UIs and plugins cannot use it as an engine `[ ]`
+### 18. Other UIs and plugins cannot use it as an engine `[x]`
 
 - **Problem.** The only calling surface is the five host tools, which exist
   inside a DSH session. A panel, a scheduler, or another plugin cannot list or
   start runs without importing `lib/` and fabricating a Cordis context.
-- **Fix (planned).** A small local control surface over the same orchestrator —
-  either an MCP server or an HTTP JSON API on localhost. It must expose
-  start/status/list/cancel/resume with the same error text, bind to loopback
-  only, and require an explicit opt-in. Decision and design in
-  [DONE.md](DONE.md) item G3.
+- **Fix.** Opt-in local HTTP control plane (`lib/control.js`, `controlPort`):
+  `GET /health`, `GET /runs`, `GET /runs/:id`, `POST /runs`,
+  `POST /runs/:id/cancel`, `POST /runs/:id/resume`, bound to `127.0.0.1` with a
+  per-process bearer token in `<stateDir>/control.json` (0600), a `Host` check
+  against DNS rebinding, no CORS, and bounded bodies/timeouts. Every route runs
+  through the same orchestrator, and replies carry the tool's exact `text`.
+  `POST /runs` requires a live `session_id`; there is no synthetic parent.
+  Contract in [embedding.md](embedding.md), verified on real `dsh@0.2.2-rc.1`
+  with 17/17 checks in
+  [transcripts/control-plane.log](e2e/transcripts/control-plane.log), plus 7
+  offline transport tests and one plugin-level end-to-end test.
 - **Effort.** M.
