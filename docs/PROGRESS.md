@@ -573,3 +573,15 @@ there is nothing to submit there.
 The copy avoids competitor rankings because no horizontal run was done. The one
 number that needs care when quoted: the `¥0.1016` is real usage multiplied by
 published rates, and the plugin itself prints it with `(estimate)`.
+## 2026-11-14 — licence and provenance audit
+
+Asked whether the package is safe to distribute. Findings:
+
+- `LICENSE` is MIT and its copyright line names Admire (LittleChenLiya); `package.json` says `license: MIT`; npm reports `MIT`. Consistent. npm includes `LICENSE` in the tarball even though `files` does not name it — checked with `tar -tzf`.
+- `package.json` had no `author`. Added, matching the LICENSE holder. It reaches npm only on the next publish.
+- Provenance: every import under `lib/` and `bin/` is `node:*` or a local module. No vendored copy, no third-party license header, no `@license`, no `node_modules` in the tree. The host is reached only through its public plugin seam (`ctx` services, the patch file, the session log on disk).
+- Assets: one screenshot (`docs/report-preview.jpg`) of this project's own generated report. No web font, no icon font, no third-party SVG path data; the report draws its charts from primitives and the generated HTML has zero external references.
+- `files` lists 13 paths; the tarball has 15 (npm adds `LICENSE` and `package.json`). No test, doc, harness, or `.tgz` file is shipped. The two tarballs in the working tree are gitignored and untracked.
+
+The audit is a read of the tree, not a line-by-line comparison against every
+public repository, and it does not replace legal review.

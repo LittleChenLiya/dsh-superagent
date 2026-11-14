@@ -550,4 +550,7 @@ Layout: `lib/index.js` (plugin, tool schemas, run formatting),
 
 ## License
 
-MIT
+MIT. Copyright (c) 2026 Admire (LittleChenLiya); see [LICENSE](LICENSE).
+
+The npm scope `@xiangyixie` and the GitHub account `LittleChenLiya` are the same
+author.
