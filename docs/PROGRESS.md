@@ -471,3 +471,44 @@ not hit dead relative links.
    `npm publish --registry https://registry.npmjs.org`, and run G1 (registry
    install) plus a paid B8 run.
 2. Keep the transcripts current if code changes again.
+
+## 2026-11-14 — operator surfaces (last pre-release requirement)
+
+Two requested release gates, both built with no new dependency.
+
+**`watch`** (`lib/watch.js`, `bin/watch.js`). A pure `renderFrame()` plus a poll
+loop over `store.list()`. Columns: run id, status, calls spent against the cap,
+elapsed, current activity, parent session. Live runs sort first in a stable
+order, then finished runs newest-first. A fingerprint change triggers a 200 ms
+follow-up read, so planning→running→aggregating does not wait a full second;
+otherwise an idle panel reads one small file per second. Alternate screen and
+hidden cursor on a TTY, and every exit path (Ctrl-C, SIGTERM, `--once`, EPIPE)
+runs the same cleanup that shows the cursor and leaves the alternate screen. On
+a pipe it appends plain frames, and only when the frame changed.
+
+**`report`** (`lib/report.js`, `bin/report.js`). Normalises runs into
+start/end/phase spans, assigns lanes by greedy interval colouring (lane count is
+the peak concurrency), and emits one HTML file: inline CSS plus four inline
+SVGs — timeline, swimlanes, cumulative calls, cumulative cost. Failures,
+cancellations, and interruptions get text markers on the timeline and their own
+cards. Phases are derived from subtask timestamps, and the footer says so. Cost
+includes only priced runs and states the coverage in the card and the footnote.
+
+Verified:
+
+- `npm test`: 106 pass, 19 new, no network.
+- Watch frame captured from the 40 real runs:
+  `docs/e2e/transcripts/watch-panel.log`.
+- Report audit: 82.6 kB, 4 inline SVGs, 0 `http(s)://`, 0 `<script`, 0 `<link`,
+  0 `src=`, 0 `@import` (`docs/e2e/transcripts/report-cli.log`).
+- Packed and npm-installed the tarball into a scratch prefix: both bins are
+  linked and both run against real state. `npm pack` = 15 files, dependencies
+  still `{}`.
+- Layout reviewed in a real browser at 960 px and 1440 px. Fixed an orphan stat
+  card (6-column grid with 3-column breakpoint), a clipped DURATION/PARENT
+  header (table inside its own scroll container), and timeline markers that
+  could fall off the right edge (reserved column).
+
+DONE.md gained section I (`I1`–`I6`); `G2` was narrowed to say the utilities are
+not an install path, and `F2` now says "no in-host panel" rather than
+"no panel".

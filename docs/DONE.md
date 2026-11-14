@@ -69,7 +69,7 @@ the build machine; see B8).
 | # | Check, answerable yes/no | Evidence | Status |
 | --- | --- | --- | --- |
 | F1 | Every README claim about host behaviour is exercised by a row above, or explicitly marked as a limitation. | claim table in `docs/e2e-2026-11-14.md` | MET |
-| F2 | README states what the plugin cannot do on `dsh@0.2.2-rc.1` (no tool allowlist, no nested delegation, no panel, no remote control plane, no MCP server) and what it does not ship (no built-in prices). | README sections | MET |
+| F2 | README states what the plugin cannot do on `dsh@0.2.2-rc.1` (no tool allowlist, no nested delegation, no in-host panel or dashboard, no remote control plane, no MCP server) and what it does not ship (no built-in prices). | README sections | MET |
 | F3 | The README output block is labelled illustrative and links a real transcript; no number is presented as a measurement. | `docs/e2e-2026-11-14.md` | MET |
 | F4 | No documented config key is ignored by the code; every `DEFAULTS` key appears in the README table and vice versa. | 18 keys, exact match | MET |
 
@@ -78,7 +78,7 @@ the build machine; see B8).
 | # | Check, answerable yes/no | Evidence | Status |
 | --- | --- | --- | --- |
 | G1 | `dsh plugin --profile web add dsh-superagent` installs the published package name (no `file:`), once the package exists on the registry. | post-publish transcript | BLOCKED: not published, by instruction |
-| G2 | `npm i -g dsh-superagent` is not offered as an install path (it is a plugin, not a CLI). | README | MET |
+| G2 | `npm i -g dsh-superagent` is not offered as an install path (it is a plugin, not a CLI). The `watch`/`report` binaries are operator utilities run from the profile's `node_modules`; the README says they are not the install path. | README "Watch and report" | MET |
 | G3 | A stable embedding surface (MCP or local HTTP) lets another UI start/status/cancel runs without importing internals. | `docs/embedding.md` + 17/17 checks against real `dsh@0.2.2-rc.1` in `transcripts/control-plane.log` (start, status, list, cancel, resume, auth, discovery cleanup) + cross-process cancel in `transcripts/cross-cancel.log` | MET |
 
 ## H. Release mechanics
@@ -89,8 +89,20 @@ the build machine; see B8).
 | H2 | `git status` is clean and the release commit is pushed. | `git status -sb` clean at `origin/main` | MET |
 | H3 | No known blocker from the latest adversarial review remains open. | round-1, round-2, and release-mechanics findings all fixed or recorded with a reason in `docs/PROGRESS.md` | MET |
 
+## I. Operator surfaces
+
+| # | Check, answerable yes/no | Evidence | Status |
+| --- | --- | --- | --- |
+| I1 | `watch` draws one line per run with id, status, calls used against the cap, elapsed time, current activity, and parent session, and a frame is captured from real runs. | `docs/e2e/transcripts/watch-panel.log` (40 real runs) + `test/watch.test.mjs` | MET |
+| I2 | `watch` restores the cursor and leaves the alternate screen on Ctrl-C, SIGTERM, `--once`, and a closed pipe. | `test/watch.test.mjs` asserts the hide/before-show ordering on both the once and signal paths; the TTY path was run on the build machine | MET |
+| I3 | Neither utility adds a runtime dependency or a published file beyond its own module and binary. | `package.json` `dependencies: {}`; `npm pack` = 15 files (up from 11) | MET |
+| I4 | `report` writes one file that references nothing external: zero `http://`, `https://`, `<script`, `<link`, `src=`, `@import`, `url(`. | `docs/e2e/transcripts/report-cli.log` audit (all zero, 4 inline SVGs) + `test/report.test.mjs` | MET |
+| I5 | That file contains a timeline with per-run start/end/phases, concurrency swimlanes, cumulative call and cost curves, and explicit failure/cancellation/interruption annotations. | `docs/report-sample.html` (40 real runs); six section ids asserted by test | MET |
+| I6 | Both commands run verbatim from an installed profile, and the README documents exactly that command. | npm-installed tarball: both binaries linked in `node_modules/.bin` and executed against real state (recorded in `docs/PROGRESS.md`); README "Watch and report" | MET |
+
 ## Not required for release
 
 - A price for every model. The plugin deliberately ships none.
-- A GUI panel. The position is engine, not product.
+- An in-host GUI or a web dashboard. The shipped watch panel and static report
+  are operator tools that read the same files; neither is a hosted product.
 - Windows service integration, telemetry, or a hosted control plane.

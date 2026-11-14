@@ -8,8 +8,10 @@ answer. Runs are persisted to disk, so a host restart does not lose them:
 `superagent_status` reports them and `superagent_resume` continues them.
 
 Registered tools: `superagent_start`, `superagent_status`, `superagent_list`,
-`superagent_cancel`, `superagent_resume`. No panel, no monkey-patching of host
-code, no runtime dependencies.
+`superagent_cancel`, `superagent_resume`. The plugin adds no in-host UI and
+patches no host code. Two optional operator utilities ship beside it — a
+terminal panel and an HTML report — and both are ordinary files rather than
+hooks into the host. No runtime dependencies.
 
 ### Naming
 
@@ -282,6 +284,53 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
 - `superagent_cancel(run_id)` stops the run, from any process; see below.
 - `superagent_resume(run_id, wait_seconds?)` continues an `interrupted`, `failed`,
   `partial`, or `cancelled` run; completed subtasks are kept.
+
+## Watch and report
+
+![Run report preview](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/report-preview.jpg?raw=true)
+
+_Top of a report rendered from 40 real host runs. The full page — timeline,
+swimlanes, call and cost curves, failure annotations, run table — is
+[docs/report-sample.html](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/report-sample.html)._
+
+Two operator utilities ship with the package. They read the same durable run
+files as the tools, need no session, and add no runtime dependency.
+
+Run them from the installed copy inside the profile:
+
+```bash
+PKG="${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/dsh-superagent"
+node "$PKG/bin/watch.js"                          # live panel, Ctrl-C to stop
+node "$PKG/bin/report.js" --out report.html       # self-contained HTML page
+```
+
+If the profile's linker created bin links (npm does), the same commands are
+`node_modules/.bin/dsh-superagent-watch` and `node_modules/.bin/dsh-superagent-report`.
+
+Both accept `--state-dir <path>`; it defaults to `$DSH_HOME/state/superagent`.
+Pass it when the plugin config sets a custom `stateDir`.
+
+**`watch`** draws one line per run — id, status, calls used against the cap,
+elapsed time, what it is doing right now, and the parent session — in the
+alternate screen, and restores the cursor on Ctrl-C, SIGTERM, or a closed pipe.
+A status change repaints immediately; an idle panel reads one small file per
+second. `--once` prints a single plain frame, which is what
+[docs/e2e/transcripts/watch-panel.log](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/e2e/transcripts/watch-panel.log)
+captures from 40 real runs.
+
+**`report`** renders recorded runs into one HTML file: inline CSS, inline SVG,
+no script, no font, no image, no network. It has a timeline with each run's
+start, end, and derived planning/work/merge phases; a swimlane chart whose lane
+count is the peak concurrency; cumulative model-call and cost curves; explicit
+failure, cancellation, and interruption annotations; and a run table.
+[docs/report-sample.html](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/report-sample.html)
+is the 40-run report from the host e2e — open it directly, nothing is fetched —
+and
+[docs/e2e/transcripts/report-cli.log](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/e2e/transcripts/report-cli.log)
+records the command plus a zero-external-reference audit.
+
+Neither utility is the install path: the plugin is installed with
+`dsh plugin add`, never with `npm i -g`.
 
 ## Embedding over local HTTP
 

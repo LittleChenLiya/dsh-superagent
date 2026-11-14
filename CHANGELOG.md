@@ -3,7 +3,24 @@
 ## 0.9.0 — 2026-11-14
 
 Hardening pass before the first publish. No behaviour change for the happy
-path except the new spending caps and the cost line.
+path except the new spending caps, the cost line, and two operator utilities.
+
+### Watch panel and HTML report
+
+- `dsh-superagent-watch` draws one line per run — id, status, calls used against
+  the cap, elapsed, current activity, parent session — in the alternate screen.
+  A status change repaints within 200 ms; an idle panel costs one small file
+  read per second. Ctrl-C, SIGTERM, `--once`, and a closed pipe all restore the
+  cursor and leave the alternate screen. `--once` prints a plain frame for logs
+  and CI.
+- `dsh-superagent-report` renders recorded runs into one self-contained HTML
+  file: inline CSS and inline SVG, no script, no font, no image, no network. It
+  contains a timeline with each run's start, end, and derived
+  planning/work/merge phases; swimlanes whose count is the peak concurrency;
+  cumulative model-call and cost curves; explicit failure, cancellation, and
+  interruption annotations; and a run table.
+- Neither utility adds a dependency. The package is still `dependencies: {}`;
+  the tarball grows from 11 to 15 files (72.9 kB packed, 239.0 kB unpacked).
 
 ### Embedding surface (local HTTP)
 

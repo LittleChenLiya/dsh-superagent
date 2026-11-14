@@ -1,0 +1,51 @@
+﻿# Captured 2026-11-14 on the machine that ran the real-host e2e.
+# State: C:\Windows\TEMP\dsh-e2e2-home\state\superagent (40 real runs).
+# Command: node bin/watch.js --state-dir <state> --once --no-color
+# A terminal run (no --once) draws the same frame in the alternate screen
+# and restores the cursor on Ctrl-C; test/watch.test.mjs asserts that path.
+
+dsh-superagent · 40 runs idle · 10:03:48Z
+ ──────────────────────────────────────────────────────────────────────────────────────────────────
+ RUN ID               STATUS       CALLS    ELAPSED ACTIVITY                         PARENT
+ 20261114T090200-7eee interrupted  4/80     2m00s   host went away · resume to continue    39fa65be
+ 20261114T090204-686a cancelled    3/80     1s      cancelled by request                   c636fe41
+ 20261114T090106-a188 completed    4/80     931ms   report ready · 2/2 subtasks            304d999d
+ 20261114T090106-7944 completed    4/80     887ms   report ready · 2/2 subtasks            304d999d
+ 20261114T084810-e633 completed    4/80     807ms   report ready · 2/2 subtasks            b8b0bcf7
+ 20261114T084810-c990 completed    4/80     875ms   report ready · 2/2 subtasks            b8b0bcf7
+ 20261114T083845-a221 interrupted  4/80     2m00s   host went away · resume to continue    00624411
+ 20261114T083849-f2c5 cancelled    3/80     243ms   cancelled by request                   eae8d20f
+ 20261114T083539-bd65 interrupted  4/80     2m00s   host went away · resume to continue    08cdcc73
+ 20261114T083542-073d cancelled    3/80     205ms   cancelled by request                   fd3572ac
+ 20261114T083350-cac7 completed    4/80     614ms   report ready · 2/2 subtasks            d6f371e2
+ 20261114T083350-94dc completed    4/80     614ms   report ready · 2/2 subtasks            d6f371e2
+ 20261114T082625-d8c8 completed    4/80     789ms   report ready · 2/2 subtasks            3696f9df
+ 20261114T082625-d67b completed    4/80     765ms   report ready · 2/2 subtasks            3696f9df
+ 20261114T082429-a38d completed    4/80     651ms   report ready · 2/2 subtasks            d4a3f286
+ 20261114T082429-5330 completed    4/80     797ms   report ready · 2/2 subtasks            d4a3f286
+ 20261114T082319-4807 completed    4/80     821ms   report ready · 2/2 subtasks            a3625907
+ 20261114T082216-6430 completed    4/80     890ms   report ready · 2/2 subtasks            f6f6566b
+ 20261114T082019-8ef3 completed    4/80     727ms   report ready · 2/2 subtasks            87355361
+ 20261114T080247-1b6e completed    5/80     24s     report ready · 2/2 subtasks            afc5296b
+ 20261114T080200-1635 completed    5/80     24s     report ready · 2/2 subtasks            f13e92ad
+ 20261114T080127-372d completed    4/80     3s      report ready · 2/2 subtasks            6b24d0df
+ 20261114T075956-602a completed    5/80     712ms   report ready · 2/2 subtasks            94e2c7f2
+ 20261114T075928-d7c9 completed    4/80     722ms   report ready · 2/2 subtasks            bdbc7b50
+ 20261114T075838-f5a2 completed    5/80     34s     report ready · 2/2 subtasks            64603b79
+ 20261114T075753-9851 cancelled    3/80     3s      cancelled by request                   5c631ace
+ 20261114T075725-3989 cancelled    3/80     3s      cancelled by request                   3806cb1b
+ 20261114T075657-b729 completed    4/80     672ms   report ready · 2/2 subtasks            496e1b3f
+ 20261114T075555-3190 completed    5/80     23s     report ready · 2/2 subtasks            b184b3f7
+ 20261114T075205-bf66 interrupted  3/80     3m50s   host went away · resume to continue    9f04c61f
+ 20261114T075114-f5f6 interrupted  4/80     20s     host went away · resume to continue    7e6fcd1b
+ 20261114T075039-7f83 interrupted  3/80     182ms   host went away · resume to continue    7a4cb641
+ 20261114T074822-6059 failed       5/80     1s      subagent service is unavailable; dsh-… 9b17dff6
+ 20261114T074738-7063 cancelled    3/80     3s      cancelled by request                   fea8c796
+ 20261114T074710-4ef8 cancelled    1/80     88ms    cancelled by request                   400a7f24
+ 20261114T074606-dd46 completed    4/80     3s      report ready · 2/2 subtasks            7c8eee84
+ 20261114T074528-9184 completed    4/80     3s      report ready · 2/2 subtasks            05e2cabb
+ 20261114T074452-2437 completed    4/80     3s      report ready · 2/2 subtasks            65444857
+ 20261114T074425-4761 completed    4/80     4s      report ready · 2/2 subtasks            cd53a48c
+ 20261114T074341-c3ac completed    4/80     681ms   report ready · 2/2 subtasks            97bf14cd
+ ──────────────────────────────────────────────────────────────────────────────────────────────────
+calls 155 tokens 54k cost $0.6342+ 1 failed · refreshing every 1s · Ctrl-C to quit

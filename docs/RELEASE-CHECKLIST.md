@@ -191,8 +191,8 @@ an offline test.
   `bugs` point at it; version `0.9.0`; `CHANGELOG.md` ships in the package.
   `exports` advertises the plugin entry point plus `cordis.patch.yml` (the
   bundle patch the host resolves by path); internals stay private because the
-  internal subpaths ship without types. `npm publish --dry-run` prints an
-  11-file, 53.9 kB tarball (178.3 kB unpacked) with no runtime dependencies.
+  internal subpaths ship without types. `npm pack --dry-run` prints a
+  15-file, 72.9 kB tarball (239.0 kB unpacked) with no runtime dependencies.
   Name availability on the registry is still unverified because
   that needs a registry lookup at publish time.
 - **Effort.** S.

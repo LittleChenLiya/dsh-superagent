@@ -1,0 +1,15 @@
+﻿# Captured 2026-11-14 on the machine that ran the real-host e2e.
+# State: C:\Windows\TEMP\dsh-e2e2-home\state\superagent (40 real runs).
+# Command: node bin/report.js --state-dir C:\Windows\TEMP\dsh-e2e2-home\state\superagent --out C:\Windows\TEMP\sa-report-evidence.html --title "Superagent run report · real host"
+
+# Verdict: one file, every chart inline, nothing to fetch.
+
+wrote C:\Windows\TEMP\sa-report-evidence.html (82.4 kB, 40 runs)
+bytes=84039
+inline_svg=4
+http_refs=0
+script_tags=0
+link_tags=0
+src_attrs=0
+css_imports=0
+sections=6
