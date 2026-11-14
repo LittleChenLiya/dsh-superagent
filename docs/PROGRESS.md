@@ -654,3 +654,14 @@ The README install lines now name the version, with the reason: pnpm's minimum
 release age skips releases from the last few hours, so a bare `add` resolves to
 an older version and still reports success. A bare install here picked 0.9.0
 while 0.9.2 was current; the pinned command installs 0.9.2 immediately.
+## 2026-11-14 — round 10: 0.9.3, the README on the page again
+
+Doc-only release: the install commands and the minimum-release-age note, which
+0.9.2 could not show because it was built before that edit. `npm test`: 106
+pass. 15 files, 76.0 kB packed, 252.7 kB unpacked, `dist-tags.latest = 0.9.3`.
+Tag `v0.9.3` on `978993c`.
+
+The CHANGELOG now states the rule this release follows: a documentation change
+that alters what a reader would do gets its own patch version; typos ride along
+with the next code release; a doc-only version leaves `lib/` and `bin/`
+byte-identical and updates the README's pinned install line to itself.
