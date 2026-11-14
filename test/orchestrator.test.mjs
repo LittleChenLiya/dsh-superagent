@@ -519,9 +519,13 @@ test('recovery leaves a run alone while its owner is still alive', async () => {
   assert.equal(store.cancels.has('20260101T000000-orph'), true, 'the owner still has to see the cancel marker')
 })
 
-test('recovery leaves a run alone while its heartbeat is fresh', async () => {
-  const store = memoryStore()
-  await store.write(orphan({ ownerPid: 2147483647, heartbeatAt: new Date().toISOString() }))
+test('recovery leaves a run alone while its heartbeat is fresh on another machine', async () => {
+  const store = memoryStore({ ownerHost: 'some-other-machine' })
+  await store.write(orphan({
+    ownerHost: 'some-other-machine',
+    ownerPid: 2147483647,
+    heartbeatAt: new Date().toISOString(),
+  }))
   const { orchestrator } = orchestratorWith({ store, spawner: makeSpawner(async () => completed('x')) })
 
   assert.deepEqual(await orchestrator.recover(), [])
@@ -890,9 +894,32 @@ test('a local run whose pid is still alive is not reclaimed', async () => {
   assert.equal((await store.read('20260101T000000-orph')).status, 'running')
 })
 
-test('a run with a fresh heartbeat is not reclaimed even when its pid looks dead', async () => {
+test('a dead local pid is reclaimed even when its heartbeat is still fresh', async () => {
   const store = memoryStore()
+  // A kill -9 leaves the heartbeat a few seconds old. Waiting for it to expire
+  // would strand the run on the one machine that can prove the pid is gone.
   await store.write(orphan({ heartbeatAt: new Date().toISOString() }))
+
+  const { orchestrator } = orchestratorWith({
+    store,
+    spawner: makeSpawner(async spec => (spec.label === 'superagent-plan'
+      ? completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+      : completed('done'))),
+    config: { maxActiveRuns: 1 },
+  })
+
+  const run = await orchestrator.start({ goal: 'new work', parentSessionId: parent.id, parent })
+  await orchestrator.status(run.id, 10)
+
+  const old = await store.read('20260101T000000-orph')
+  assert.equal(old.status, 'interrupted')
+  assert.equal(old.reclaimed.pidChecked, true)
+  assert.match(old.reclaimed.basis, /is not running and this state directory is local/)
+})
+
+test('a fresh heartbeat from another machine is still honoured', async () => {
+  const store = memoryStore({ ownerHost: 'some-other-machine' })
+  await store.write(orphan({ ownerHost: 'some-other-machine', heartbeatAt: new Date().toISOString() }))
 
   const { orchestrator } = orchestratorWith({
     store,
@@ -904,6 +931,7 @@ test('a run with a fresh heartbeat is not reclaimed even when its pid looks dead
     () => orchestrator.start({ goal: 'blocked', parentSessionId: parent.id, parent }),
     /quota exceeded/,
   )
+  assert.equal((await store.read('20260101T000000-orph')).status, 'running')
 })
 
 test('on a shared state directory the pid is ignored and the heartbeat decides', async () => {

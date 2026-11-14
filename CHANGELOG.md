@@ -97,6 +97,36 @@ path except the new spending caps and the cost line.
   its start request has no tool filter — so the plugin documents that limit
   instead of pretending to enforce one.
 
+### Real-host end-to-end (2026-11-14)
+
+The first run against a real `dsh@0.2.2-rc.1` host (keyless stub model, full
+record in `docs/e2e-2026-11-14.md`) found four behaviours that the offline
+suite could not see:
+
+- **A graceful host shutdown buried resumable work as `failed`.** When the
+  `subagents` service disappears mid-run (a one-shot headless turn ends),
+  children throw "service unavailable". That used to burn both attempts and
+  settle the run `failed`. It is now recognised as the host going away: the
+  unfinished subtasks stay `pending`, no attempts are spent, and the run
+  settles `interrupted` with `note: the host shut down while this run was
+  active`. `superagent_resume` picks it up in the next host.
+- **A dead pid was ignored for 90 s.** `ownership()` trusted a fresh heartbeat
+  before checking the owner pid, so a `kill -9` left the run `running` for a
+  minute and a half on the very machine that could prove the pid was gone. On
+  a run written by this machine, a dead pid now wins over the heartbeat; a run
+  from another machine on a shared directory still trusts the heartbeat.
+- **A reclaimed run claimed its cost was unknown.** Recovery now republishes
+  `run.usage` from `usageByChild` and recomputes `cost`, so an interrupted run
+  shows the money already spent instead of "not computed".
+- **Per-subtask usage was often `null` after a normal run.** The read at child
+  completion can race the log flush; the settle pass now writes the final
+  per-child snapshot back onto each subtask.
+
+Also: the plugin no longer ships a price for `qwen-flash` (the README already
+promised that nothing is priced out of the box); the table is empty unless the
+profile configures one.
+
+
 ### Install and first run
 
 - Requirements corrected to what `dsh@0.2.2-rc.1` needs: Node `>=24.9.0`, and

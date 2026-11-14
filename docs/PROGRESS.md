@@ -206,3 +206,83 @@ following the README literally) both ran. Everything below is fixed.
 2. Embedding surface (MCP vs local HTTP) for other UIs and plugins.
 3. One-command install verification from a clean profile; publish only when the
    real-host evidence is in place.
+
+## 2026-11-14 — round 3: the real host, and the definition of done
+
+### The definition of done is now checkable
+
+[docs/DONE.md](DONE.md) lists every condition for publishing as a yes/no row
+with the evidence that answers it. `MET` / `PENDING` / `BLOCKED` are not
+opinions: each row names a run id, a file, or a command. `BLOCKED` rows name the
+external dependency. Right now the only blocked rows are the paid-model run
+(B8: no credential on the build machine), the registry install (G1: not
+published, by instruction), and the embedding surface (G3: not built yet).
+
+### Real dsh 0.2.2-rc.1, no credential, no fake plugin seam
+
+The machine has no provider key — the default route fails verbatim with
+`MISSING_CREDENTIAL: llm-deepseek: no API key for provider route
+"deepseek-official"` — so a paid run is impossible here. Instead of a fake
+spawner inside the tests, this round installed the `npm pack` tarball into a
+**fresh** `DSH_HOME` and gave the real host a keyless model route: a local
+Cordis plugin ([docs/e2e/stub-llm](e2e/stub-llm), 10-file tarball unaffected)
+registers `e2e-stub` and streams deterministic chunks. Host, subagent service,
+child sessions, zstd logs, tools, state, notify, cancel and resume are all
+real. The model — and therefore the token numbers — is not. The record is
+explicit about which is which: [docs/e2e-2026-11-14.md](e2e-2026-11-14.md).
+
+### What the real host found (all fixed)
+
+1. **Graceful shutdown buried resumable work as `failed`.** In a one-shot
+   headless turn the host exits when the turn ends; the `subagents` service
+   disappears and every in-flight child throws "service unavailable". The
+   plugin burned both attempts and settled `failed`, so `resume` had nothing to
+   do. Now the error carries `code: 'subagent-unavailable'`, the orchestrator
+   marks `host-gone`, leaves subtasks `pending`, aborts the rest, and settles
+   `interrupted` with a `note:`. Covered by a new plugin test and by the
+   kill/resume transcript.
+2. **A dead local pid was ignored for 90 s.** `ownership()` trusted a fresh
+   heartbeat before the pid, so `kill -9` left the run `running` on the very
+   machine that could prove it was gone. A run written by this machine now
+   trusts a dead pid over the heartbeat; a run from another machine on a shared
+   directory still trusts the heartbeat. Two tests were split along that line.
+3. **A reclaimed run said its cost was unknown.** Recovery now republishes
+   `usage` from `usageByChild` and recomputes `cost`; an interrupted run shows
+   the money already spent (`$0.0084` in the transcript).
+4. **Per-subtask usage was often `null`.** The read at completion races the log
+   flush; settle now writes the final per-child snapshot back onto the subtask.
+
+Also: the plugin no longer ships a `qwen-flash` price (README already promised
+none), and the README now documents shutdown, cancel teardown and the budget's
+abort semantics instead of implying them.
+
+### Evidence highlights
+
+- Canonical run `20261114T080127-372d`: 2 subtasks, `completed`, 3.5 s wall
+  with a 3 s per-worker delay; two watcher samples with `"running": 2`;
+  `1420 in / 350 out / 128 cache / 4 calls`; `$0.0225` versus `0.022480`
+  computed by hand from the four child logs read by an independent script.
+- Cancel with abort-ignoring workers: tool returned in **1.99 s**, `spawns`
+  frozen at 3, `[2] cancelled (attempts 1)`. The host process itself stayed
+  22.8 s — documented as the host's teardown, not the plugin's.
+- `kill -9` → next host reclaimed immediately (`reclaimed: owner pid … is not
+  running and this state directory is local`) → `resume` completed; Alpha kept
+  `child=3b6579d3…`, Beta changed from `a4ab85fb…` to `eb25f959…`.
+- Budget 2 calls → `spawns: 2`, `failed`; raise to 80 → resume → `completed`,
+  spend kept. Unpriced run says "not computed". A worker calling
+  `superagent_start` got `refused: a superagent worker may not start or resume
+  runs`. A live session got `notify.delivered: true`.
+
+### Tests
+
+`npm test`: **72 tests, five consecutive full runs, 72/72 each**, offline.
+New: the mid-run service loss settles `interrupted` and resumes after the
+service returns; dead local pid with a fresh heartbeat; fresh heartbeat from
+another machine still wins.
+
+### Next
+
+1. Embedding surface (G3): MCP or local HTTP over the same runner, so a UI can
+   start/status/cancel without importing `lib/`.
+2. Web-profile E2E pass (same plugin, browser-driven).
+3. A paid default-route run once a key exists (B8), then a release commit.

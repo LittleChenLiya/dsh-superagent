@@ -124,6 +124,81 @@ test('an unusable state directory is reported instead of an empty run list', asy
   }
 })
 
+test('a host that loses its subagent service mid-run leaves the run resumable', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  // The first worker runs and reports a provider error; by the time the plugin
+  // retries, the host is shutting down and the service is gone. That must not
+  // be recorded as two failed attempts — the work never got a chance to run.
+  let available = true
+  let workers = 0
+  const subagents = {
+    async startActivation(spec) {
+      if (spec.label === 'superagent-plan') {
+        return {
+          childId: 'child-plan',
+          result: Promise.resolve({
+            output: [{ type: 'text', text: JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }) }],
+            stopReason: 'completed',
+          }),
+          dispose: async () => {},
+        }
+      }
+      workers += 1
+      if (workers === 1) {
+        available = false
+        return {
+          childId: 'child-worker-1',
+          result: Promise.resolve({ output: [], stopReason: 'error', diagnostic: 'provider crashed' }),
+          dispose: async () => {},
+        }
+      }
+      return {
+        childId: 'child-worker-2',
+        result: Promise.resolve({ output: [{ type: 'text', text: 'finished after resume' }], stopReason: 'completed' }),
+        dispose: async () => {},
+      }
+    },
+  }
+  const ctx = {
+    tools: { register: tool => tools.set(tool.name, tool) },
+    get: service => {
+      if (service === 'subagents') return available ? subagents : undefined
+      if (service === 'agents') return { get: () => undefined }
+      return undefined
+    },
+  }
+  const tools = new Map()
+
+  try {
+    apply(ctx, { stateDir })
+    const started = await tools.get('superagent_start').execute({ goal: 'survive a shutdown' }, { agent: { id: 'session-1' } })
+    const runId = /run (\S+) —/.exec(started)[1]
+
+    const interrupted = await tools.get('superagent_status').execute({ run_id: runId, wait_seconds: 10 })
+    assert.match(interrupted, /— interrupted/)
+    assert.match(interrupted, /note: the host shut down while this run was active/)
+    assert.match(interrupted, /next: superagent_resume run_id="#{0,1}/)
+    assert.doesNotMatch(interrupted, /failed \(attempts 2\)/)
+
+    available = true
+    const resumed = await tools.get('superagent_resume').execute(
+      { run_id: runId, wait_seconds: 10 },
+      { agent: { id: 'session-1' } },
+    )
+    assert.match(resumed, /— completed/)
+    assert.match(resumed, /finished after resume/)
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await fsp.rm(stateDir, { recursive: true, force: true })
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
 test('a run that finishes with its session gone says the result was not delivered', async () => {
   const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
   const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))

@@ -88,7 +88,8 @@ In the session, ask for a run:
 
 > Use superagent_start with goal "Explain the difference between process and thread in 300 words, with one concrete example" and wait_seconds 120.
 
-Expected shape of the reply:
+Shape of the reply (numbers illustrative — a full transcript of a real run is
+in [docs/e2e-2026-11-14.md](docs/e2e-2026-11-14.md)):
 
 ```
 run 20261114T051233-a1b2 — completed
@@ -116,9 +117,26 @@ keeps going either way.
 
 To check recovery without a real crash: kill the host while a run is active,
 start it again, then `superagent_status` shows `interrupted` and
-`superagent_resume` finishes it. A run that is only `interrupted` when no live
+`superagent_resume` finishes it. A run is only `interrupted` when no live
 process owns it: while the original host is still running, its run is left
 alone and the next mount reports it as active, not as interrupted.
+
+Two shutdown paths behave differently, and both are covered by the E2E record:
+
+- **Hard kill (or crash).** The heartbeat is a few seconds old, but on the
+  machine that wrote the run the dead pid is checked first, so the next mount
+  reclaims it immediately and prints
+  `reclaimed: owner pid … is not running and this state directory is local`.
+  A shared state directory written by another machine trusts the heartbeat
+  instead, so reclamation there waits up to 90 s.
+- **Graceful shutdown.** If the host disappears while a run is in flight (for
+  example a one-shot headless turn that ends after `wait_seconds: 0`), the
+  plugin notices that the `subagents` service is gone, leaves the unfinished
+  subtasks `pending`, and settles the run as `interrupted` with
+  `note: the host shut down while this run was active`. No attempts are burned
+  on a service that cannot answer. In that case the host process itself may
+  linger until a child that ignores abort exits; that wait is the host's, not
+  the plugin's.
 
 ## Configuration
 
@@ -147,7 +165,7 @@ Row config in `<profile>/cordis.patch.yml`:
 | `deadlineMinutes` | `120` | Wall-clock budget; on expiry the run ends `partial` or `failed`. |
 | `maxModelCallsPerRun` | `80` | Hard cap on child model calls per run; `0` disables. |
 | `maxTokensPerRun` | `2000000` | Hard cap on prompt + completion tokens per run; `0` disables. |
-| `pricing` | empty for DeepSeek routes | Per-1M-token prices, keyed exactly as the usage log names the model (`provider/model`). |
+| `pricing` | empty | Per-1M-token prices, keyed exactly as the usage log names the model (`provider/model`). Nothing is priced out of the box. |
 | `resultCapBytes` | `32768` | Bytes kept per subtask report. |
 | `notifyOnComplete` | `true` | Wake the owning session once when a run finishes while nobody is polling. |
 | `keepRuns` | `0` | Delete terminal runs older than this many days at mount; `0` keeps everything. |
@@ -214,11 +232,15 @@ so `qwen-flash` also prices `dashscope/qwen-flash` when there is no exact entry.
 The plugin ships no price for any route, because a stale price is worse than a
 missing one.
 
-When a budget is hit, no new child starts, the run stops, and the reports that
-already finished are still merged. The run ends `partial` when at least one
-subtask completed and `failed` when none did. `superagent_resume` rebuilds the
-limits from the current config, keeps everything already spent, and continues
-from there — that is how you raise a cap.
+When a budget is hit, no new child starts and the abort controller stops the
+child that is still running, so spend stops at the cap instead of draining one
+more worker. Reports that already finished are still merged. The run ends
+`partial` when at least one subtask completed and `failed` when none did (the
+unfinished subtasks stay `pending`). `superagent_resume` rebuilds the limits
+from the current config, keeps everything already spent, and continues from
+there — that is how you raise a cap. On the real host, raising
+`maxModelCallsPerRun` from 2 to 80 and resuming a run that stopped at 2/2
+completed it without dropping the earlier spend.
 
 A spawn counts as one model call even when the child's session log cannot be
 read, so the call budget keeps working on a host whose log layout changed.
@@ -355,6 +377,14 @@ converts the run to `cancelled` during recovery. No socket, pipe, or Windows
 named pipe is involved, so this works the same on every platform and across a
 shared state directory.
 
+Measured on the real host: with two workers sleeping inside a model call that
+ignores abort, `superagent_cancel` returned `cancelled` in **1.99 s** and the
+state file stopped accepting new spawns at that instant. The *host process*
+still took 22.8 s to exit, because it waits for its own child sessions; that
+wait is the host's teardown, outside the plugin's control. In an interactive
+session you never notice it; in a one-shot headless turn it is why cancel
+appears to "hang" until the ignored-abort child returns.
+
 ## Troubleshooting
 
 | What you see | What it means | What to do |
@@ -400,6 +430,10 @@ and `detail:` the untouched host message, so nothing is hidden.
 npm test        # node:test, fake store and fake child spawner, no network
 npm pack        # inspect what would ship
 ```
+
+What "ready to publish" means is written down as checkable rows in
+[docs/DONE.md](docs/DONE.md); the real-host run that most of them point at is
+[docs/e2e-2026-11-14.md](docs/e2e-2026-11-14.md).
 
 Layout: `lib/index.js` (plugin, tool schemas, run formatting),
 `lib/orchestrator.js` (ordering, retries, budgets, cancel, resume),

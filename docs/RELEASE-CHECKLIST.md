@@ -256,3 +256,36 @@ an offline test.
   `subagents` is optional and `start` explains the missing service. `exports`
   reduced to `.` and `./package.json`.
 - **Effort.** M.
+
+### 17. The first real-host run found four defects `[x]`
+
+- **Problem.** Against `dsh@0.2.2-rc.1` with a keyless stub route: (a) a
+  graceful host shutdown turned every in-flight child into "service
+  unavailable", burned both attempts and settled the run `failed`, so a
+  one-shot headless turn destroyed resumable work; (b) `ownership()` trusted a
+  fresh heartbeat before the pid, so a `kill -9` left the run `running` for
+  90 s on the machine that could prove the pid was dead; (c) a reclaimed run
+  printed "cost: not computed" despite having a readable usage snapshot;
+  (d) `subtask.usage` was usually `null` because the read at completion races
+  the log flush.
+- **Who is hit.** Every headless user whose turn ends while a run is active,
+  and anyone who kills the host and expects `resume` to work.
+- **Fix.** `subagent-unavailable` is recognised as the host going away: no
+  attempts burned, subtasks left `pending`, run settled `interrupted` with a
+  note. A dead pid on a locally written run outranks the heartbeat; a shared
+  directory still trusts the heartbeat. Reclaim republishes usage and cost.
+  Settle writes the final per-child usage back onto each subtask. Transcripts
+  and numbers in [e2e-2026-11-14.md](e2e-2026-11-14.md).
+- **Effort.** M.
+
+### 18. Other UIs and plugins cannot use it as an engine `[ ]`
+
+- **Problem.** The only calling surface is the five host tools, which exist
+  inside a DSH session. A panel, a scheduler, or another plugin cannot list or
+  start runs without importing `lib/` and fabricating a Cordis context.
+- **Fix (planned).** A small local control surface over the same orchestrator —
+  either an MCP server or an HTTP JSON API on localhost. It must expose
+  start/status/list/cancel/resume with the same error text, bind to loopback
+  only, and require an explicit opt-in. Decision and design in
+  [DONE.md](DONE.md) item G3.
+- **Effort.** M.

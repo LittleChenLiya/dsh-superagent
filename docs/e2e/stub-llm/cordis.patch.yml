@@ -1,0 +1,4 @@
+# E2E-only bundle layer: register the `e2e-stub` model route.
+- insert:
+    - id: e2e-stub-llm
+      name: dsh-e2e-stub-llm
