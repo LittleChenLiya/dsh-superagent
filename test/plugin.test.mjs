@@ -514,6 +514,8 @@ test('a run that finishes with its session gone says the result was not delivere
     assert.match(status, /notify: not delivered — the owning session session-gone is no longer live/)
     assert.match(status, /report:/)
 
+    const before = await fsp.readFile(path.join(stateDir, 'runs', `${runId}.json`), 'utf8')
+    console.error(`[diag] pre-list disk status=${JSON.parse(before).status} notify=${JSON.stringify(JSON.parse(before).notify ?? null)}`)
     const listed = await tools.get('superagent_list').execute({})
     if (!/\(result not delivered to the session\)/.test(listed)) {
       const disk = await fsp
