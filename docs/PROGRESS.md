@@ -603,3 +603,20 @@ Last publish, Collaborators). The field is real in the registry document and
 `npm view` prints it; the visible credit on the page is the README licence line.
 The changelog text in the repository is corrected; the copy inside the published
 0.9.1 tarball still carries the earlier wording, which is not worth a 0.9.2.
+## 2026-11-14 — round 7: 0.9.2, the README on the package page
+
+npm renders the README from the tarball, so the rewrite stayed invisible until a
+publish. 0.9.2 ships documentation only: the rewritten first screen, `Naming`
+moved down, the copyright and non-affiliation lines moved up, and the isolation
+boundary added to `Known limits`.
+
+`npm test` on the release commit: 106 pass, 0 fail. Published with
+`--registry=https://registry.npmjs.org`; 15 files, 75.3 kB packed, 250.5 kB
+unpacked, `dist-tags.latest = 0.9.2`. The npm page was checked in a browser:
+version 0.9.2 and the new opening, including the `Don't use it when` paragraph.
+
+Tag `v0.9.2` is on the release commit `c6380ca`, which is main's tip at the
+time of the publish. The working copy of this repository was on
+`fix/status-waits-for-final-write` (a separate branch, not part of this
+release); the release was cut from a worktree checked out at `main` so the
+unmerged fix could not ship by accident.
