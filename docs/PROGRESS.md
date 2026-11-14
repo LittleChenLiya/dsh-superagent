@@ -597,4 +597,9 @@ default is npmmirror, so the flag is still required). The registry then reports
 73.9 kB packed, and `dist-tags.latest = 0.9.1`.
 
 Tag `v0.9.1` is pushed. No GitHub Release: a patch that changes metadata only
-does not need one.
+does not need one.One correction after checking the live page: npmjs.com shows no Author row in the
+sidebar (Install, Repository, Homepage, Version, License, Issues, Pull requests,
+Last publish, Collaborators). The field is real in the registry document and
+`npm view` prints it; the visible credit on the page is the README licence line.
+The changelog text in the repository is corrected; the copy inside the published
+0.9.1 tarball still carries the earlier wording, which is not worth a 0.9.2.

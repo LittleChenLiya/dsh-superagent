@@ -6,8 +6,10 @@ Metadata-only release. No code or behaviour change; the only file contents that
 differ are `package.json`, `README.md`, and this changelog.
 
 - Added the `author` field (`Admire (LittleChenLiya)`), matching the copyright
-  line in `LICENSE`. npm shows it on the package page from this version on;
-  0.9.0 shipped without it.
+  line in `LICENSE`. The registry metadata carries it from this version on
+  (`npm view @xiangyixie/dsh-superagent author`); the npmjs.com package page has
+  no separate Author row in its current layout — it lists Collaborators — so the
+  visible credit is the copyright line in the README's License section.
 - The README "License" section now names the copyright holder, links
   `LICENSE`, and says that the npm scope `@xiangyixie` and the GitHub account
   `LittleChenLiya` are the same author.
