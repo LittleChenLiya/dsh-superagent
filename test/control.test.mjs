@@ -136,6 +136,9 @@ test('the discovery file names the bound port and is removed on stop', async () 
   assert.equal(discovery.url, `http://127.0.0.1:${port}`)
   assert.equal(discovery.service, 'dsh-superagent')
   assert.equal(discovery.pid, process.pid)
+  // A pid alone cannot tell two planes in one process apart (a host that
+  // reloads the plugin), so the file carries a per-plane id.
+  assert.match(discovery.instanceId, /^[0-9a-f]{12}$/)
   assert.equal(discovery.token.length, 43)
   assert.equal(plane.url, `http://127.0.0.1:${port}`)
   await plane.stop()
@@ -143,6 +146,32 @@ test('the discovery file names the bound port and is removed on stop', async () 
   const remaining = await fsp.readdir(stateRoot).catch(() => [])
   assert.deepEqual(remaining.filter(name => name.startsWith('control.json')), [])
   await fsp.rm(stateRoot, { recursive: true, force: true })
+})
+
+test('a plane does not delete a discovery file published by a newer plane', async () => {
+  const { plane, discovery, stateRoot } = await startPlane()
+  try {
+    // Simulate a reload: a second plane in the same process replaced the file.
+    await fsp.writeFile(plane.discoveryPath, `${JSON.stringify({ ...discovery, instanceId: 'aaaaaaaaaaaa' })}\n`)
+    await plane.stop()
+    const current = JSON.parse(await fsp.readFile(plane.discoveryPath, 'utf8'))
+    assert.equal(current.instanceId, 'aaaaaaaaaaaa')
+  } finally {
+    await fsp.rm(stateRoot, { recursive: true, force: true })
+  }
+})
+
+test('two starts in one mount share the same listener', async () => {
+  const stateRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-control-'))
+  const plane = createControlPlane({ port: 0, stateRoot, version: '0.0.0', log: () => {}, actions: {} })
+  try {
+    const [first, second] = await Promise.all([plane.start(), plane.start()])
+    assert.equal(first.port, second.port)
+    assert.equal(plane.port, first.port)
+  } finally {
+    await plane.stop()
+    await fsp.rm(stateRoot, { recursive: true, force: true })
+  }
 })
 
 test('routes map to the plugin actions and pass their arguments through', async () => {
@@ -224,6 +253,10 @@ test('errors keep the readable classifier and a matching status code', async () 
 
     const unknownPath = await call(`${base}/volumes`, { token })
     assert.equal(unknownPath.status, 404)
+
+    // `/health` is a single route, not a prefix.
+    const healthChild = await call(`${base}/health/anything`, { token })
+    assert.equal(healthChild.status, 404)
 
     // A bad escape is the caller's mistake; it must not surface as a 500.
     const badEncoding = await call(`${base}/runs/%zz`, { token })

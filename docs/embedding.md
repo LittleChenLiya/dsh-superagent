@@ -48,6 +48,7 @@ mode `0600`:
   "url": "http://127.0.0.1:62460",
   "token": "…43 characters…",
   "pid": 34728,
+  "instanceId": "6f1c0a9d2b3e",
   "hostname": "…",
   "stateDir": "…\\state\\superagent",
   "startedAt": "2026-11-14T08:26:25.000Z"
@@ -57,6 +58,8 @@ mode `0600`:
 - The token is regenerated on every host start. Read it from this file; never
   hardcode it.
 - `pid` lets an embedder check that the process is still alive before calling.
+  `instanceId` identifies the plane inside that process (a host can reload the
+  plugin without changing its pid); clients do not need it.
 - The file is removed when the host shuts down cleanly. If a host is killed, a
   stale file remains; check `pid`, then delete it.
 - **It is UTF-8 without a BOM**, as JSON must be. Windows PowerShell 5.1 reads
@@ -88,7 +91,8 @@ All responses are JSON with this envelope:
 show it verbatim without reimplementing the layout. The one difference is the
 closing next-step line on a background start: the tool says "poll with
 `superagent_status`", the HTTP reply names `GET /runs/:id`. The run block above
-it is identical.
+it is identical. `GET /` and `GET /health` are the two replies without `text`:
+they describe the socket, not a run.
 
 ### `GET /`
 
@@ -141,11 +145,12 @@ in the host process that owns this control plane.
 {"goal":"Compare two sorting strategies on the fixture.",
  "session_id":"session-3696f9df-048c-433a-a188-8609ec899260",
  "max_subtasks":4, "max_parallel":2, "deadline_minutes":30,
- "wait_seconds":0, "time_zone":"Asia/Shanghai"}
+ "wait_seconds":0}
 ```
 
 - Only `goal` + `session_id` are required; the rest are optional overrides of
-  the run's limits.
+  the run's limits. A blank `goal` answers 400 `no-goal` even when `session_id`
+  is also missing, so the first error names the first thing to fix.
 - Replies `202` with the run. With `wait_seconds > 0` the reply is the finished
   run instead of a snapshot (capped at 300 s).
 - The run is a normal run: same quota, same budgets, same notify rules, same
@@ -179,8 +184,9 @@ cancel. A terminal run answers `nothing to cancel` instead of pretending.
 {"session_id":"session-…", "wait_seconds":0}
 ```
 
-Continues an `interrupted`, `failed`, `partial`, or `cancelled` run. The run lock
-and the `maxActiveRuns` quota apply exactly as in the tool path.
+Continues an `interrupted`, `failed`, `partial`, or `cancelled` run and replies
+`202` with it. The run lock and the `maxActiveRuns` quota apply exactly as in the
+tool path.
 
 ## 5. Errors
 
@@ -191,13 +197,15 @@ from "the run is broken":
 | --- | --- | --- |
 | 400 | `bad-json` | Body is not a JSON object. |
 | 400 | `bad-run-id` | Empty run id in the path. |
-| 400 | `no-goal` | `goal` is missing or blank. Same id the tool returns. |
+| 400 | `aborted` | The client closed the connection while sending the request. |
+| 400 | `no-goal` | `goal` is missing or blank. Same classification the tool's text uses. |
 | 401 | `unauthorized` | Missing or wrong bearer token. The hint names the discovery file. |
 | 403 | `forbidden-host` | `Host` header is not `127.0.0.1` / `localhost`. Blocks DNS rebinding. |
 | 404 | `not-found` | No such route. |
 | 404 | `unknown-run` | No run with that id in this state directory. |
 | 405 | `method-not-allowed` | Wrong verb for the route. |
-| 409 | `no-session` | `session_id` missing, not open in this host, or a superagent worker. |
+| 409 | `no-session` | `session_id` is missing or not open in this host. |
+| 409 | `recursion` | `session_id` names a superagent worker; workers may not start or resume runs. |
 | 409 | `run-owned` | Another live process is running it. |
 | 409 | `quota` | `maxActiveRuns` is full. |
 | 409 | `budget` | The run hit a spending cap. |
@@ -219,8 +227,9 @@ from "the run is broken":
 - **No CORS headers.** A page on another origin cannot read replies, and a
   cross-origin request with an `Authorization` header needs a preflight this
   server never grants.
-- **Bounded input.** 64 KB bodies; a 320 s request timeout (longer than the
-  300 s wait cap); 64 concurrent connections.
+- **Bounded input.** 64 KB bodies; a 60 s timeout for *sending* a request
+  (long polls produce their response after that, which is why the 300 s wait
+  still works); 64 concurrent connections.
 - **No new dependencies.** `node:http` only, so there is no third-party code in
   the request path.
 - **Opt-in.** The socket only exists when `controlPort` is set.
@@ -234,7 +243,7 @@ same boundary that already allows writing run files.
 ### curl
 
 ```bash
-STATE="$DSH_HOME/state/superagent"
+STATE="${DSH_HOME:-$HOME/.dsh}/state/superagent"
 URL=$(node -e "console.log(require('$STATE/control.json').url)")
 TOKEN=$(node -e "console.log(require('$STATE/control.json').token)")
 
@@ -248,7 +257,8 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/
 ### PowerShell
 
 ```powershell
-$d = Get-Content "$env:DSH_HOME\state\superagent\control.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+$home_ = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $HOME '.dsh' }
+$d = Get-Content "$home_\state\superagent\control.json" -Raw -Encoding UTF8 | ConvertFrom-Json
 $h = @{ Authorization = "Bearer $($d.token)" }
 
 Invoke-RestMethod "$($d.url)/runs" -Headers $h
