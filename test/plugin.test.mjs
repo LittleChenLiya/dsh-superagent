@@ -80,6 +80,82 @@ test('the plugin mounts, registers five tools, and runs a goal end to end', asyn
   }
 })
 
+test('a worker session cannot start, resume, or cancel a run', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  const tools = new Map()
+  const workerUp = gate()
+  const workerDone = gate()
+  const subagents = {
+    async startActivation(spec) {
+      if (spec.label === 'superagent-plan') {
+        return {
+          childId: 'child-plan',
+          result: Promise.resolve({
+            output: [{ type: 'text', text: JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }) }],
+            stopReason: 'completed',
+          }),
+          dispose: async () => {},
+        }
+      }
+      workerUp.open()
+      return {
+        childId: 'child-worker',
+        // Held open until the test has asked the worker-named session to manage
+        // runs, which is the moment the recursion guard has to answer.
+        result: (async () => {
+          await workerDone.opened
+          return { output: [{ type: 'text', text: 'the answer' }], stopReason: 'completed' }
+        })(),
+        dispose: async () => {},
+      }
+    },
+  }
+  const ctx = {
+    tools: { register: tool => tools.set(tool.name, tool) },
+    subagents,
+    get: () => undefined,
+  }
+
+  try {
+    apply(ctx, { stateDir, notifyOnComplete: false })
+    const owner = { agent: { id: 'session-owner' } }
+    const started = await tools.get('superagent_start').execute({ goal: 'say hi' }, owner)
+    const runId = /run ([0-9A-Za-z-]+) —/.exec(started)?.[1]
+    assert.ok(runId, started)
+
+    await workerUp.opened
+    // `childId` is remembered one microtask after the activation resolves; give
+    // the orchestrator that turn before pretending to be the worker.
+    await new Promise(resolve => setImmediate(resolve))
+    const worker = { agent: { id: 'child-worker' } }
+    for (const [name, args] of [
+      ['superagent_start', { goal: 'nested' }],
+      ['superagent_resume', { run_id: runId }],
+      // The guard runs before the run id is looked up, so any id proves the gate.
+      ['superagent_cancel', { run_id: 'whatever' }],
+    ]) {
+      const refused = await tools.get(name).execute(args, worker)
+      assert.match(refused, /^\[error\] a superagent worker tried to start, resume, or cancel a run/m, name)
+    }
+
+    workerDone.open()
+    const finished = await tools.get('superagent_status').execute({ run_id: runId, wait_seconds: 10 }, owner)
+    assert.match(finished, /— completed/)
+  } finally {
+    workerDone.open()
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    // Windows: the last heartbeat/cleanup write can land between readdir and
+    // rmdir, so retry instead of failing the test on a teardown race.
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    await fsp.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
 test('without a subagents service the tools still mount and explain what is missing', async () => {
   const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
   const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
@@ -176,6 +252,9 @@ test('the control plane is off by default and starts runs through a live session
     // Default config: no socket, no discovery file, nothing to clean up.
     apply({ tools: { register: () => {} }, get: () => undefined }, { stateDir: offDir })
     assert.deepEqual((await fsp.readdir(offDir)).filter(name => name.startsWith('control')), [])
+    // A blank string used to coerce to 0 and open an accidental listener.
+    apply({ tools: { register: () => {} }, get: () => undefined }, { stateDir: offDir, controlPort: ' ' })
+    assert.deepEqual((await fsp.readdir(offDir)).filter(name => name.startsWith('control')), [])
 
     apply(ctx, { stateDir, notifyOnComplete: false, controlPort: 0 })
     const discovery = await waitForJson(path.join(stateDir, 'control.json'))
@@ -209,6 +288,12 @@ test('the control plane is off by default and starts runs through a live session
     const emptyGoal = await request('POST', '/runs', { goal: '   ', session_id: 'session-live' })
     assert.equal(emptyGoal.status, 400)
     assert.equal(emptyGoal.json.error.id, 'no-goal')
+
+    // The documented precedence: a missing goal is reported before the missing
+    // session, because the goal is the first thing the caller has to fix.
+    const neither = await request('POST', '/runs', {})
+    assert.equal(neither.status, 400)
+    assert.equal(neither.json.error.id, 'no-goal')
 
     const started = await request('POST', '/runs', {
       goal: 'say hi',
@@ -249,6 +334,32 @@ test('the control plane is off by default and starts runs through a live session
     await fsp.rm(stateDir, { recursive: true, force: true })
     await fsp.rm(offDir, { recursive: true, force: true })
     await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('the control plane waits for the state directory before publishing', async () => {
+  // A fresh DSH_HOME has no state directory until recovery creates it. Starting
+  // the plane first made the discovery write fail with ENOENT and left the
+  // surface off for the life of the host.
+  const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const stateDir = path.join(base, 'nested', 'state')
+  let disposer = null
+  const ctx = {
+    tools: { register: () => {} },
+    effect: execute => {
+      disposer = execute()
+    },
+    get: service => (service === 'agents' ? { get: id => ({ id }) } : undefined),
+  }
+  try {
+    apply(ctx, { stateDir, controlPort: 0 })
+    const discovery = await waitForJson(path.join(stateDir, 'control.json'))
+    assert.match(discovery.url, /^http:\/\/127\.0\.0\.1:\d+$/)
+    await disposer()
+    assert.deepEqual((await fsp.readdir(stateDir)).filter(name => name.startsWith('control')), [])
+  } finally {
+    if (disposer) await disposer().catch(() => {})
+    await fsp.rm(base, { recursive: true, force: true })
   }
 })
 
