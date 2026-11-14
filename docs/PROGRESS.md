@@ -548,3 +548,28 @@ every deepseek id, so the default `deepseek-official` route was pointed at
 DashScope's Anthropic proxy, which serves the flash tier as
 `deepseek-v4.1-flash-1017`. Three calls, 1882 in / 7363 out / 19456 cache-read,
 printed as `cost: ¥0.1016` from Model Studio's peak rates.
+
+## 2026-11-14 — round 5: launch material and directory submissions
+
+The review copy lives outside the repository, at `promo/launch-kit.md` in the
+workspace root: Chinese and English announcements in two lengths, the quotable
+numbers with their source, and the channel list. Nothing was posted to a social
+platform; that decision is the user's.
+
+Submitted, all as pull requests from the same fork account:
+
+- `imsai-sh/awesome-deepseek-harness-plugins` #931 — merged automatically by
+  the repository's static review, and synced to deepseek1024.com.
+- `awesome-dsh-plugin/awesome-dsh-plugin` #15236 — open. Its gate requires the
+  repository to be one day old, so the check starts red on a repository opened
+  the same day and flips on its own every six hours.
+- `0xsline/awesome-deepseek-harness` #837 — open, entry in both READMEs under
+  Agents & Orchestration, awaiting a hand review.
+
+`dshai.org`, `dsh.so`, `dsh-plugin.shop` and `dshplugin.app` index from
+GitHub or npm by themselves; the `dsh-plugin` topic is already on the repo, so
+there is nothing to submit there.
+
+The copy avoids competitor rankings because no horizontal run was done. The one
+number that needs care when quoted: the `¥0.1016` is real usage multiplied by
+published rates, and the plugin itself prints it with `(estimate)`.
