@@ -15,7 +15,7 @@ Draw one line per run, refreshed in place, until Ctrl-C.
 Options:
   --state-dir <path>   run state directory (default: $DSH_HOME/state/superagent)
   --interval <ms>      refresh interval (default: ${DEFAULT_INTERVAL_MS})
-  --once               print one frame and exit (for pipes and tests)
+  --once               print one frame and exit (for logs and pipes)
   --no-color           never emit ANSI colour
   -h, --help           show this message`
 

@@ -1,10 +1,11 @@
 ﻿# Captured 2026-11-14 on the machine that ran the real-host e2e.
 # State: C:\Windows\TEMP\dsh-e2e2-home\state\superagent (40 real runs).
 # Command: node bin/watch.js --state-dir <state> --once --no-color
-# A terminal run (no --once) draws the same frame in the alternate screen
-# and restores the cursor on Ctrl-C; test/watch.test.mjs asserts that path.
+# A terminal run (without --once) draws the same frame in the alternate
+# screen and restores the cursor on Ctrl-C; test/watch.test.mjs asserts both
+# that path and the plain --once path.
 
-dsh-superagent · 40 runs idle · 10:03:48Z
+dsh-superagent · 40 runs idle · 10:10:24Z
  ──────────────────────────────────────────────────────────────────────────────────────────────────
  RUN ID               STATUS       CALLS    ELAPSED ACTIVITY                         PARENT
  20261114T090200-7eee interrupted  4/80     2m00s   host went away · resume to continue    39fa65be

@@ -67,8 +67,13 @@ if (runs.length === 0) {
 const selected = options.limit === 0 ? runs : runs.slice(0, options.limit)
 const html = buildReport(selected, { title: options.title, generatedAt: Date.now() })
 const out = path.resolve(options.out)
-await fsp.mkdir(path.dirname(out), { recursive: true })
-await fsp.writeFile(out, html, 'utf8')
+try {
+  await fsp.mkdir(path.dirname(out), { recursive: true })
+  await fsp.writeFile(out, html, 'utf8')
+} catch (error) {
+  console.error(`cannot write ${out}: ${error?.message ?? error}`)
+  process.exit(1)
+}
 
 const size = Buffer.byteLength(html, 'utf8')
 console.log(`wrote ${out} (${(size / 1024).toFixed(1)} kB, ${selected.length} run${selected.length === 1 ? '' : 's'})`)

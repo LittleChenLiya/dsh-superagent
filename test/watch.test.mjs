@@ -146,7 +146,7 @@ test('activities answer "is it stuck?" in one phrase per status', () => {
   assert.match(activityOf(run({ status: 'failed', error: 'boom\nstack line' })), /^boom$/)
 })
 
-test('watch --once draws a frame and restores the terminal unconditionally', async () => {
+test('watch --once prints one plain frame and never takes over the screen', async () => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-watch-'))
   const store = createStore(dir)
   await store.init()
@@ -155,14 +155,11 @@ test('watch --once draws a frame and restores the terminal unconditionally', asy
   const out = fakeStream({ isTTY: true, columns: 110 })
   await watch({ stateDir: dir, out, once: true, intervalMs: 50 })
 
-  assert.match(out.text, /\u001b\[\?1049h/, 'enters the alternate screen')
-  assert.match(out.text, /\u001b\[\?25l/, 'hides the cursor')
+  assert.equal(out.text.includes('\u001b[?1049h'), false, 'a one-shot frame must not enter the alternate screen')
+  assert.equal(out.text.includes('\u001b[?25l'), false, 'a one-shot frame must not hide the cursor')
   assert.match(out.text, /20261114T080000-aaaa/)
-  assert.match(out.text, /\u001b\[\?25h/, 'shows the cursor again')
-  assert.match(out.text, /\u001b\[\?1049l/, 'leaves the alternate screen')
-  const hideIndex = out.text.indexOf('\u001b[?25l')
-  const showIndex = out.text.lastIndexOf('\u001b[?25h')
-  assert.ok(showIndex > hideIndex, 'cursor restore must come after the hide')
+  // The frame is left on the normal screen, so the output survives the exit.
+  assert.match(out.text, /\n$/)
   await fsp.rm(dir, { recursive: true, force: true })
 })
 
