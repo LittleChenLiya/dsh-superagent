@@ -1,27 +1,47 @@
 # dsh-superagent
 
-Long-horizon autonomous runs for [DeepSeek Harness](https://dshai.org).
+Long-horizon runs for [DeepSeek Harness](https://dshai.org): one goal in,
+model-planned parallel subtasks, one merged report — and the run survives a host
+restart.
 
-One goal goes in. A planner splits it into independent subtasks, the subtasks
-run in parallel child agents, and an aggregator merges their reports into one
-answer. Runs are persisted to disk, so a host restart does not lose them:
-`superagent_status` reports them and `superagent_resume` continues them.
+A single agent loop is one context and one sequence. Goals that need several
+independent lines of work stall in it, and a crash ends the turn with nothing to
+resume. This plugin takes one goal, asks the model to split it into subtasks, runs
+up to three child agents at a time, and merges their reports into one answer. Run
+state and spend are written to disk, so after a host restart `superagent_status`
+still finds the run and `superagent_resume` finishes only the unfinished part.
+Every run has a hard call and token budget, prints the usage it measured, and
+prints the cost once you give it a price for the route.
 
-Registered tools: `superagent_start`, `superagent_status`, `superagent_list`,
-`superagent_cancel`, `superagent_resume`. The plugin adds no in-host UI and
-patches no host code. Two optional operator utilities ship beside it — a
-terminal panel and an HTML report — and both are ordinary files rather than
-hooks into the host. No runtime dependencies.
+**Don't use it when** one model call can answer: you would only be paying for a
+planner and an aggregator on top. It is also the wrong tool for work that must
+finish inside a single turn, for a step that needs human approval in the middle,
+for anything that needs nested delegation (child depth is capped at 1), and for
+anyone who wants an in-host panel — this adds no UI, only five tools. Children run
+with the host's credentials and filesystem; this is not a sandbox.
 
-### Naming
+**Install and run.** Node `>= 24.9.0`, a tool-calling route, and that route's key
+in the environment:
 
-The package is published as `@xiangyixie/dsh-superagent` — npm already has a
-`dsh-super-agent` that is too close to the unscoped name, so the scope keeps
-the name instead of renaming the project. The five tools are unchanged:
-`superagent_*`. The earlier working name was `dsh-longhaul` with `longhaul_*`
-tools; nothing was ever published, so the old names do not exist anywhere and
-there is no alias layer. If you find an old snippet that calls `longhaul_start`,
-replace the prefix — the arguments are unchanged.
+```bash
+dsh plugin --profile web add @xiangyixie/dsh-superagent
+```
+
+Then ask the session for a run — a real call, not a sketch:
+
+> Use superagent_start with goal "Explain the difference between process and thread in 300 words, with one concrete example" and wait_seconds 120.
+
+The reply ends `completed` with the merged report, or with
+`next: superagent_status run_id="..."` if the wait ran out. [Quickstart](#quickstart)
+covers the path from an empty machine, including the reason not to install npm's
+unrelated `dsh` package by name.
+
+It adds no in-host UI and patches no host code: the five `superagent_*` tools are
+the surface, plus two optional operator utilities (a terminal panel and an HTML
+report) that read the same run files.
+
+Personal project, not affiliated with DeepSeek or the harness maintainers. MIT
+licensed, © 2026 Admire (LittleChenLiya); details in [License](#license).
 
 ## Requirements
 
@@ -513,6 +533,9 @@ A run that fails *after* it was accepted keeps its report and shows `error:`
 
 ## Known limits
 
+- Children are not isolated by this plugin: they run with the host's
+  credentials and filesystem, under whatever sandbox policy the host itself
+  applies.
 - A run lives inside the host process. Killing the process stops its children;
   the run becomes `interrupted` on the next mount.
 - Cancelling from another process is cooperative: it relies on the owning
@@ -530,6 +553,16 @@ A run that fails *after* it was accepted keeps its report and shows `error:`
   it cannot be exposed remotely, and there is no MCP server. A local process
   running as the same user can read the token, which is the same trust boundary
   as writing run files.
+
+## Naming
+
+The package is published as `@xiangyixie/dsh-superagent` — npm already has a
+`dsh-super-agent` that is too close to the unscoped name, so the scope keeps
+the name instead of renaming the project. The five tools are unchanged:
+`superagent_*`. The earlier working name was `dsh-longhaul` with `longhaul_*`
+tools; nothing was ever published, so the old names do not exist anywhere and
+there is no alias layer. If you find an old snippet that calls `longhaul_start`,
+replace the prefix — the arguments are unchanged.
 
 ## Development
 
