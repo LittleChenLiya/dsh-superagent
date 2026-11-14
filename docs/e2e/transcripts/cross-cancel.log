@@ -16,3 +16,22 @@ PASS the owner recorded it as cancelled
 PASS host A reports the same terminal state
 PASS the cancel did not surface as an error to the reader
 ALL CHECKS PASSED
+discovery file after both hosts: False
+--- host A superagent log ---
+
+[dsh-superagent] registered 5 tools; state C:\Windows\TEMP\dsh-e2e2-home\state\superagent; control port 0
+[dsh-superagent] control plane listening on http://127.0.0.1:54870 (token in C:\Windows\TEMP\dsh-e2e2-home\state\supera
+gent\control.json)
+[dsh-superagent] aggregator failed: subagent service is unavailable; dsh-superagent needs the host subagents service
+[dsh-superagent] run 20261114T090200-7eee finished but its session session-39fa65be-4fa9-4362-8ae2-895de773bc85 is no l
+onger live
+--- host B superagent log ---
+[dsh-superagent] registered 5 tools; state C:\Windows\TEMP\dsh-e2e2-home\state\superagent; control port 0
+[dsh-superagent] run 20261114T090200-7eee is still owned (owner pid 4468 is still running); leaving it running
+[dsh-superagent] control plane listening on http://127.0.0.1:49367 (token in C:\Windows\TEMP\dsh-e2e2-home\state\supera
+gent\control.json)
+[dsh-superagent] subtask 1 attempt 1 threw: aborted
+[dsh-superagent] subtask 2 attempt 1 threw: aborted
+probe exit: 0
+
+
