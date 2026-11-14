@@ -12,6 +12,10 @@
     "url": "https://github.com/LittleChenLiya/dsh-superagent/issues"
   },
   "main": "lib/index.js",
+  "bin": {
+    "dsh-superagent-watch": "bin/watch.js",
+    "dsh-superagent-report": "bin/report.js"
+  },
   "exports": {
     ".": "./lib/index.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
@@ -28,6 +32,10 @@
     "lib/errors.js",
     "lib/usage.js",
     "lib/control.js",
+    "lib/watch.js",
+    "lib/report.js",
+    "bin/watch.js",
+    "bin/report.js",
     "cordis.patch.yml",
     "CHANGELOG.md",
     "README.md"
@@ -37,7 +45,7 @@
     "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "scripts": {
-    "test": "node --test test/orchestrator.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/usage.test.mjs test/control.test.mjs"
+    "test": "node --test test/orchestrator.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/usage.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs"
   },
   "keywords": [
     "dsh",
