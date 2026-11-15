@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 Doc-only releases: npm serves the README from the tarball, so a README edit is
 invisible on the package page until something is published. When the edit
@@ -35,6 +35,35 @@ README is updated to the version being released.
 - **Reconnect-safe stream.** `/api/board/events` opens with a full snapshot and
   polls durable run records, so a refresh or a dropped connection restores the
   board instead of leaving it blank.
+
+## 0.14.2 — 2026-11-15
+
+### Fixed
+
+- **The detail page carries the language switch.** `docs/DETAIL.zh.md` and
+  `docs/DETAIL.md` now open with `中文 | English`, pointing at the other
+  document on GitHub. The plugin detail page previously rendered a Chinese body
+  with no way to reach the English one, even though both READMEs had the switch.
+
+## 0.14.1 — 2026-11-15
+
+### Added
+
+- **Plugin card metadata.** `icon.svg` is declared by the package manifest and
+  exported as `./icon`; `locale/en.json` and `locale/zh.json` carry the title,
+  description, and a `meta.detail` document. In a Chinese UI the card reads
+  “超级智能体” with a Chinese one-line description, and the detail page renders
+  `docs/DETAIL.zh.md` instead of the English README.
+- **A format-1 plugin index** at `plugin-index.json`, with the package name, a
+  Chinese title, and a `git` source pinned to a full 40-hex commit, so the
+  Discover page can add the index and install or update the plugin in one step.
+  The public URL and the two-step instructions are in the README.
+
+### Changed
+
+- `README.md` is now Simplified Chinese-first; `README.en.md` keeps the English
+  text and both open with a language switch. `README.zh.md` mirrors the Chinese
+  page, and `package.json`'s `description` is Chinese.
 
 ## 0.14.0 — 2026-11-15
 

@@ -1,7 +1,7 @@
 {
   "name": "@xiangyixie/dsh-superagent",
-  "version": "0.14.0",
-  "description": "Long-horizon autonomous runs for DeepSeek Harness: one goal, model-planned parallel subtasks, one merged report, durable across restarts.",
+  "version": "0.14.2",
+  "description": "长周期自主执行插件：一个目标拆成可并行的子任务，交付一份合并报告，重启后仍可继续。",
   "author": "Admire (LittleChenLiya)",
   "type": "module",
   "repository": {
@@ -13,6 +13,7 @@
     "url": "https://github.com/LittleChenLiya/dsh-superagent/issues"
   },
   "main": "lib/index.js",
+  "icon": "./icon.svg",
   "bin": {
     "dsh-superagent-watch": "bin/watch.js",
     "dsh-superagent-report": "bin/report.js",
@@ -23,6 +24,8 @@
   },
   "exports": {
     ".": "./lib/index.js",
+    "./icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -31,6 +34,8 @@
     "access": "public"
   },
   "files": [
+    "icon.svg",
+    "locale/*.json",
     "lib/index.js",
     "lib/orchestrator.js",
     "lib/store.js",
@@ -74,8 +79,12 @@
     "public/board.html",
     "cordis.patch.yml",
     "docs/policy.example.json",
+    "docs/DETAIL.md",
+    "docs/DETAIL.zh.md",
     "CHANGELOG.md",
-    "README.md"
+    "README.md",
+    "README.en.md",
+    "README.zh.md"
   ],
   "dependencies": {},
   "engines": {

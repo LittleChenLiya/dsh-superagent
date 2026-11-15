@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Superagent",
+    "description": "Long-horizon autonomous runs: one goal becomes planned parallel subtasks and one merged report.",
+    "detail": "docs/DETAIL.md"
+  }
+}
