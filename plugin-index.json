@@ -1,0 +1,44 @@
+{
+  "format": 1,
+  "title": {
+    "en": "dsh-superagent plugins",
+    "zh": "dsh-superagent 插件索引"
+  },
+  "description": {
+    "en": "Long-horizon autonomous runs for DeepSeek Harness.",
+    "zh": "DeepSeek Harness 的长周期自主执行插件。"
+  },
+  "plugins": [
+    {
+      "name": "@xiangyixie/dsh-superagent",
+      "title": {
+        "en": "Superagent",
+        "zh": "超级智能体"
+      },
+      "description": {
+        "en": "Long-horizon autonomous runs: one goal becomes planned parallel subtasks and one merged report.",
+        "zh": "长周期自主执行：一句话目标拆成可并行的子任务，最后合并成一份报告。"
+      },
+      "icon": "icon.svg",
+      "author": "Admire (LittleChenLiya)",
+      "homepage": "https://github.com/LittleChenLiya/dsh-superagent#readme",
+      "repository": {
+        "url": "https://github.com/LittleChenLiya/dsh-superagent"
+      },
+      "versions": [
+        {
+          "version": "0.14.1",
+          "publishTimestamp": 1794768843,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/LittleChenLiya/dsh-superagent",
+            "commit": "ac5470d705a2c082671b06ae7676ec3b1e1aa0d5"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1 <0.3.0-0"
+          }
+        }
+      ]
+    }
+  ]
+}
