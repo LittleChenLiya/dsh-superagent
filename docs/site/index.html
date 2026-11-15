@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsh-superagent — 一个目标，并行子任务，一份合并报告</title>
+<style>
+  :root {
+    --paper: #fbfaf7;
+    --ink: #1a1b1d;
+    --muted: #5f646a;
+    --line: #e2ded6;
+    --accent: #1d5c4d;
+    --accent-soft: #e8efe9;
+    --code-bg: #f2efe9;
+    --warn: #8a4b1f;
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.7;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 0 24px 96px; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  a:hover { text-decoration-thickness: 2px; }
+
+  header { padding: 72px 0 8px; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 18px;
+  }
+  h1 {
+    font-size: clamp(28px, 4.2vw, 42px);
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+    margin: 0 0 20px;
+    font-weight: 600;
+    text-wrap: balance;
+  }
+  .lede {
+    font-size: clamp(17px, 2vw, 19px);
+    color: #33373b;
+    margin: 0 0 26px;
+    max-width: 44em;
+  }
+  .facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    padding: 14px 0 0;
+    border-top: 1px solid var(--line);
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .facts span::before { content: "· "; color: #b3ada2; }
+  .facts span:first-child::before { content: ""; }
+
+  section { padding-top: 56px; }
+  h2 {
+    font-size: 22px;
+    line-height: 1.35;
+    margin: 0 0 8px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+  }
+  h2 .num {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+    margin-right: 10px;
+    font-weight: 500;
+  }
+  h3 { font-size: 17px; margin: 30px 0 6px; font-weight: 600; }
+  p { margin: 12px 0; }
+  .sub { color: var(--muted); margin-top: 0; }
+
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 22px; }
+  .card {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 18px 20px;
+    background: #fffefb;
+  }
+  .card h3 { margin-top: 0; }
+  .card p { margin: 6px 0; font-size: 15px; color: #3a3e42; }
+
+  .cap { border-top: 1px solid var(--line); padding-top: 24px; margin-top: 28px; }
+  .cap .head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .cap .head h3 { margin: 0; font-size: 18px; }
+  .tag {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 3px;
+    padding: 2px 7px;
+  }
+  .cap p { font-size: 15.5px; }
+  .cap ul { font-size: 15.5px; margin: 8px 0 0; padding-left: 20px; }
+  .cap li { margin: 4px 0; }
+
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 14px 0;
+  }
+  code { font-family: var(--mono); font-size: 0.9em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .note {
+    font-size: 14px;
+    color: var(--muted);
+    border-left: 2px solid var(--line);
+    padding-left: 14px;
+    margin: 14px 0 0;
+  }
+
+  figure { margin: 22px 0 0; }
+  figure svg { width: 100%; height: auto; display: block; }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 10px; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 15px; }
+  th, td { text-align: left; padding: 10px 12px 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; font-size: 13px; color: var(--muted); letter-spacing: .02em; }
+  td.n { width: 34%; }
+
+  .dont { background: #fdfaf4; border: 1px solid #ece2cf; border-radius: 6px; padding: 4px 22px 18px; margin-top: 18px; }
+  .dont h3 { color: var(--warn); }
+
+  .install { background: var(--accent-soft); border: 1px solid #cfded3; border-radius: 6px; padding: 20px 22px; margin-top: 18px; }
+  .install pre { background: #fff; margin: 12px 0 10px; }
+
+  footer {
+    margin-top: 72px;
+    padding-top: 22px;
+    border-top: 1px solid var(--line);
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+  footer p { margin: 6px 0; }
+
+  @media (max-width: 640px) {
+    .cols { grid-template-columns: 1fr; }
+    header { padding-top: 48px; }
+    .wrap { padding: 0 18px 72px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">dsh-superagent · DeepSeek Harness 插件</p>
+  <h1>一个目标进去，模型拆成并行子任务，一份报告出来。</h1>
+  <p class="lede">
+    dsh-superagent 给 DeepSeek Harness 补上"长时任务"这一段：一次调用拿到目标，
+    由模型规划成互不依赖的子任务，默认三个子代理同时跑，结果合并成一份报告。
+    run 的状态和花销写在磁盘上，宿主进程被杀掉之后还能接着跑。
+  </p>
+  <div class="facts">
+    <span>Node ≥ 24.9.0</span>
+    <span>dsh ≥ 0.2.2-rc.1 &lt; 0.3.0</span>
+    <span>零运行时依赖</span>
+    <span>MIT 许可</span>
+    <span>个人项目，与 DeepSeek 无关</span>
+  </div>
+</header>
+
+<section>
+  <h2><span class="num">01</span>它解决的两个具体问题</h2>
+  <div class="cols">
+    <div class="card">
+      <h3>宿主一断，run 全丢</h3>
+      <p>
+        单个 agent loop 是一个上下文、一个序列。目标需要几条独立的工作线时，它只能排队做；
+        进程崩掉或重启，这一轮没有留下任何可以接着跑的东西，只能从头再付一次钱。
+      </p>
+    </div>
+    <div class="card">
+      <h3>花销看不见</h3>
+      <p>
+        子代理的调用、缓存命中的比例、一次 run 到底花了几次调用，默认没有任何账本。
+        等账单出来才知道哪个目标烧得多，那时已经烧完了。
+      </p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">02</span>三件核心能力</h2>
+
+  <div class="cap">
+    <div class="head">
+      <h3>多任务并行调度</h3>
+      <span class="tag">planner → N workers → aggregator</span>
+    </div>
+    <p>
+      一次规划模型调用把目标拆成互不依赖的子任务，按 <code>maxParallel</code>（默认 3，硬上限 8）并发跑，
+      最后合并。子代理之间上下文隔离，只把结果交回来，所以一次 run 的上下文不会随子任务数量线性膨胀。
+    </p>
+    <figure>
+      <svg viewBox="0 0 720 210" role="img" aria-label="并行执行时间线：规划、两个子任务同时运行、合并报告">
+        <g font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="11" fill="#5f646a">
+          <text x="0" y="14">planner</text>
+          <text x="0" y="54">worker 1</text>
+          <text x="0" y="94">worker 2</text>
+          <text x="0" y="134">aggregator</text>
+          <text x="0" y="186">t</text>
+        </g>
+        <g>
+          <rect x="86" y="3" width="70" height="16" rx="2" fill="#c9d8cd"/>
+          <rect x="160" y="43" width="230" height="16" rx="2" fill="#7fae97"/>
+          <rect x="160" y="83" width="230" height="16" rx="2" fill="#7fae97"/>
+          <rect x="394" y="123" width="110" height="16" rx="2" fill="#c9d8cd"/>
+        </g>
+        <g stroke="#c9c3b8" stroke-width="1" stroke-dasharray="3 4">
+          <line x1="160" y1="0" x2="160" y2="168"/>
+          <line x1="392" y1="0" x2="392" y2="168"/>
+        </g>
+        <g font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="10.5" fill="#8b857a">
+          <text x="88" y="180">plan</text>
+          <text x="162" y="180">subtasks run concurrently</text>
+          <text x="396" y="180">merge</text>
+        </g>
+      </svg>
+      <figcaption>
+        实测：两个各需 3 秒的子任务，run 总耗时 3.5 秒（规划与合并各约 60 ms）；串行至少 6 秒。
+        来源 <a href="../e2e-2026-11-14.md">docs/e2e-2026-11-14.md</a>。
+      </figcaption>
+    </figure>
+    <ul>
+      <li>没有依赖图：planner 只产出互不依赖的叶子任务。有先后关系的工作要自己串在一个子任务里。</li>
+      <li>规划是一次模型调用；回复解析不出子任务时，整条 run 降级成单个子任务并标记 <code>plan.mode = "degraded"</code>。</li>
+      <li>同一个目标在同一个会话里重复发起，返回已有 run id 并标记 <code>deduped: true</code>，不重复付规划费。</li>
+    </ul>
+  </div>
+
+  <div class="cap">
+    <div class="head">
+      <h3>中断可续</h3>
+      <span class="tag">interrupted → resume</span>
+    </div>
+    <p>
+      每条 run 一个 JSON 文件，临时文件加重命名写入；谁是 owner 由本地 pid、心跳和文件锁判断，
+      而不是靠进程自己的记忆。重启后 <code>superagent_status</code> 报 <code>interrupted</code> 并给出判定依据，
+      <code>superagent_resume</code> 只补没完成的部分，规划结果直接复用。
+    </p>
+    <figure>
+      <svg viewBox="0 0 720 150" role="img" aria-label="恢复过程：任务一完成、任务二被中断，恢复后只重跑任务二">
+        <g font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="11" fill="#5f646a">
+          <text x="0" y="34">worker 1</text>
+          <text x="0" y="74">worker 2</text>
+        </g>
+        <g>
+          <rect x="86" y="23" width="180" height="16" rx="2" fill="#7fae97"/>
+          <rect x="86" y="63" width="110" height="16" rx="2" fill="#7fae97"/>
+          <rect x="200" y="63" width="66" height="16" rx="2" fill="#ece2cf"/>
+          <rect x="330" y="63" width="128" height="16" rx="2" fill="#7fae97"/>
+        </g>
+        <line x1="86" y1="104" x2="600" y2="104" stroke="#c9c3b8" stroke-width="1"/>
+        <line x1="272" y1="14" x2="272" y2="104" stroke="#b4462f" stroke-width="1.4" stroke-dasharray="4 3"/>
+        <g font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="10.5" fill="#8b857a">
+          <text x="88" y="122">running</text>
+          <text x="250" y="122">kill</text>
+          <text x="296" y="122">interrupted</text>
+          <text x="384" y="122">resume → completed</text>
+        </g>
+      </svg>
+      <figcaption>
+        实测：硬杀宿主后，已完成的子任务保留原 child id，未完成的回到 <code>pending</code>，
+        resume 后整条 run 完成，累计花销不丢。来源 <a href="../e2e-2026-11-14.md">docs/e2e-2026-11-14.md</a>。
+      </figcaption>
+    </figure>
+    <ul>
+      <li>只有"没有活着的 owner"的 run 才会被标成 <code>interrupted</code>：本地死 pid 直接回收，共享目录按 90 秒心跳判断。</li>
+      <li>跨进程取消走 <code>.cancel</code> 标记文件，不依赖 socket；实测对一个忽略 abort 的子任务，取消 1.99 秒返回。</li>
+      <li>resume 会重建预算上限、保留已花掉的部分——把上限调高再 resume，就是"继续"而不是"重来"。</li>
+    </ul>
+  </div>
+
+  <div class="cap">
+    <div class="head">
+      <h3>成本与调用可追</h3>
+      <span class="tag">usage · cost · budget</span>
+    </div>
+    <p>
+      每条 run 结束都打印实测的输入、输出、缓存命中 token 与调用次数，另加两个硬预算：
+      <code>maxModelCallsPerRun</code> 与 <code>maxTokensPerRun</code>。预算在每次 spawn 之前检查，
+      触顶后不再起新子代理，正在跑的那个被 abort，已完成的报告仍然合并。
+    </p>
+    <pre><code>usage: input 1882 (+19456 prompt tokens served from cache), output 7363, calls 3
+cost: ¥0.1016 (estimate; all models priced)</code></pre>
+    <p class="note">
+      上面是一次真实付费 run 的原样输出（3 次调用，按运维自己填的 DashScope 峰时价计算）。
+      插件不自带任何模型价格：没配价格时打印 <code>not computed</code>，只有部分模型有价格时打印
+      <code>at least …</code>，总价永远按下界报，不编一个 0。
+    </p>
+    <ul>
+      <li>token 数来自子会话日志的实测求和，有一个独立脚本逐条核对过，与插件打印一致。</li>
+      <li>日志读不到时不算沉默：打印 <code>usage note:</code> 说明是下界；调用次数预算照常生效。</li>
+      <li>运维侧还有两个只读工具，读同一批 run 文件、不依赖会话：终端里的 <code>watch</code> 面板，和一份自包含的 HTML 报告（内联 CSS 与 SVG，无脚本、无网络请求）。</li>
+    </ul>
+    <pre><code>RUN ID               STATUS       CALLS    ELAPSED ACTIVITY
+20261114T090200-7eee interrupted  4/80     2m00s   host went away · resume to continue
+20261114T090204-686a cancelled    3/80     1s      cancelled by request
+20261114T090106-a188 completed    4/80     931ms   report ready · 2/2 subtasks</code></pre>
+    <p class="note">
+      屏幕上是 40 条真实 run 里截的三行；完整帧在
+      <a href="../e2e/transcripts/watch-panel.log">docs/e2e/transcripts/watch-panel.log</a>。
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">03</span>安装</h2>
+  <div class="install">
+    <pre><code>dsh plugin --profile web add @xiangyixie/dsh-superagent@0.9.3</code></pre>
+    <p class="note" style="border:0;padding:0">
+      行里的版本号只是本页写作时的值，<strong>以 README 的固定安装行为准</strong>。
+      必须写版本号：不写时 pnpm 的最小发布年龄策略会跳过刚发布的版本，装到一个旧的却报告成功。
+      不要 <code>npm i -g dsh</code>——npm 上的 <code>dsh</code> 是另一个包。
+    </p>
+  </div>
+  <p style="margin-top:16px">装完用 <code>dsh --profile web --dump-config</code> 确认有下面两行，否则插件装了但没挂载，工具不会存在：</p>
+  <pre><code>- id: superagent
+  name: @xiangyixie/dsh-superagent</code></pre>
+  <p>从零跑通第一个任务的分步操作在 <a href="quickstart.md">quickstart.md</a>。</p>
+</section>
+
+<section>
+  <h2><span class="num">04</span>什么时候别装</h2>
+  <div class="dont">
+    <h3>这些情况下，它只会让你多付一次规划费和合并费</h3>
+    <table>
+      <tr>
+        <td class="n">一次模型调用就能答</td>
+        <td>你付的是一个 planner 加一个 aggregator，外加每层各自的上下文。问题本身很小的时候，这层编排是纯开销。</td>
+      </tr>
+      <tr>
+        <td class="n">必须在一个 turn 内结束</td>
+        <td>run 是后台推进的。<code>wait_seconds</code> 用完就返回 <code>next: superagent_status …</code>，不会为了等它结束而阻塞整个会话。</td>
+      </tr>
+      <tr>
+        <td class="n">中间需要人工审批</td>
+        <td>没有中途暂停等确认的通道。子任务可以留一条 <code>attention</code> 提问，但那是在 run 结束前后送达，不是审批门。</td>
+      </tr>
+      <tr>
+        <td class="n">需要多级委派</td>
+        <td>子代理深度固定为 1，worker 不能再开 worker。这是宿主强制执行的，不是提示词约束。</td>
+      </tr>
+      <tr>
+        <td class="n">想要宿主内的面板或仪表盘</td>
+        <td>插件不加 UI、不改宿主代码，对外只有 <code>superagent_*</code> 工具。面板是另一个终端里的只读工具，不是产品界面。</td>
+      </tr>
+      <tr>
+        <td class="n">需要隔离或沙箱</td>
+        <td>子代理用宿主自己的凭据和文件系统，受宿主沙箱策略约束。这不是安全边界。</td>
+      </tr>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <p>dsh-superagent 是个人项目，与 DeepSeek 及 DeepSeek Harness 维护者无关，MIT 许可。</p>
+  <p>
+    本页引用的数字都来自仓库内记录：
+    <a href="../e2e-2026-11-14.md">docs/e2e-2026-11-14.md</a>（真实宿主运行）、
+    <a href="../DONE.md">docs/DONE.md</a>（验收项与证据）、
+    <a href="../report-sample.html">docs/report-sample.html</a>（40 条 run 的报告）。
+    与另一款 agent 产品的定位对比见 <a href="vs-trae.md">vs-trae.md</a>。
+  </p>
+  <p>安装参数与已知限制以 <a href="../../README.md">README</a> 为准。</p>
+</footer>
+
+</div>
+</body>
+</html>
