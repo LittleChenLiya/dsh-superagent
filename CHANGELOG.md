@@ -8,6 +8,49 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## Unreleased
+
+A run became something the user can talk back to: instructions and decisions
+now reach a run that already exists instead of only through a second run. No
+runtime dependencies were added.
+
+### Added
+
+- `superagent_followup(run_id, message)` appends an instruction to an active
+  run. There is no host interface for appending a message to a running child
+  activation, so delivery is boundary-scoped and the reply says so: the next
+  worker spawn or the aggregation carries it, whichever comes first, and
+  subtasks already running or finished keep their results. Each instruction
+  records `appliedAt` / `appliedAtStage`, or `missedAt` with a reason when the
+  run settled before another boundary ran. A paused run keeps the instruction
+  for its next resume; a completed run refuses it. A run owned by another
+  process is refused rather than written, because that owner's next save would
+  erase it.
+- `superagent_answer(run_id, attention_id?, answer, wait_seconds?)` answers one
+  structured attention item. Attention items now carry stable ids (`q1`, `q2`, …)
+  from a per-run counter; the answer is recorded on that item and the run
+  continues — an active run at its next boundary, a terminal run by reopening so
+  its aggregation runs again with the decision. A question retired by a resume
+  is archived to `attentionHistory` with `expiredAt`, so a late answer is
+  refused as expired instead of being matched to whatever is open now. Unknown
+  ids, already answered questions, and an answer whose text is another
+  question's option are refused with the id to use instead.
+
+### Changed
+
+- A single completed subtask still short-circuits aggregation, unless the run
+  has instructions or answers: then the aggregation prompt is built, because
+  otherwise reopening the run would return the old report and silently drop the
+  decision.
+- `superagent_resume` reopens a `completed` run only when it holds an answer
+  that never reached a prompt; every other completed run keeps its existing
+  no-op behaviour. Without this, an answer that could not be applied (quota or
+  lock) would be stranded behind a "resume the run" instruction that did
+  nothing.
+- Status prints the attention id, any recorded answer, and how many instructions
+  were applied, are waiting, or never took effect; notifications lead with the
+  question id so `superagent_answer` can be called directly.
+
 ## 0.10.0 — 2026-11-15
 
 The dispatch, progress, delivery, and memory layer. No runtime dependencies were

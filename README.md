@@ -262,8 +262,9 @@ subagent start request has no tool filter, and its own `subagent` tool rejects a
 `toolFilter` config and points at agent presets. `childPreset` is therefore the
 supported way to narrow a child's tools; without a dedicated preset, workers
 inherit the session's tools. The `superagent_*` tools still exist in their tool
-list, but `superagent_start`, `superagent_resume`, and `superagent_cancel`
-refuse to run from a worker session; only the top-level agent manages runs.
+list, but the run tools (`superagent_start`, `superagent_resume`, `superagent_cancel`,
+`superagent_followup`, `superagent_answer`) refuse to run from a worker session;
+only the top-level agent manages runs.
 
 ### Spending limits and prices
 
@@ -336,12 +337,38 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
   `failed`, `partial`, or `cancelled` run; completed subtasks are kept. Workers
   are told what failed and to check what the earlier attempt already did. Only
   the session that started the run may resume it. It counts against
-  `maxActiveRuns`; `force: true` overrides a full quota explicitly.
+  `maxActiveRuns`; `force: true` overrides a full quota explicitly. A
+  `completed` run stays completed unless it holds an answer that never reached a
+  prompt — then resume reopens it, because otherwise that decision would be
+  stranded.
+- `superagent_followup(run_id, message)` adds an instruction to a run that is
+  already executing, instead of starting a second run. It is **not** a live
+  channel to the children: the host has no way to append a message to a running
+  child activation, so the instruction is queued on the run and the next prompt
+  built for it carries it — the next worker spawn or the aggregation, whichever
+  comes first. Subtasks that are already running or finished keep their results
+  and never see it. The reply names that boundary, and status shows the same
+  thing; an instruction that arrives after the last boundary is recorded as
+  `never took effect` rather than looking delivered. A paused run
+  (`interrupted`, `failed`, `partial`, `cancelled`) keeps the instruction for
+  the next round, which starts when it is resumed; a `completed` run refuses it.
+  A run owned by another process is refused, because that owner's next save
+  would overwrite it. Only the session that started the run may add to it.
+- `superagent_answer(run_id, attention_id?, answer, wait_seconds?)` answers one
+  structured attention item so that run continues with the decision. An active
+  run applies the answer at its next boundary; a finished run is reopened and
+  only its aggregation runs again, now with the answer in the prompt, so the
+  report reflects the decision instead of the user starting a new run.
+  `attention_id` is required when more than one question is open. An answer is
+  matched to the id, not to the array position: an id that was never asked, a
+  question already answered, and a question retired by a later resume are all
+  refused, and an answer whose text is another question's option names that
+  other id instead of guessing.
 - `superagent_memory(action, key?, kind?, text?, scope?, limit?)` lists, adds,
   corrects, or forgets notebook notes. `set` with an existing key supersedes it;
   `forget` retracts it. `scope` addresses `rules` (project rules), `profile`
-  (user preferences), or the run scope. The tool is additive: the five run tools
-  keep their arguments and output.
+  (user preferences), or the run scope. The tool is additive: the seven run
+  tools keep their arguments and output.
 
 ## Progress, decisions, and artifacts
 
@@ -351,11 +378,24 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
 - **Attention.** A worker or the aggregator may append one fenced `attention`
   block with a question that only the user can answer. It is stripped from the
   report, stored on the run as `attention.items`, shown as `needs your decision:`
-  in status, and leads the notification when the run finishes. The question,
-  options, and reason are collapsed to one line and capped at 500 / 200 / 300
-  characters, so the block cannot inject a forged status or notification line.
-  A block that is not valid JSON or has no question is kept in the report, and
-  status prints `attention: <reason>` instead of hiding the request.
+  in status, and leads the notification when the run finishes. Every item gets a
+  stable id (`q1`, `q2`, …) from a counter on the run, so a question means the
+  same thing across saves and resumes. The question, options, and reason are
+  collapsed to one line and capped at 500 / 200 / 300 characters, so the block
+  cannot inject a forged status or notification line. A block that is not valid
+  JSON or has no question is kept in the report, and status prints
+  `attention: <reason>` instead of hiding the request.
+- **Answering.** `superagent_answer` records the decision on that item and lets
+  the run continue: an active run carries it into its next prompt, a terminal
+  run is reopened so the aggregation runs again with the answer. The question is
+  archived (not deleted) when a resume retires it, which is what lets a late
+  answer be refused with `expired at <time>` instead of being attached to
+  whatever is open now.
+- **Instructions during a run.** `superagent_followup` appends to the same log.
+  The dialog is boundary-delivered by design: running children cannot be reached,
+  so each instruction records `appliedAt` / `appliedAtStage` when a prompt first
+  carries it, or `missedAt` when the run settled first. Status prints both, so
+  "delivered" and "waiting" are never confused.
 - **Report file.** A terminal run writes its report to
   `<stateDir>/reports/<runId>.md` with an atomic rename, so the outcome has a
   path that can be opened or attached. The directory carries a `.gitignore` with
