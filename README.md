@@ -364,11 +364,13 @@ user can run to finish by hand. A recursive copy would either need a diff3
 engine (a dependency this package does not have) or overwrite the main checkout,
 which is the bug the feature exists to prevent. A worktree also shares the object
 database and ignore rules, so a worker sees the real repository without a full
-copy of it. Worktrees live under `<repository>/.superagent/worktrees/<runId>/w<n>`,
-inside the main checkout: the host's `workspace-write` sandbox takes its writable
-boundary from the session cwd, so a checkout under the state directory would be
-denied every write. The pool carries its own `.gitignore`, so worker checkouts
-never leak into the user's next commit or make the main checkout look dirty.
+copy of it. Worktrees live under `.superagent/worktrees/<runId>/w<n>` inside the
+directory the host was started in — the repository itself when that is the
+starting directory. The host's `workspace-write` sandbox takes its writable
+boundary from the session cwd, so a checkout under the state directory, or
+inside a repository the host was not started in, would be denied every write.
+The pool carries its own `.gitignore`, so worker checkouts never leak into the
+user's next commit or make the main checkout look dirty.
 
 **What happens during a run.** Each worker is given
 `superagent/<runId>-w<n>`, a branch created from the main checkout's `HEAD`. Its
@@ -1453,7 +1455,7 @@ Three side files live next to the run:
 | `<runId>.cancel` | A cancel was requested by some process. The owner polls it once per second and stops its children. Removed when the run ends. |
 | `<runId>.lock` | The process that is allowed to schedule this run. Created with `wx`, so exactly one process wins. A lock left by a dead local pid is broken immediately; a live local pid keeps it however long it has held it; a lock from another machine is broken once it is older than 10 minutes, since its pid cannot be checked. |
 | `<runId>.json.corrupt-<ts>` | The state file was not valid JSON and was moved aside, not deleted. The run is skipped by `superagent_list` and reported by id with this path. |
-| `<repository>/.superagent/worktrees/<runId>/w<n>/` | A worker's git worktree when `workspaceIsolation` is on. Inside the repository so the host sandbox can write it, and ignored so it never shows up in `git status`. Removed once its branch is merged or it produced no change; kept when a conflict left it for the user to merge. |
+| `<anchor>/.superagent/worktrees/<runId>/w<n>/` | A worker's git worktree when `workspaceIsolation` is on. Anchored inside the host's session directory (the repository when that is where the host started) so the sandbox allows writes, and ignored so it never shows up in `git status`. Removed once its branch is merged or it produced no change; kept when a conflict left it for the user to merge. |
 
 If a run's file is damaged, nothing else breaks: other runs list normally, and
 starting a new run works. Inspect the `.corrupt-` file, then delete it. A file

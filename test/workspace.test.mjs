@@ -94,6 +94,18 @@ test('checkouts live inside the repository, the host sandbox writable boundary',
   assert.equal((await git(repo, ['status', '--porcelain'])).trim(), '')
 })
 
+test('a repository outside the sandbox boundary gets a pool inside the boundary', async () => {
+  const repo = await makeRepo()
+  const boundary = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-boundary-'))
+  const manager = createWorkspaceManager({ baseDir: repo, boundary, sleep: () => Promise.resolve() })
+  const work = await manager.prepare({ runId: 'run-out', index: 1 })
+  assert.equal(work.ok, true, work.reason)
+  // The host only lets the worker write inside the session directory, so the
+  // checkout must live there even though its repository does not.
+  assert.ok(normalize(work.dir).startsWith(`${normalize(boundary)}/`), `${work.dir} is outside ${boundary}`)
+  assert.equal((await git(repo, ['status', '--porcelain'])).trim(), '')
+})
+
 test('a resume keeps a checkout recorded under the previous pool location', async () => {
   const repo = await makeRepo()
   const legacyRoot = path.join(path.dirname(repo), `${path.basename(repo)}-old-worktrees`)
