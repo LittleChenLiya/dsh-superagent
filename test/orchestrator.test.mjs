@@ -5,6 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import {
+  capabilityGaps,
   capText,
   computeCost,
   createOrchestrator,
@@ -116,6 +117,7 @@ function orchestratorWith({
     models: { 'test/model': { inputTokens: 10, outputTokens: 2, calls: 1 } },
   }),
   sleep,
+  toolInventory,
 }) {
   const notifications = []
   const orchestrator = createOrchestrator({
@@ -125,6 +127,7 @@ function orchestratorWith({
     readUsage,
     memory,
     ...(workspace ? { workspace } : {}),
+    ...(toolInventory ? { toolInventory } : {}),
     notify: run => notifications.push(run.id),
     log: () => {},
     ...(sleep ? { sleep } : {}),
@@ -1905,4 +1908,249 @@ test('a worker that never finished keeps its checkout visible instead of disappe
   assert.match(leftover.detail, /did not finish/)
   // Only the finished worker's branch was offered to the merger.
   assert.equal(finished.workspace.merges.filter(merge => merge.status === 'merged').length, 1)
+})
+
+test('planner assumptions and unresolved questions reach the run and the worker', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{
+          id: 'w1',
+          title: 'redo the assets',
+          prompt: 'redo the 3D assets in the named game project',
+          requires: ['gui'],
+          assumptions: ['「一般游戏」 means redo the assets, not a genre label'],
+        }],
+        needsInput: [{
+          question: 'Which workspace is "xx"?',
+          reason: 'the goal names xx but gives no path',
+        }],
+      }))
+    }
+    return completed('assets rebuilt')
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner: { spawnChild },
+    toolInventory: () => ['cua_run_code', 'bash'],
+  })
+
+  const run = await orchestrator.start({ goal: 'redo xx assets', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.deepEqual(finished.subtasks[0].assumptions, ['「一般游戏」 means redo the assets, not a genre label'])
+  assert.deepEqual(finished.subtasks[0].requires, ['gui'])
+  assert.equal(finished.plan.needsInput[0].question, 'Which workspace is "xx"?')
+  assert.equal(finished.attention.items[0].source, 'planner')
+  assert.match(finished.attention.items[0].question, /Which workspace/)
+  const worker = calls.find(call => call.label === 'superagent-1')
+  assert.match(worker.prompt, /Assumptions the planner made/)
+  assert.match(worker.prompt, /一般游戏/)
+})
+
+test('a subtask missing a declared capability is blocked and never spawns', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [
+          { id: 'w1', title: 'login to the school site', prompt: 'submit the homework', requires: ['browser'] },
+          { id: 'w2', title: 'review the PR', prompt: 'review the PR', requires: ['gh'] },
+        ],
+      }))
+    }
+    return completed(`report from ${spec.label}`)
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner: { spawnChild },
+    toolInventory: () => ['bash', 'read', 'write'],
+  })
+
+  const run = await orchestrator.start({ goal: 'school work and a PR', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  const blocked = finished.subtasks.find(subtask => subtask.key === 'w1')
+  assert.equal(blocked.status, 'blocked')
+  assert.deepEqual(blocked.missingCapabilities, ['browser'])
+  assert.match(blocked.blockedReason, /missing browser capability; not started/)
+  assert.equal(finished.subtasks.find(subtask => subtask.key === 'w2').status, 'completed')
+  assert.equal(finished.status, 'partial')
+  assert.equal(calls.some(call => call.label === 'superagent-1'), false, 'a blocked subtask must not spawn')
+  assert.equal(calls.some(call => call.label === 'superagent-2'), true)
+})
+
+test('all-blocked plan fails with zero workers and names the missing capabilities', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [
+          { id: 'w1', title: 'school site', prompt: 'submit homework', requires: ['browser'] },
+          { id: 'w2', title: 'asset redesign', prompt: 'open the DCC and rebuild assets', requires: ['gui'] },
+        ],
+      }))
+    }
+    return completed('should never run')
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner: { spawnChild },
+    toolInventory: () => ['bash', 'read', 'write'],
+  })
+
+  const run = await orchestrator.start({ goal: 'four blocked lines', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(calls.length, 1, 'only the planner may run')
+  assert.equal(calls[0].label, 'superagent-plan')
+  assert.equal(finished.subtasks.every(subtask => subtask.status === 'blocked'), true)
+  assert.match(finished.error, /no worker started/)
+  assert.match(finished.error, /browser/)
+  assert.match(finished.error, /gui/)
+  assert.match(finished.report, /No worker was started/)
+  assert.match(finished.report, /browser-control plugin/)
+  assert.match(finished.report, /desktop\/computer-use plugin/)
+  assert.equal(finished.preflight.status, 'checked')
+  assert.equal(finished.preflight.blocked, 2)
+})
+
+test('blocked is a capability gap, skipped is a dependency that cannot run', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [
+          { id: 'w1', title: 'school site', prompt: 'submit homework', requires: ['browser'] },
+          { id: 'w2', title: 'summarise it', prompt: 'summarise the result', dependsOn: ['w1'], requires: ['shell'] },
+        ],
+      }))
+    }
+    return completed('should never run')
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner: { spawnChild },
+    toolInventory: () => ['bash'],
+  })
+
+  const run = await orchestrator.start({ goal: 'blocked then dependent', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  const blocked = finished.subtasks.find(subtask => subtask.key === 'w1')
+  const skipped = finished.subtasks.find(subtask => subtask.key === 'w2')
+  assert.equal(blocked.status, 'blocked')
+  assert.deepEqual(blocked.missingCapabilities, ['browser'])
+  assert.equal(skipped.status, 'skipped')
+  assert.equal(skipped.skipKind, 'upstream')
+  assert.match(skipped.skippedReason, /w1 was blocked/)
+  assert.equal(calls.length, 1, 'no worker runs for a blocked task or its dependent')
+})
+
+test('planner and worker prompts agree on what a worker can see', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{ id: 'w1', title: 'only task', prompt: 'do the only task' }],
+      }))
+    }
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild } })
+
+  const run = await orchestrator.start({ goal: 'prompt agreement', parentSessionId: parent.id, parent })
+  await orchestrator.status(run.id, 10)
+
+  const planner = calls.find(call => call.label === 'superagent-plan').prompt
+  const worker = calls.find(call => call.label === 'superagent-1').prompt
+  assert.doesNotMatch(planner, /cannot see the goal text/)
+  assert.match(planner, /Workers see the overall goal but nothing else from your output/)
+  assert.match(planner, /do not repeat the overall goal/)
+  assert.match(planner, /"assumptions"/)
+  assert.match(planner, /"needsInput"/)
+  assert.match(planner, /"requires"/)
+  assert.match(planner, /"ambiguities"/)
+  assert.match(worker, /Overall goal:/)
+  assert.match(worker, /prompt agreement/)
+})
+
+test('capability gaps treat shell as git and gh, and block unknown tags', () => {
+  assert.deepEqual(capabilityGaps(['shell', 'git', 'gh'], ['bash', 'read']), [])
+  assert.deepEqual(capabilityGaps(['shell', 'git', 'browser'], ['bash', 'read']), ['browser'])
+  assert.deepEqual(capabilityGaps(['net.http'], ['web_fetch']), [])
+  assert.deepEqual(capabilityGaps(['unobtainium'], ['bash']), ['unobtainium'])
+})
+
+test('an ambiguity the planner normalized away is still asked in needsInput', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      // The planner lists the ambiguity up front but then smooths it into
+      // "general game" in the prompt and forgets to ask about it.
+      return completed(JSON.stringify({
+        ambiguities: [{
+          phrase: '一般游戏',
+          why: 'the modifier 一般 is unclear and may be a typo',
+          question: 'Does 一般游戏 mean a general-purpose game, a specific title, or a typo?',
+        }],
+        subtasks: [{ id: 'w1', title: 'redo assets', prompt: 'redo the general game assets' }],
+        needsInput: [],
+      }))
+    }
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild } })
+
+  const run = await orchestrator.start({ goal: '重做一般游戏资产', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.match(calls[0].prompt, /Fill "ambiguities" first/)
+  assert.equal(finished.plan.ambiguities[0].phrase, '一般游戏')
+  assert.equal(finished.plan.needsInput.length, 1)
+  assert.match(finished.plan.needsInput[0].question, /一般游戏/)
+  assert.equal(finished.plan.needsInput[0].source, 'ambiguity-audit')
+  assert.match(finished.attention.items[0].question, /一般游戏/)
+})
+
+test('a planner that stops to ask starts no worker and reports the questions', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        ambiguities: [{
+          phrase: '一般游戏',
+          why: 'the modifier is unclear',
+          question: 'What does 一般游戏 mean here?',
+        }],
+        subtasks: [],
+        needsInput: [{ question: 'Which workspace is xx?', reason: 'no path was given' }],
+      }))
+    }
+    return completed('should never run')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild } })
+
+  const run = await orchestrator.start({ goal: '重做一般游戏资产', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(calls.length, 1, 'only the planner may run')
+  assert.match(finished.error, /needs input before it can plan/)
+  assert.equal(finished.plan.needsInput.length, 2)
+  assert.match(finished.report, /No worker was started/)
+  assert.match(finished.report, /What does 一般游戏 mean here\?/)
+  assert.equal(finished.subtasks.length, 0)
+})
+
+test('an unknown tool inventory skips preflight instead of guessing', async () => {
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{ id: 'w1', title: 'school site', prompt: 'submit homework', requires: ['browser'] }],
+      }))
+    }
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, toolInventory: () => null })
+
+  const run = await orchestrator.start({ goal: 'unknown inventory', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.preflight.status, 'unavailable')
+  assert.equal(finished.subtasks[0].status, 'completed')
 })
