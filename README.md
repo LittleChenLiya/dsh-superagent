@@ -772,9 +772,9 @@ _Top of a report rendered from 40 real host runs. The full page — timeline,
 swimlanes, call and cost curves, failure annotations, run table — is
 [docs/report-sample.html](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/report-sample.html)._
 
-Four operator utilities ship with the package, need no session, and add no
-runtime dependency. `watch`, `report`, and `archive` read the same durable run
-files as the tools; `doctor` inspects the install itself.
+Five operator utilities ship with the package, need no session, and add no
+runtime dependency. `watch`, `report`, `archive`, and `sync` read the same
+durable run files as the tools; `doctor` inspects the install itself.
 
 Run them from the installed copy inside the profile:
 
@@ -843,6 +843,80 @@ None of these utilities is the install path: the plugin is installed with
 **`archive`** is the fourth utility. It prunes terminal runs and exports or
 imports one run as a self-contained archive; see [Retention](#retention) and
 [Archives](#archives).
+## Syncing one state directory across machines
+
+There is no server and no account. The state directory is a directory of files,
+so a git remote can carry it: `dsh-superagent-sync` makes that directory a
+repository, keeps the machine-local files out, and gives you `pull`, `push`, and
+`status`. `git` is the only requirement — the command has no dependency of its
+own.
+
+```bash
+PKG="${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/@xiangyixie/dsh-superagent"
+node "$PKG/bin/sync.js" init git@github.com:me/superagent-state.git   # once per machine
+node "$PKG/bin/sync.js" push                                          # after runs finish
+node "$PKG/bin/sync.js" pull                                          # before starting work
+node "$PKG/bin/sync.js" status
+```
+
+Or `node_modules/.bin/dsh-superagent-sync`. All four accept `--state-dir
+<path>` (default `$DSH_HOME/state/superagent`), and `--json` prints the raw
+result.
+
+**`init <remote>`** creates the repository, writes a managed block into
+`.gitignore`, sets `origin`, and makes the first commit. Re-running it refreshes
+the remote URL and that block without touching entries you added yourself. A
+machine with no `~/.gitconfig` gets a repository-local commit identity, so the
+first commit cannot fail on that alone.
+
+**`pull`** fetches `origin`, then merges. Uncommitted local changes are stashed
+first (`stash@{0}`, subject `dsh-sync auto-stash …`) and reapplied after the
+merge, so a pull never silently overwrites an edit. A conflict stops the merge
+with both sides still in the files: the paths are printed, nothing is chosen,
+and the stash is left unapplied with a line saying so.
+
+**`push`** commits everything and pushes the current branch, setting its
+upstream on the first push. A rejected push is reported, not forced and not
+auto-merged: run `pull`, resolve what it reports, then push again.
+
+**`status`** prints ahead/behind counts, uncommitted files, stashes, and the
+conflicted paths waiting for a decision.
+
+### What never leaves the machine
+
+`.owner`, `control.json` (a bearer token), `notifications.json`, `*.lock`,
+`*.cancel`, `*.corrupt-*`, `*.tmp`, `*.log`, and `.env` / key material. The
+notebook is the one exception worth knowing: `memory/.gitignore` normally holds
+a bare `*`, which would keep every note local, so `init` rewrites that one
+default to allow `<scope>.jsonl`. A file you customized is left alone.
+
+### When it conflicts
+
+Run records are one file per run (`runs/<runId>.json`), so ordinary concurrent
+work on two machines — different runs — never touches the same path. A conflict
+needs one of these:
+
+- the same run id written on both machines: a resume or cancel on the second
+  machine before pulling the first machine's state;
+- the same memory scope appended to on both machines (`memory/<scope>.jsonl` is
+  append-only, and two different tails collide);
+- the same `reports/<runId>.md` regenerated with different content;
+- `.gitignore` edited by hand on both machines.
+
+While a run file still contains conflict markers it is not valid JSON, and the
+plugin quarantines it at mount as `<runId>.json.corrupt-<ts>`. Resolve it before
+starting the host: keep the side you want, `git add` it, `git commit`.
+
+### Why this is approximate
+
+- Two machines writing at the same moment can conflict. The merge stops and you
+  decide; nothing is merged behind your back.
+- There is no live sync and no cross-machine lock. A machine sees another
+  machine's run only after `pull`, and `push` does not know what the other
+  machine is doing right now. Run one host per state directory at a time.
+- Keys are not distributed: each machine still needs its own model credential.
+- `keepRuns` pruning deletes files, and a deletion reaches the other machine
+  only on the next `pull`.
 
 ## Embedding over local HTTP
 
@@ -1118,6 +1192,10 @@ A run that fails *after* it was accepted keeps its report and shows `error:`
   it cannot be exposed remotely, and there is no MCP server. A local process
   running as the same user can read the token, which is the same trust boundary
   as writing run files.
+- Cross-machine sync is a git repository, not a service: it is offline-first,
+  conflict-stop rather than conflict-free, has no realtime channel, and does
+  not move credentials between machines. Two hosts actively writing one state
+  directory on two machines still need a `pull` between them.
 
 ## Naming
 

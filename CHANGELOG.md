@@ -54,6 +54,20 @@ README is updated to the version being released.
   and 6978 ms with an 8 s step, i.e. bounded by the remainder of the running
   step, not by the plugin. A host without that channel degrades to the followup
   queue and the reply labels it as such.
+- **Multi-device sync over git.** `dsh-superagent-sync` turns the state
+  directory into a repository and carries it between machines through any git
+  remote — no server, no account, no dependency. `init <remote>` writes a
+  managed `.gitignore` block (credentials, locks, cancel markers, quarantine
+  files, temp files, logs, machine identity) and makes the first commit;
+  `pull` fetches and merges, stashing uncommitted local work first and saying
+  so; `push` commits local state and pushes, reporting a rejection instead of
+  forcing; `status` reports ahead/behind counts, uncommitted files, stashes,
+  and conflicted paths. A conflict stops the merge with both sides kept and the
+  paths listed — nothing is resolved automatically. Run records were already
+  one file per run, so ordinary concurrent work on two machines does not
+  collide; the remaining shared surface is an append-only memory scope. The
+  README documents the limits: no realtime channel, no cross-machine lock, no
+  key distribution.
 
 ## 0.11.0 — 2026-11-15
 
@@ -175,6 +189,7 @@ still ships one file per module from `lib/`.
 - Status prints the attention id, any recorded answer, and how many instructions
   were applied, are waiting, or never took effect; notifications lead with the
   question id so `superagent_answer` can be called directly.
+
 
 
 
