@@ -359,7 +359,7 @@ test('the plugin default config creates no user-memory directory and no user-mem
     apply(ctx, { stateDir: root })
     // Every registered tool is one of the documented set; the user profile adds
     // no tool of its own, it only widens superagent_memory.
-    assert.equal(tools.size, 12)
+    assert.equal(tools.size, 13)
     assert.equal(tools.has('superagent_memory'), true)
     const result = await tools.get('superagent_memory').execute({ action: 'list', layer: 'user' }, {
       agent: { id: 'session-1' },
