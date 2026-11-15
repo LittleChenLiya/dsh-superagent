@@ -41,6 +41,32 @@ function lastToolText(messages) {
   return ''
 }
 
+/**
+ * The text of the current turn only.
+ *
+ * A resumed session replays earlier turns in `messages`, and matching a marker
+ * against that whole history would rerun the previous scenario. A scenario is
+ * dispatched from the last user message, and its steps count from there.
+ */
+function turnOf(messages) {
+  let index = -1
+  for (let cursor = messages.length - 1; cursor >= 0; cursor--) {
+    if (messages[cursor]?.role !== 'user') continue
+    if (index < 0) index = cursor
+    // The host may append its own user messages after the task; the newest one
+    // carrying a marker is the task this turn.
+    if (/\[e2e:[a-z-]+/.test(textOf(messages[cursor]))) {
+      index = cursor
+      break
+    }
+  }
+  if (index < 0) return { text: '', steps: [] }
+  return {
+    text: textOf(messages[index]),
+    steps: messages.slice(index + 1).filter(message => message?.role === 'tool'),
+  }
+}
+
 function runIdFrom(text) {
   const match = /\brun (\d{8}T\d{6}-[0-9a-f]{4})\b/.exec(text)
   return match ? match[1] : null
@@ -172,7 +198,12 @@ class StubAdapter {
     }
 
     if (text.includes(DIRECT_MARK)) {
-      await delay(workerDelay('direct'))
+      // A resumed attempt can be asked to take longer than a fresh one, so a
+      // window boundary falls inside it and the overlap rule can be observed.
+      const resumed = /Recovery note/.test(text)
+      await delay(resumed
+        ? Number(process.env.E2E_RESUME_DELAY_MS ?? process.env.E2E_WORKER_DELAY_MS ?? 300)
+        : workerDelay('direct'))
       if (process.env.E2E_EMPTY_ARTIFACT === '1') {
         yield usageChunk(10, 0)
         yield { type: 'finish', reason: { kind: 'stop' } }
@@ -207,8 +238,9 @@ class StubAdapter {
     }
 
     // Main session: drive one superagent tool sequence per task marker.
-    const kind = /\[e2e:([a-z-]+)/.exec(text)?.[1] ?? 'plain'
-    const step = toolResults.length
+    const turn = turnOf(messages)
+    const kind = /\[e2e:([a-z-]+)/.exec(turn.text)?.[1] ?? 'plain'
+    const step = turn.steps.length
     if (kind === 'start-wait') {
       if (step === 0) {
         yield* toolChunks('call-start-wait', 'superagent_start', { goal: GOAL, wait_seconds: 150 })
@@ -342,7 +374,7 @@ class StubAdapter {
       return
     }
     if (kind === 'status') {
-      const requested = /run=(\d{8}T\d{6}-[0-9a-f]{4})/.exec(text)?.[1] ?? null
+      const requested = /run=(\d{8}T\d{6}-[0-9a-f]{4})/.exec(turn.text)?.[1] ?? null
       if (step === 0) {
         yield* toolChunks('call-status-only', 'superagent_status', { run_id: requested, wait_seconds: 150 })
         yield usageChunk(40, 8)
@@ -355,7 +387,7 @@ class StubAdapter {
       return
     }
     if (kind === 'resume') {
-      const requested = /run=(\d{8}T\d{6}-[0-9a-f]{4})/.exec(text)?.[1] ?? null
+      const requested = /run=(\d{8}T\d{6}-[0-9a-f]{4})/.exec(turn.text)?.[1] ?? null
       if (step === 0) {
         yield* toolChunks('call-status', 'superagent_status', { run_id: requested, wait_seconds: 0 })
         yield usageChunk(40, 8)
@@ -487,6 +519,80 @@ class StubAdapter {
         return
       }
       yield* textChunks(`schedule-run-now sequence finished:\n${lastToolText(messages)}`)
+      yield usageChunk(20, 5)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+
+    if (kind === 'schedule-fail-now') {
+      // Foreground: create a one-minute plan and fail its first run through the
+      // empty-deliverable check, so the state left for the restart is exactly
+      // "a plan whose history says failed".
+      if (step === 0) {
+        yield* toolChunks('call-race-create', 'superagent_schedule', {
+          action: 'create',
+          name: 'resume-race-probe',
+          goal: 'Probe the release gate and report the numbers the stub measured.',
+          every_minutes: 1,
+          timezone: 'Asia/Shanghai',
+          mode: 'direct',
+        })
+        yield usageChunk(60, 12)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step === 1) {
+        const planId = /(sch-[0-9a-f]{8})/.exec(lastToolText(messages))?.[1] ?? null
+        yield* toolChunks('call-race-run', 'superagent_schedule', {
+          action: 'run-now',
+          ...(planId ? { id: planId } : {}),
+        })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step === 2) {
+        await delay(Number(process.env.E2E_RACE_FAIL_HOLD_MS ?? 6000))
+        yield* toolChunks('call-race-list-before-exit', 'superagent_schedule', { action: 'list' })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      yield* textChunks(`schedule-fail-now sequence finished:\n${lastToolText(messages)}`)
+      yield usageChunk(20, 5)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (kind === 'schedule-resume-race') {
+      // Restart with a failed run, missed windows and the scheduler timer alive.
+      // Step 0 tries to resume the failed run: while a run of the plan is active
+      // it must be refused, because a plan owns one active run.
+      const requested = /run=(\d{8}T\d{6}-[0-9a-f]{4})/.exec(turn.text)?.[1] ?? null
+      if (step === 0) {
+        await delay(Number(process.env.E2E_RACE_PREROLL_MS ?? 0))
+        yield* toolChunks('call-race-resume-1', 'superagent_resume', {
+          ...(requested ? { run_id: requested } : {}),
+          wait_seconds: 120,
+        })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step <= 3) {
+        await delay(Number(process.env[`E2E_RACE_HOLD_${step}_MS`] ?? (step === 1 ? 50000 : 90000)))
+        yield* toolChunks(`call-race-list-${step}`, 'superagent_schedule', { action: 'list' })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step === 4) {
+        await delay(Number(process.env.E2E_RACE_HOLD_4_MS ?? 70000))
+        yield* toolChunks('call-race-list-4', 'superagent_schedule', { action: 'list' })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      yield* textChunks(`schedule-resume-race sequence finished:\n${lastToolText(messages)}`)
       yield usageChunk(20, 5)
       yield { type: 'finish', reason: { kind: 'stop' } }
       return
