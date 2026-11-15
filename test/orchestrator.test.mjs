@@ -2121,6 +2121,13 @@ test('capability gaps treat shell as git and gh, and block unknown tags', () => 
   assert.deepEqual(capabilityGaps(['unobtainium'], ['bash']), ['unobtainium'])
 })
 
+test('capability gaps accept the Windows shell tool names', () => {
+  // A Windows host ships `pwsh` (or the persistent variant) and never `bash`.
+  assert.deepEqual(capabilityGaps(['shell', 'git', 'gh'], ['pwsh', 'read_file']), [])
+  assert.deepEqual(capabilityGaps(['shell'], ['pwsh_persistent']), [])
+  assert.deepEqual(capabilityGaps(['shell'], ['powershell']), [])
+})
+
 test('an ambiguity the planner normalized away is still asked in needsInput', async () => {
   const { spawnChild, calls } = makeSpawner(async spec => {
     if (spec.label === 'superagent-plan') {
