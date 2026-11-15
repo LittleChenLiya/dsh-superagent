@@ -20,7 +20,7 @@ function gate() {
  * Mount the plugin against a fake host: only `tools.register`, `subagents`, and
  * `agents` are provided, which is the whole injected surface.
  */
-test('the plugin mounts, registers six tools, and runs a goal end to end', async () => {
+test('the plugin mounts, registers the eight tools, and runs a goal end to end', async () => {
   const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
   const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
   const previousHome = process.env.DSH_HOME
@@ -51,7 +51,10 @@ test('the plugin mounts, registers six tools, and runs a goal end to end', async
     assert.deepEqual(inject, ['tools', 'agents'])
     assert.deepEqual(
       [...tools.keys()].sort(),
-      ['superagent_cancel', 'superagent_list', 'superagent_memory', 'superagent_resume', 'superagent_start', 'superagent_status'],
+      [
+        'superagent_answer', 'superagent_cancel', 'superagent_followup', 'superagent_list',
+        'superagent_memory', 'superagent_resume', 'superagent_start', 'superagent_status',
+      ],
     )
 
     const started = await tools.get('superagent_start').execute(
@@ -319,7 +322,7 @@ test('without a subagents service the tools still mount and explain what is miss
 
   try {
     apply(ctx, { stateDir })
-    assert.equal(tools.size, 6, 'the tools must not vanish when the service is optional')
+    assert.equal(tools.size, 8, 'the tools must not vanish when the service is optional')
 
     const started = await tools.get('superagent_start').execute({ goal: 'needs workers' }, { agent: { id: 'session-1' } })
     assert.match(started, /subagent service is unavailable/)
@@ -884,6 +887,81 @@ test('a second start for the same goal joins the active run and says so', async 
 
     release.forEach(resolve => resolve())
     await new Promise(resolve => setTimeout(resolve, 100))
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    await fsp.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+test('follow-up and answer say what they did and when it takes effect', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  const tools = new Map()
+  const workerRunning = gate()
+  let releaseWorker
+  const released = new Promise(resolve => { releaseWorker = resolve })
+  const subagents = {
+    async startActivation(spec) {
+      let text
+      if (spec.label === 'superagent-plan') {
+        text = JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] })
+      } else if (spec.label === 'superagent-aggregate') {
+        text = 'final report'
+      } else {
+        workerRunning.open()
+        await released
+        text = 'findings'
+      }
+      return {
+        childId: `child-${spec.label}`,
+        result: Promise.resolve({ output: [{ type: 'text', text }], stopReason: 'completed' }),
+        dispose: async () => {},
+      }
+    },
+  }
+  const ctx = {
+    tools: { register: tool => tools.set(tool.name, tool) },
+    get: name => (name === 'subagents' ? subagents : undefined),
+  }
+
+  try {
+    apply(ctx, { stateDir, notifyOnComplete: false })
+    const exec = { agent: { id: 'session-1' } }
+    const started = await tools.get('superagent_start').execute({ goal: 'write the memo' }, exec)
+    const runId = /run (\S+) —/.exec(started)?.[1]
+    assert.ok(runId, started)
+    await workerRunning.opened
+
+    const followed = await tools.get('superagent_followup').execute({
+      run_id: runId,
+      message: 'add a risk section',
+    }, exec)
+    assert.match(followed, new RegExp(`instruction f1 added to run ${runId}`))
+    assert.match(followed, /when it takes effect: the next worker spawn or the aggregation/)
+    assert.match(followed, /A child that is already running is not interrupted and does not see it/)
+
+    releaseWorker()
+    const finished = await tools.get('superagent_status').execute({ run_id: runId, wait_seconds: 10 }, exec)
+    assert.match(finished, /— completed/)
+    assert.match(finished, /instructions: 1 added during the run, applied at aggregator/)
+
+    // Nothing is waiting for a decision on this run, so an answer has no target.
+    const nothing = await tools.get('superagent_answer').execute({
+      run_id: runId,
+      attention_id: 'q1',
+      answer: 'eu',
+    }, exec)
+    assert.match(nothing, /^\[error\]/)
+    assert.match(nothing, /not waiting for an answer/)
+
+    const tooLate = await tools.get('superagent_followup').execute({ run_id: runId, message: 'one more' }, exec)
+    assert.match(tooLate, /^\[error\]/)
+    assert.match(tooLate, /not running and cannot take an instruction/)
   } finally {
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
