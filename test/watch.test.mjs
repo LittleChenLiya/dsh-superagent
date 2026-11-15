@@ -188,6 +188,26 @@ test('the footer prints the configured currency and keeps its total additive', (
   assert.match(partialFooter, /cost ¥0\.1016\+/)
 })
 
+test('a mixed-currency footer keeps each currency separate', () => {
+  const mixed = run({
+    status: 'completed',
+    finishedAt: '2026-11-14T08:00:40.000Z',
+    cost: {
+      totalMicros: null,
+      total: null,
+      currency: null,
+      mixedCurrency: true,
+      byCurrency: { CNY: 95_200, USD: 24_800 },
+      byModel: { 'dashscope/qwen-flash': 0.0952, 'haoduo/gpt-6.1-sol': 0.0248 },
+      unpriced: [],
+      complete: true,
+    },
+  })
+  const footer = renderFrame([mixed], { now: T0 + 60_000, width: 140, color: false }).split('\n').at(-1)
+  assert.match(footer, /cost ¥0\.0952 \+ \$0\.0248/)
+  assert.doesNotMatch(footer, /\$0\.1200/, 'no summed cross-currency figure')
+})
+
 test('watch --once prints one plain frame and never takes over the screen', async () => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-watch-'))
   const store = createStore(dir)

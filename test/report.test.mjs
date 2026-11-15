@@ -119,6 +119,26 @@ test('cost totals exclude runs the plugin could not price, and say so', () => {
   assert.match(html, /\$0\.0637/, 'the priced total is 0.02248 + 0.031 + 0.0018 + 0.00844')
 })
 
+test('a mixed-currency report shows one subtotal per currency', () => {
+  const mixed = run({
+    cost: {
+      currency: null,
+      totalMicros: null,
+      total: null,
+      mixedCurrency: true,
+      byCurrency: { CNY: 95_200, USD: 24_800 },
+      byModel: { 'dashscope/qwen-flash': 0.0952, 'haoduo/gpt-6.1-sol': 0.0248 },
+      unpriced: [],
+      complete: true,
+    },
+  })
+  const html = buildReport([mixed], { now: NOW, generatedAt: NOW })
+
+  assert.match(html, /¥0\.0952 \+ \$0\.0248/, 'the card and row keep each currency')
+  assert.match(html, /kept per currency/)
+  assert.doesNotMatch(html, /cost \$0\.1200/, 'no summed cross-currency figure')
+})
+
 test('phases are derived from subtask timestamps', () => {
   const phases = phasesOf(run(), NOW)
   assert.deepEqual(phases.map(phase => phase.kind), ['plan', 'work', 'merge'])

@@ -56,6 +56,39 @@ test('a terminal run is appended once, with its unit prices and amount', async t
   assert.equal(entry.models[0].amountMicros, 150_000)
 })
 
+test('a mixed-currency run is stored and summarised per currency', async t => {
+  const ledger = await ledgerIn(t)
+  const record = {
+    id: '20261115T020000-bbbb',
+    status: 'completed',
+    finishedAt: '2026-11-15T02:00:00.000Z',
+    usage: {
+      modelCalls: 2,
+      models: {
+        'dashscope/qwen-flash': { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, calls: 1 },
+        'haoduo/gpt-6.1-sol': { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, calls: 1 },
+      },
+    },
+    subtasks: [],
+  }
+  applyCost(record, {
+    'dashscope/qwen-flash': { input: 0.0952, output: 0, currency: 'CNY' },
+    'haoduo/gpt-6.1-sol': { input: 0.0248, output: 0, currency: 'USD' },
+  })
+
+  assert.equal(await ledger.record(record), true)
+  const entry = (await ledger.read())[0]
+  assert.deepEqual(entry.byCurrency, { CNY: 95_200, USD: 24_800 })
+  assert.equal(entry.totalMicros, null)
+  assert.equal(entry.currency, null)
+
+  const summary = await ledger.summarize()
+  assert.deepEqual(summary.byCurrency, { CNY: 95_200, USD: 24_800 })
+  assert.equal(summary.totalMicros, null)
+  assert.equal(summary.total, null)
+  assert.equal(summary.mixedCurrency, true)
+})
+
 test('the summary respects a time range and keeps integer totals', async t => {
   const ledger = await ledgerIn(t)
   await ledger.record(run({ id: 'day-1', finishedAt: '2026-11-14T01:00:00.000Z' }))

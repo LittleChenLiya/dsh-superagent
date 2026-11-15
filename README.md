@@ -528,6 +528,17 @@ number you see is always a lower bound:
 cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
 ```
 
+Amounts are kept per currency and never added across currencies. A run that
+used both a CNY route and a USD route prints one subtotal per currency:
+
+```
+cost: ¥0.0952 + $0.0248 (estimate; all models priced)
+```
+
+The same rule holds for `superagent_list`'s ledger line, the live `watch`
+footer, the exported `README.md`, and the HTML report — a mixed window gets one
+figure per currency instead of a single number whose unit would be undefined.
+
 ## Runtime control
 
 The plugin can drive a browser and, on Windows, the desktop. Both halves are

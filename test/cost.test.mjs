@@ -63,8 +63,59 @@ test('an unknown model is named as unpriced and never counted as zero', () => {
   assert.equal(formatMoney(cost), '¥0.4500')
 })
 
-test('an all-unpriced usage reports no total at all', () => {
+test('a single currency keeps the flat total and also reports its subtotal', () => {
   const cost = computeCost(usage({
+    'dashscope/qwen-flash': { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, calls: 1 },
+  }), { 'dashscope/qwen-flash': { input: 0.0952, output: 0, currency: 'CNY' } })
+
+  assert.equal(cost.currency, 'CNY')
+  assert.equal(cost.totalMicros, 95_200)
+  assert.equal(cost.total, 0.0952)
+  assert.equal(cost.mixedCurrency, false)
+  assert.deepEqual(cost.byCurrency, { CNY: 95_200 })
+  assert.equal(formatMoney(cost), '¥0.0952')
+})
+
+test('two currencies get separate subtotals and no cross-currency total', () => {
+  const cost = computeCost(usage({
+    'haoduo/gpt-6.1-sol': { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, calls: 1 },
+    'dashscope/qwen-flash': { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, calls: 1 },
+  }, 2), {
+    'haoduo/gpt-6.1-sol': { input: 0.0248, output: 0, currency: 'USD' },
+    'dashscope/qwen-flash': { input: 0.0952, output: 0, currency: 'CNY' },
+  })
+
+  // The measured run B2 spent ¥0.0952 + $0.0248. Adding those micro-units
+  // would claim a single amount whose unit does not exist.
+  assert.deepEqual(cost.byCurrency, { USD: 24_800, CNY: 95_200 })
+  assert.equal(cost.totalMicros, null)
+  assert.equal(cost.total, null)
+  assert.equal(cost.currency, null)
+  assert.equal(cost.mixedCurrency, true)
+  assert.equal(cost.byModel['haoduo/gpt-6.1-sol'], 0.0248)
+  assert.equal(cost.byModel['dashscope/qwen-flash'], 0.0952)
+  assert.equal(formatMoney(cost), '¥0.0952 + $0.0248')
+})
+
+test('a mixed-currency cost keeps its unpriced model unpriced', () => {
+  const cost = computeCost(usage({
+    'haoduo/gpt-6.1-sol': { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, calls: 1 },
+    'dashscope/qwen-flash': { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, calls: 1 },
+    'mystery/model': { inputTokens: 500, outputTokens: 100, cacheReadTokens: 0, calls: 1 },
+  }, 3), {
+    'haoduo/gpt-6.1-sol': { input: 0.0248, output: 0, currency: 'USD' },
+    'dashscope/qwen-flash': { input: 0.0952, output: 0, currency: 'CNY' },
+  })
+
+  assert.deepEqual(cost.unpriced, ['mystery/model'])
+  assert.equal(cost.complete, false)
+  assert.deepEqual(cost.byCurrency, { USD: 24_800, CNY: 95_200 })
+  assert.equal(cost.byModel['mystery/model'], undefined)
+  assert.equal(cost.records.find(record => record.model === 'mystery/model').amountMicros, null)
+  assert.equal(formatMoney(cost), '¥0.0952 + $0.0248', 'unpriced is not folded in as zero')
+})
+
+test('an all-unpriced usage reports no total at all', () => {  const cost = computeCost(usage({
     'mystery/model': { inputTokens: 500, outputTokens: 100, cacheReadTokens: 0, calls: 1 },
   }), {})
 

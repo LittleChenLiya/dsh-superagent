@@ -50,6 +50,17 @@ README is updated to the version being released.
   they apply unchanged on an attach connection; tests cover each one there.
 - `browser_type` masks the read-back value for a password field.
 
+### Fixed
+
+- **Costs are grouped by currency.** A run that used a USD-priced route and a
+  CNY-priced route used to add their micro-units and label the sum with the
+  first model's currency. It now keeps one subtotal per currency and prints
+  them separately (`¥0.0952 + $0.0248`) in the run line, `superagent_list`'s
+  ledger line, the `watch` footer, the exported `README.md`, and the HTML
+  report; a mixed window gets one cost curve per currency. Single-currency runs
+  keep the existing `¥0.3600` format, and an unpriced model stays `unpriced`
+  rather than becoming zero.
+
 ## 0.13.0 — 2026-11-15
 
 ### Added
