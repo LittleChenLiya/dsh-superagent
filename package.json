@@ -16,7 +16,8 @@
   "bin": {
     "dsh-superagent-watch": "bin/watch.js",
     "dsh-superagent-report": "bin/report.js",
-    "dsh-superagent-doctor": "bin/doctor.js"
+    "dsh-superagent-doctor": "bin/doctor.js",
+    "dsh-superagent-archive": "bin/archive.js"
   },
   "exports": {
     ".": "./lib/index.js",
@@ -47,6 +48,7 @@
     "bin/watch.js",
     "bin/report.js",
     "bin/doctor.js",
+    "bin/archive.js",
     "cordis.patch.yml",
     "CHANGELOG.md",
     "README.md"
@@ -57,7 +59,7 @@
     "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "scripts": {
-    "test": "node --test test/orchestrator.test.mjs test/direct-and-queue.test.mjs test/dialog.test.mjs test/workspace.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/usage.test.mjs test/cost.test.mjs test/ledger.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/notify.test.mjs test/templates.test.mjs test/doctor.test.mjs test/pack.test.mjs",
+    "test": "node --test test/orchestrator.test.mjs test/direct-and-queue.test.mjs test/dialog.test.mjs test/workspace.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/usage.test.mjs test/cost.test.mjs test/ledger.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/notify.test.mjs test/templates.test.mjs test/archive.test.mjs test/doctor.test.mjs test/pack.test.mjs",
     "check-pack": "node scripts/check-pack.mjs"
   },
   "keywords": [
