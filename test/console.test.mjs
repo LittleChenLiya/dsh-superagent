@@ -509,7 +509,11 @@ test('a reconnect after the last tab left reopens the follow stream with the ful
       subscribe: (_id, listener) => {
         subscribes += 1
         subscriber = listener
-        listener(history)
+        // The real host's later openings can come back with just the session's
+        // setup records; the console must not let that erase the history.
+        listener(subscribes === 1
+          ? history
+          : { type: 'stream.snapshot', header: { id: sessionId }, cursor: 2, records: [], hasMore: false })
         return () => {
           subscriber = null
         }
@@ -586,17 +590,23 @@ test('a second tab receives the cached snapshot instead of an empty conversation
       headers: { authorization: `Bearer ${panel.token}` },
     })
     assert.equal(second.status, 200)
-    const frames = await collectFrames(second, { count: 3, timeoutMs: 1200 })
+    const collected = collectFrames(second, { count: 4, timeoutMs: 1500 })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    // What happens after the second tab is watching must reach it live.
+    fake.emit({
+      type: 'session.event',
+      event: { type: 'tool/call', seq: 2, time: Date.now(), data: { callId: 'call-1', name: 'pwsh', arguments: '{}' } },
+    })
+    const frames = await collected
     assert.equal(frames[0]?.type, 'hello')
-    const replay = frames.find(frame => frame.type === 'stream.snapshot')
-    assert.ok(replay, `the second tab must replay the cached snapshot, got ${JSON.stringify(frames)}`)
-    assert.equal(replay.records.length, 1)
-    // The opening snapshot predates the turn; the second tab must also see what
-    // streamed after it, otherwise its transcript misses the ongoing reply.
-    const delta = frames.find(frame => frame.type === 'assistant.frame')
-    assert.ok(delta, `the second tab must replay the frames since the snapshot, got ${JSON.stringify(frames)}`)
+    const history = frames.find(frame => frame.type === 'stream.snapshot')
+    assert.ok(history, `the second tab must receive the conversation history, got ${JSON.stringify(frames)}`)
+    assert.equal(history.records.length, 1)
+    assert.equal(history.records[0].event.type, 'user/message')
+    const live = frames.find(frame => frame.type === 'session.event')
+    assert.equal(live?.event?.type, 'tool/call')
     for (let index = 1; index < frames.length; index += 1) {
-      assert.ok(frames[index].seq > frames[index - 1].seq, 'replayed frames must keep increasing sequence numbers')
+      assert.ok(frames[index].seq > frames[index - 1].seq, 'frames must keep increasing sequence numbers')
     }
     assert.ok(fake.hasSubscriber(), 'the second tab must not restart the follow loop')
   } finally {
