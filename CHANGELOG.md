@@ -165,6 +165,13 @@ added, and the package still ships one file per module from `lib/`.
   `memoryDigestEntries`, `memoryDigestChars`, `maxNotificationsPerHour`,
   `notifyRetries`, `notifyRetryDelayMs`, `autoResumeRounds`,
   `childModelFallback`, `workspaceIsolation`, `workspaceRoot`.
+- **Install self-check.** `dsh-superagent-doctor` reports, without installing or
+  editing anything, whether every imported file is in the `files` whitelist and
+  on disk, whether the installed copy matches its published tarball, whether the
+  profile registers the bundle row, and whether all six tools are registered.
+  Every failure prints the command that fixes it. `npm test` also asserts that
+  `npm pack --dry-run` ships every file reachable from the entry points
+  (`scripts/check-pack.mjs`), which is the check the 0.9.x tarball lacked.
 
 ### Changed
 
@@ -185,7 +192,7 @@ added, and the package still ships one file per module from `lib/`.
 - Memory, notification, and report-artifact writes are fail-open or retried, so
   a transient filesystem error cannot turn a finished run into a failed one; a
   report that is already written stays on disk and is listed in status.
-- Test suite: 157 tests, 0 failures; `npm test` and `node --test` discovery
+- Test suite: 168 tests, 0 failures; `npm test` and `node --test` discovery
   agree.
 
 ## 0.9.3 — 2026-11-14

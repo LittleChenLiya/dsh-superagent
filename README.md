@@ -589,8 +589,9 @@ _Top of a report rendered from 40 real host runs. The full page — timeline,
 swimlanes, call and cost curves, failure annotations, run table — is
 [docs/report-sample.html](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/report-sample.html)._
 
-Two operator utilities ship with the package. They read the same durable run
-files as the tools, need no session, and add no runtime dependency.
+Three operator utilities ship with the package, need no session, and add no
+runtime dependency. `watch` and `report` read the same durable run files as the
+tools; `doctor` inspects the install itself.
 
 Run them from the installed copy inside the profile:
 
@@ -601,10 +602,12 @@ node "$PKG/bin/report.js" --out report.html       # self-contained HTML page
 ```
 
 If the profile's linker created bin links (npm does), the same commands are
-`node_modules/.bin/dsh-superagent-watch` and `node_modules/.bin/dsh-superagent-report`.
+`node_modules/.bin/dsh-superagent-watch`, `node_modules/.bin/dsh-superagent-report`,
+and `node_modules/.bin/dsh-superagent-doctor`.
 
-Both accept `--state-dir <path>`; it defaults to `$DSH_HOME/state/superagent`.
-Pass it when the plugin config sets a custom `stateDir`.
+`watch` and `report` both accept `--state-dir <path>`; it defaults to
+`$DSH_HOME/state/superagent`. Pass it when the plugin config sets a custom
+`stateDir`.
 
 **`watch`** draws one line per run — id, status, calls used against the cap,
 elapsed time, what it is doing right now, and the parent session — in the
@@ -632,7 +635,26 @@ and
 [docs/e2e/transcripts/report-cli.log](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/e2e/transcripts/report-cli.log)
 records the command plus a zero-external-reference audit.
 
-Neither utility is the install path: the plugin is installed with
+**`doctor`** answers "it installed, why does nothing work?" before the host
+does. It reads only: no install, no mount, no edit to the profile. One block per
+check — imported files against the `files` whitelist, declared files against
+what is on disk, the installed copy against the published tarball for its
+version, the profile's bundle registration, and the six registered tools — each
+failure followed by the command that fixes it.
+
+```bash
+PKG="${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/@xiangyixie/dsh-superagent"
+node "$PKG/bin/doctor.js" --profile web
+node "$PKG/bin/doctor.js" --profile web --offline   # skip the registry hash check
+```
+
+Exit code is `0` when no check fails, `1` when one does, so it can gate a
+deploy. `npm test` runs the same pack guard as
+[`scripts/check-pack.mjs`](scripts/check-pack.mjs): every file reachable from
+the entry points must appear in `npm pack --dry-run`, which is the check the
+0.9.x release lacked.
+
+None of these utilities is the install path: the plugin is installed with
 `dsh plugin add`, never with `npm i -g`.
 
 ## Embedding over local HTTP
