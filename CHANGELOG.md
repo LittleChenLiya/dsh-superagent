@@ -150,6 +150,16 @@ README is updated to the version being released.
   "Progress, decisions, and artifacts", and its tool table matches the twelve
   registered tools.
 
+### Fixed
+
+- **Worker checkouts and deliverable verdicts.** A worker starts in its own
+  worktree and its prompt names the root that relative paths resolve against.
+  A deliverable found only in the base checkout is reported as `misplaced`, not
+  `missing` — one means the file was produced in the wrong root, the other means
+  it was not produced at all. The worktree pool is anchored to the session's
+  sandbox boundary, so a host started from another directory no longer creates
+  checkouts outside the workspace it guards.
+
 ### Notes
 
 - `README.md` gained a "Runtime control" section that lists the tools, the

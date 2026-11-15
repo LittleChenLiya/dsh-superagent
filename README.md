@@ -84,6 +84,19 @@ dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.0
 dsh --profile web --dump-config
 ```
 
+The desktop app's **Add plugin** dialog accepts the same three forms:
+
+| Dialog input | Value | What it does |
+| --- | --- | --- |
+| Package name | `@xiangyixie/dsh-superagent@0.14.0` | Installs from npm. Name the version (see below). |
+| GitHub repository | `https://github.com/LittleChenLiya/dsh-superagent` | Installs from the repository. Add `#v0.14.0` if you need a fixed release. |
+| Local directory | `file:/absolute/path/to/dsh-superagent` | Copies the checkout. Re-add after changing the source. |
+
+Upgrading is remove-then-add, not in-place: remove the old copy
+(`dsh plugin --profile web remove @xiangyixie/dsh-superagent`) before adding
+the new version. The same applies to any other plugin already in that profile —
+remove and re-add it rather than expecting the dialog or `add` to replace it.
+
 Name the version. Without one, pnpm's minimum release age policy skips releases
 published in the last few hours and installs the newest older one, so a bare
 `add` succeeds while giving you a version that is not current. If you would
@@ -102,15 +115,6 @@ it is byte-identical to what the registry serves:
 npm pack                                  # writes xiangyixie-dsh-superagent-<version>.tgz
 dsh plugin --profile web add ./xiangyixie-dsh-superagent-<version>.tgz
 ```
-
-If you are working on the plugin itself, install the checkout instead:
-
-```bash
-dsh plugin --profile web add file:/absolute/path/to/dsh-superagent
-```
-
-`file:` installs copy the package; re-run the `add` after changing the source,
-or the profile keeps running the old copy.
 
 Look for this block in the dump. If it is missing, the plugin is installed but
 not mounted, and no `superagent_*` tool will exist:
