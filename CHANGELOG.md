@@ -10,9 +10,11 @@ README is updated to the version being released.
 
 ## Unreleased
 
-A run became something the user can talk back to: instructions and decisions
-now reach a run that already exists instead of only through a second run. No
-runtime dependencies were added.
+Runs became something you can talk back to and shape: instructions and answers
+reach a run that already exists, planned subtasks can depend on each other,
+workers can be isolated in their own worktrees, and the panel and report show
+parallel structure instead of opaque rows. No runtime dependencies were added,
+and the package still ships one file per module from `lib/`.
 
 ### Added
 
@@ -60,6 +62,20 @@ runtime dependencies were added.
   the merge, keeps both branches, and is reported by status and the wake-up
   message. When isolation is unavailable the run continues in the shared
   directory and says so.
+- **Dependency-aware plans.** The planner may give a subtask an id and a
+  `dependsOn` list. The dependent waits (`waiting`) instead of starting, and its
+  prompt carries the finished dependency's report; independent subtasks still
+  run in parallel. A dependency on an undeclared task is `skipped` with the
+  reason, a failure skips everything downstream instead of reporting it as done,
+  and a cycle rejects the plan before any subtask starts. Status, notifications,
+  and reports distinguish waiting from running.
+- **Parallel structure in the panel and the report.** Runs alive at the same
+  moment share a numbered gutter in `watch`, so concurrent work is visible as a
+  group, and a waiting row leads with the run holding its slot and its queue
+  position. The HTML report lists each worker's retry chain and its share of the
+  run's wall clock next to the outcome.
+- **Documentation site.** `docs/site/` holds a quickstart, a comparison page,
+  and a single-file landing page; nothing in `lib/` changed for it.
 
 ### Changed
 

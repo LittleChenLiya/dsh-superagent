@@ -400,8 +400,12 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
   reply as the report unchanged — right for one self-contained lookup, edit,
   query, or short piece of writing, wrong for a goal with parts that can run in
   parallel. The default, `mode: "planned"`, does the full planner → workers →
-  merged report pipeline. Both modes produce the same run record, quota,
-  deadline, cancel, and usage accounting.
+  merged report pipeline. A planned subtask may declare `dependsOn` another
+  subtask: the dependent waits for it and gets its report in its prompt, while
+  independent subtasks still run in parallel. A dependency cycle rejects the
+  plan before any work starts, and a dependency on a task the plan never
+  declared is skipped with the reason. Both modes produce the same run record,
+  quota, deadline, cancel, and usage accounting.
   `queue: true` makes a start wait for a free slot when `maxActiveRuns` is in use
   instead of failing: it returns `status: "queued"` with `queue.position` /
   `queue.of`, starts automatically when an active run finishes, and fails after
@@ -454,11 +458,14 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
   question already answered, and a question retired by a later resume are all
   refused, and an answer whose text is another question's option names that
   other id instead of guessing.
-- `superagent_memory(action, key?, kind?, text?, scope?, limit?)` lists, adds,
-  corrects, or forgets notebook notes. `set` with an existing key supersedes it;
-  `forget` retracts it. `scope` addresses `rules` (project rules), `profile`
-  (user preferences), or the run scope. The tool is additive: the seven run
-  tools keep their arguments and output.
+- `superagent_memory(action, key?, kind?, text?, scope?, query?, tags?, limit?)`
+  lists, searches, adds, corrects, or forgets notebook notes. `set` with an
+  existing key supersedes it; `forget` retracts it. `scope` addresses `rules`
+  (project rules), `profile` (user preferences), or the run scope. `search`
+  ranks notes against `query` (the current goal works well) and/or exact `tags`,
+  so a relevant old note is found instead of only the newest ones; notes can
+  carry `tags` when set. The tool is additive: the seven run tools keep their
+  arguments and output.
 
 ## Progress, decisions, and artifacts
 
@@ -490,6 +497,13 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
   `<stateDir>/reports/<runId>.md` with an atomic rename, so the outcome has a
   path that can be opened or attached. The directory carries a `.gitignore` with
   `*`, and the path is recorded in `run.artifacts` and shown in status.
+- **Dependencies between subtasks.** The planner may give a subtask an id and a
+  `dependsOn` list; the dependent then waits (`waiting`) instead of starting,
+  and its prompt carries the finished dependency's report. Independent subtasks
+  still run in parallel. An unknown reference is `skipped` with the reason, a
+  failure skips everything downstream rather than reporting it as done, and a
+  cycle rejects the plan before any subtask starts. Status and the report show
+  waiting separately from running.
 
 ## Cross-run memory
 
@@ -545,6 +559,12 @@ file, and a truncated last line from a killed process is skipped. Two runs
 finishing at once cannot overwrite each other's notes; a line may land in a
 different order, and resolution is by timestamp, never by position.
 
+**Search.** `superagent_memory` with `action: "search"` ranks notes by `query`
+keywords and exact `tags` instead of returning the newest ones, and the planner
+digest uses the same ranking against the run's goal. A relevant note from weeks
+ago therefore still reaches the prompt when it matches, while unrelated notes do
+not crowd out the budget. Notes can carry `tags` when set.
+
 **Correction.** A newer note with the same key supersedes the old one. An
 explicit `forget` writes a tombstone. Notes older than `memoryMaxAgeDays` stop
 being injected and are dropped at the next compaction. Every note is shown with
@@ -590,7 +610,11 @@ Pass it when the plugin config sets a custom `stateDir`.
 elapsed time, what it is doing right now, and the parent session — in the
 alternate screen, and restores the cursor on Ctrl-C, SIGTERM, or a closed pipe.
 A status change repaints immediately; an idle panel reads one small file per
-second. `--once` prints a single plain frame, which is what
+second. Runs alive at the same moment share a numbered gutter, so parallel work
+is visible as a group instead of unrelated rows. A waiting row leads with the
+run holding its slot, then the queue position, because a narrow cell clips from
+the right and the holder is the actionable part. `--once` prints a single plain
+frame, which is what
 [docs/e2e/transcripts/watch-panel.log](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/e2e/transcripts/watch-panel.log)
 captures from 40 real runs.
 
@@ -598,7 +622,10 @@ captures from 40 real runs.
 no script, no font, no image, no network. It has a timeline with each run's
 start, end, and derived planning/work/merge phases; a swimlane chart whose lane
 count is the peak concurrency; cumulative model-call and cost curves; explicit
-failure, cancellation, and interruption annotations; and a run table.
+failure, cancellation, and interruption annotations; and a run table. Each
+worker's retry chain and its share of the run's wall clock are listed next to
+its outcome, so an expensive flaky subtask is visible instead of only its final
+failure.
 [docs/report-sample.html](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/report-sample.html)
 is the 40-run report from the host e2e — open it directly, nothing is fetched —
 and
@@ -792,7 +819,7 @@ appears to "hang" until the ignored-abort child returns.
 | What you see | What it means | What to do |
 | --- | --- | --- |
 | `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.10.0` and read the host log for `[dsh-superagent]` lines. |
-| `Cannot find module .../lib/control.js` (or `watch.js` / `report.js`) and the plugin never activates | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. The published package is not the cause: every version ships all eleven `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
+| `Cannot find module .../lib/control.js` (or `watch.js` / `report.js`) and the plugin never activates | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. The published package is not the cause: every version ships all twelve `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |
 | `[error] the subagent service is unavailable` | The profile has no `subagents` service, so the plugin has nothing to spawn. | Use a profile built on the base bundle (`web` or `headless` from the stock image), or add the subagent plugin to the profile. |
