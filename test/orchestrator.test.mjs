@@ -118,6 +118,7 @@ function orchestratorWith({
   }),
   sleep,
   toolInventory,
+  cwd,
 }) {
   const notifications = []
   const orchestrator = createOrchestrator({
@@ -128,6 +129,7 @@ function orchestratorWith({
     memory,
     ...(workspace ? { workspace } : {}),
     ...(toolInventory ? { toolInventory } : {}),
+    ...(cwd ? { cwd } : {}),
     notify: run => notifications.push(run.id),
     log: () => {},
     ...(sleep ? { sleep } : {}),
@@ -389,9 +391,10 @@ test('a subtask that keeps failing produces a partial run after retries', async 
   assert.match(finished.report, /ok from A/)
 })
 
-test('an unparsable plan degrades to a single subtask', async () => {
-  const { spawnChild } = makeSpawner(async spec => {
-    if (spec.label === 'superagent-plan') return completed('I would split this into: 1) research 2) write')
+test('an unusable planner reply fails the run instead of degrading to one worker', async () => {
+  const prose = 'I would split this into: 1) research 2) write'
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') return completed(prose)
     return completed('done')
   })
   const { orchestrator } = orchestratorWith({ spawner: { spawnChild } })
@@ -399,10 +402,301 @@ test('an unparsable plan degrades to a single subtask', async () => {
   const run = await orchestrator.start({ goal: 'vague goal', parentSessionId: parent.id, parent })
   const finished = await orchestrator.status(run.id, 10)
 
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.plan.mode, 'invalid')
+  assert.equal(finished.subtasks.length, 0)
+  assert.match(finished.error ?? '', /no worker was started/)
+  assert.match(finished.report ?? '', /No worker was started/)
+  // One repair round, then stop: no fallback "complete the goal" child.
+  const plannerCalls = calls.filter(call => call.label === 'superagent-plan')
+  assert.equal(plannerCalls.length, 2)
+  assert.match(plannerCalls[1].prompt, /^## Repair round/m)
+  assert.ok(plannerCalls[1].prompt.includes('I would split this into'))
+  assert.equal(calls.filter(call => call.label !== 'superagent-plan').length, 0)
+})
+
+test('a planner that never returns is stopped instead of burning the run budget', async () => {
+  let disposed = 0
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') return new Promise(() => {})
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner: {
+      spawnChild: async spec => {
+        const handle = await spawnChild(spec)
+        return { ...handle, dispose: async () => { disposed++; await handle.dispose() } }
+      },
+    },
+    config: { plannerTimeoutSeconds: 0.05 },
+  })
+
+  const run = await orchestrator.start({ goal: 'slow planner', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 30)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.plan.mode, 'invalid')
+  assert.match(finished.error ?? '', /no worker was started/)
+  assert.equal(calls.filter(call => call.label === 'superagent-plan').length, 2)
+  assert.equal(calls.filter(call => call.label !== 'superagent-plan').length, 0)
+  assert.ok(disposed >= 1)
+})
+
+test('the planner gets the configured preset and model route while workers keep the default', async () => {
+  const specs = []
+  const { spawnChild } = makeSpawner(async spec => {
+    specs.push(spec)
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    }
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner: { spawnChild },
+    config: { plannerPreset: 'planner', plannerProvider: 'strong', plannerModel: 'big-model' },
+  })
+
+  const run = await orchestrator.start({ goal: 'plan without tools', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
   assert.equal(finished.status, 'completed')
-  assert.equal(finished.plan.mode, 'degraded')
+  const planner = specs.find(spec => spec.label === 'superagent-plan')
+  const worker = specs.find(spec => spec.label !== 'superagent-plan')
+  assert.equal(planner.preset, 'planner')
+  assert.equal(planner.provider, 'strong')
+  assert.equal(planner.model, 'big-model')
+  assert.equal(worker.preset, undefined)
+  assert.ok(!worker.provider)
+  assert.ok(!worker.model)
+})
+
+test('a planner that spends its call budget is stopped and reported as unplannable', async () => {
+  let disposed = 0
+  let reads = 0
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') return new Promise(() => {})
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner: {
+      spawnChild: async spec => {
+        const handle = await spawnChild(spec)
+        return { ...handle, dispose: async () => { disposed++; await handle.dispose() } }
+      },
+    },
+    readUsage: async () => {
+      reads++
+      return { inputTokens: 30, outputTokens: 10, totalTokens: 40, modelCalls: 5 + reads }
+    },
+    config: { plannerMaxModelCalls: 4 },
+  })
+
+  const run = await orchestrator.start({ goal: 'loop forever', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 30)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.plan.mode, 'invalid')
+  assert.match(finished.plan.invalidReason ?? '', /model-call budget/)
+  assert.match(finished.error ?? '', /model-call budget/)
+  assert.equal(finished.subtasks.length, 0)
+  // The first attempt exhausts the shared budget, so no repair round is started.
+  assert.equal(finished.steps.planner.attempts.length, 1)
+  assert.equal(finished.steps.planner.attempts[0].outcome, 'planner-budget')
+  assert.ok(disposed >= 1)
+})
+
+test('each planner attempt records its elapsed time, calls, and tokens', async () => {
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    }
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild } })
+
+  const run = await orchestrator.start({ goal: 'record planner cost', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  const [attempt] = finished.steps.planner.attempts
+  assert.equal(attempt.attempt, 1)
+  assert.equal(attempt.outcome, 'planned')
+  assert.equal(attempt.modelCalls, 1)
+  assert.equal(attempt.tokens, 12)
+  assert.equal(typeof attempt.ms, 'number')
+  assert.ok(attempt.ms >= 0)
+})
+
+test('a plan wrapped in an envelope is not mistaken for an unusable reply', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ plan: { subtasks: [{ title: 'A', prompt: 'do A' }] } }))
+    }
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild } })
+
+  const run = await orchestrator.start({ goal: 'enveloped plan', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.plan.mode, 'planned')
   assert.equal(finished.subtasks.length, 1)
-  assert.equal(finished.subtasks[0].prompt, 'vague goal')
+  assert.equal(calls.filter(call => call.label === 'superagent-plan').length, 1)
+})
+
+test('a reply truncated after a complete subtasks array is salvaged', async () => {
+  const reply = '{"subtasks":[{"title":"A","prompt":"do A"}],"needsInput":[{"question":"trunc'
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') return completed(reply)
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild } })
+
+  const run = await orchestrator.start({ goal: 'truncated plan', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.plan.mode, 'planned')
+  assert.equal(finished.plan.repaired, 'salvaged-subtasks')
+  assert.equal(finished.subtasks.length, 1)
+})
+
+async function workspaceDir() {
+  return fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-deliverable-'))
+}
+
+function planWith(deliverable) {
+  return JSON.stringify({
+    subtasks: [{
+      id: 'w1',
+      title: 'Produce the artifact',
+      prompt: 'write it',
+      requires: [],
+      ...(deliverable ? { deliverables: [deliverable] } : {}),
+    }],
+  })
+}
+
+test('a declared deliverable that was never written fails the subtask', async () => {
+  const cwd = await workspaceDir()
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(planWith({ path: 'reports/summary.md', kind: 'text' }))
+    }
+    return completed('I wrote the report.')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, cwd })
+
+  const run = await orchestrator.start({ goal: 'write a report', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.subtasks[0].status, 'failed')
+  assert.equal(finished.subtasks[0].deliverableCheck.failed, 1)
+  assert.match(finished.subtasks[0].error ?? '', /is missing/)
+})
+
+test('a 228-byte placeholder PNG is failed, not completed', async () => {
+  const cwd = await workspaceDir()
+  const fake = Buffer.alloc(228, 0)
+  fake.writeUInt32BE(0x89504e47, 0, 'be')
+  fake.writeUInt32BE(0x0d0a1a0a, 4, 'be')
+  fake.write('IHDR', 12, 'latin1')
+  fake.writeUInt32BE(1, 16, 'be')
+  fake.writeUInt32BE(1, 20, 'be')
+  await fsp.writeFile(path.join(cwd, 'shot.png'), fake)
+
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(planWith({ path: 'shot.png', kind: 'image' }))
+    }
+    return completed('Screenshot taken.')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, cwd })
+
+  const run = await orchestrator.start({ goal: 'take a screenshot', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.subtasks[0].status, 'failed')
+  assert.equal(finished.subtasks[0].deliverables[0].code, 'placeholder')
+  assert.match(finished.subtasks[0].error ?? '', /1x1 placeholder/)
+})
+
+test('an image deliverable that is text fails on type', async () => {
+  const cwd = await workspaceDir()
+  await fsp.writeFile(path.join(cwd, 'shot.png'), 'not an image at all')
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(planWith({ path: 'shot.png', kind: 'image' }))
+    }
+    return completed('Screenshot taken.')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, cwd })
+
+  const run = await orchestrator.start({ goal: 'take a screenshot', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.subtasks[0].status, 'failed')
+  assert.equal(finished.subtasks[0].deliverables[0].code, 'type')
+  assert.match(finished.subtasks[0].error ?? '', /not a PNG/)
+})
+
+test('a real text deliverable is verified and the subtask completes', async () => {
+  const cwd = await workspaceDir()
+  await fsp.writeFile(path.join(cwd, 'summary.md'), '# Summary\n\nAll three items are done.\n')
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(planWith({ path: 'summary.md', kind: 'report' }))
+    }
+    return completed('Wrote summary.md.')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, cwd })
+
+  const run = await orchestrator.start({ goal: 'write a summary', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.subtasks[0].status, 'completed')
+  assert.equal(finished.subtasks[0].deliverableCheck.verified, 1)
+  assert.equal(finished.subtasks[0].deliverables[0].status, 'verified')
+})
+
+test('a subtask that declares no deliverable still completes without writing files', async () => {
+  const cwd = await workspaceDir()
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') return completed(planWith(null))
+    return completed('Findings only, no files.')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, cwd })
+
+  const run = await orchestrator.start({ goal: 'inspect the repo', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.subtasks[0].status, 'completed')
+  assert.equal(finished.subtasks[0].deliverableCheck, null)
+})
+
+test('an unjudgeable deliverable kind is unverified, never completed', async () => {
+  const cwd = await workspaceDir()
+  await fsp.writeFile(path.join(cwd, 'blob.bin'), Buffer.from([1, 2, 3, 4]))
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(planWith({ path: 'blob.bin', kind: 'custom-binary' }))
+    }
+    return completed('Wrote blob.bin.')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, cwd })
+
+  const run = await orchestrator.start({ goal: 'produce a binary', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.subtasks[0].status, 'unverified')
+  assert.equal(finished.subtasks[0].deliverableCheck.unverified, 1)
+  assert.match(finished.subtasks[0].unverifiedReason ?? '', /cannot check a deliverable of kind/)
 })
 
 test('cancel stops the run and keeps partial state on disk', async () => {
