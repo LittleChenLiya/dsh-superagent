@@ -183,6 +183,9 @@ test('the console page and every API refuse a request without the token', async 
     const wrong = await request(panel, 'GET', '/api/console/state', undefined, 'not-the-token')
     assert.equal(wrong.status, 401)
 
+    const tools = await request(panel, 'GET', '/api/console/tools', undefined, null)
+    assert.equal(tools.status, 401)
+
     const pageWithoutToken = await fetch(`${panel.url}/`)
     assert.equal(pageWithoutToken.status, 401)
     const page = await fetch(`${panel.url}/?token=${encodeURIComponent(panel.token)}`)
@@ -478,6 +481,39 @@ test('a second tab receives the cached snapshot instead of an empty conversation
     assert.ok(fake.hasSubscriber(), 'the second tab must not restart the follow loop')
   } finally {
     await first?.body?.cancel().catch(() => {})
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('the tools route reports the mounted tools the host returns, never a fixed list', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    const fake = fakeHost({ sessionId: 'session-tools' })
+    fake.host.listTools = async () => [
+      { name: 'read', description: 'read a file' },
+      { name: 'browser_open', description: 'open a page' },
+      { name: 'desktop_click', description: 'click at a point' },
+    ]
+    panel = await startConsole(state, fake.host)
+    const before = await request(panel, 'GET', '/api/console/tools')
+    assert.equal(before.status, 200)
+    assert.equal(before.json.data.reason, 'no-session')
+
+    await request(panel, 'POST', '/api/console/bootstrap', {})
+    const after = await request(panel, 'GET', '/api/console/tools')
+    assert.equal(after.status, 200)
+    assert.deepEqual(after.json.data.tools.map(tool => tool.name), ['read', 'browser_open', 'desktop_click'])
+
+    // A host that cannot enumerate tools says so; the page must not invent names.
+    await panel.stop()
+    panel = await startConsole(state, fakeHost({ sessionId: 'session-no-tools' }).host)
+    await request(panel, 'POST', '/api/console/bootstrap', {})
+    const unsupported = await request(panel, 'GET', '/api/console/tools')
+    assert.equal(unsupported.json.data.tools, null)
+    assert.match(unsupported.json.data.reason, /enumerate/)
+  } finally {
     if (panel) await panel.stop()
     await fsp.rm(base, { recursive: true, force: true })
   }

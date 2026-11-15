@@ -170,6 +170,12 @@
   .tool summary { color: var(--faint); cursor: pointer; list-style: none; }
   .tool summary::-webkit-details-marker { display: none; }
   .tool pre { max-width: 520px; max-height: 180px; overflow: auto; margin: 6px 0 0; font: 11px/1.5 var(--mono); white-space: pre-wrap; }
+  .tool .targs {
+    max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--faint); font-size: 10.5px;
+  }
+  .tool.err { border-color: #5a2c2c; }
+  .tool .err-mark { color: var(--red); }
 
   .empty { max-width: 560px; margin: 7vh auto 0; text-align: center; }
   .empty .orb {
@@ -237,6 +243,23 @@
     background: #172129; border: 1px solid var(--line); color: var(--muted);
     font: 11px var(--mono);
   }
+  .tools:empty { display: none; }
+  .tools-panel { border-bottom: 1px solid var(--line-soft); padding: 10px 14px; }
+  .tools-panel summary {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    color: var(--muted); font-size: 12px; list-style: none;
+  }
+  .tools-panel summary::-webkit-details-marker { display: none; }
+  .tools-panel summary::before { content: "▸"; color: var(--faint); font-size: 10px; }
+  .tools-panel[open] summary::before { content: "▾"; }
+  .tools-panel .count { margin-left: auto; }
+  .tools-note { margin: 7px 0 0; color: var(--faint); font-size: 11px; line-height: 1.6; }
+  .tool-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; max-height: 132px; overflow-y: auto; }
+  .tool-name {
+    padding: 2px 6px; border-radius: 6px; border: 1px solid var(--line);
+    background: #121a20; color: var(--muted); font: 10.5px var(--mono);
+  }
+  .tool-name.on { border-color: #2c5a48; color: #9fe0c2; }
   .run-list { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
   .run-empty { padding: 26px 18px; color: var(--faint); text-align: center; font-size: 12px; line-height: 1.7; }
   .run-empty .line { display: block; width: 30px; height: 1px; margin: 12px auto; background: var(--line); }
@@ -432,6 +455,11 @@
         <div><h2>派生的 runs</h2><p>这个对话启动的子任务</p></div>
         <span id="runCount" class="count">0</span>
       </div>
+      <details id="toolsPanel" class="tools-panel" open>
+        <summary><span>这个会话挂载的工具</span><span id="toolCount" class="count">—</span></summary>
+        <p id="toolNote" class="tools-note">加载中…</p>
+        <div id="toolList" class="tool-list"></div>
+      </details>
       <div id="runs" class="run-list"></div>
     </aside>
   </main>
@@ -661,13 +689,15 @@
       bubble.append(details)
     }
 
+    // Always attach the container: tool calls usually arrive after the message
+    // element is built, and a detached container would swallow every chip.
     const tools = el('div', 'tools')
     if (Array.isArray(message.tools) && message.tools.length > 0) {
       for (const tool of message.tools) {
         tools.append(toolChip(tool))
       }
-      bubble.append(tools)
     }
+    bubble.append(tools)
 
     const meta = el('div', 'meta')
     const when = message.at ? timeLabel(message.at) : ''
@@ -685,15 +715,32 @@
     return article
   }
 
+  function summarizeArgs(value) {
+    if (value === undefined || value === null) return ''
+    let text
+    if (typeof value === 'string') text = value
+    else {
+      try { text = JSON.stringify(value) } catch { text = String(value) }
+    }
+    return text.replace(/\s+/g, ' ').trim().slice(0, 110)
+  }
+
   function toolChip(tool) {
     const chip = el('span', `tool ${tool.status || 'running'}`.trim())
     chip.dataset.callId = tool.callId || ''
     chip.append(el('span', 'tdot'))
     chip.append(el('span', '', tool.name || 'tool'))
+    const args = summarizeArgs(tool.arguments)
+    if (args) {
+      const code = el('code', 'targs', args)
+      code.title = typeof tool.arguments === 'string' ? tool.arguments.slice(0, 2000) : args
+      chip.append(code)
+    }
+    const failed = tool.status === 'err'
     if (tool.done) {
       const details = el('details')
-      details.append(el('summary', '', '结果'))
-      details.append(el('pre', '', tool.result || ''))
+      details.append(el('summary', failed ? 'err-mark' : '', failed ? '失败原因' : '结果'))
+      details.append(el('pre', '', tool.result || (failed ? '工具没有返回错误文本。' : '')))
       chip.append(details)
     }
     return chip
@@ -1127,6 +1174,7 @@
             callId: call.id || call.callId,
             name: call.name || 'tool',
             status: 'ok',
+            arguments: call.arguments,
           })
         }
         STATE.currentAssistant = null
@@ -1269,6 +1317,54 @@
     STATE.runs = Array.isArray(data.runs) ? data.runs : []
     renderRuns()
     if (STATE.messages.length === 0) renderEmpty()
+    loadTools()
+  }
+
+  const toolCountEl = $('toolCount')
+  const toolNoteEl = $('toolNote')
+  const toolListEl = $('toolList')
+
+  /** Group a tool by the capability it would give the conversation. */
+  function toolGroup(name) {
+    if (name.startsWith('browser_')) return 'browser'
+    if (name.startsWith('desktop_')) return 'desktop'
+    if (/3d|blender|mesh|gltf|glb|fbx|stl|obj|step|cad/i.test(name)) return '3d'
+    return 'other'
+  }
+
+  function renderTools(data) {
+    toolListEl.textContent = ''
+    toolCountEl.textContent = '—'
+    const tools = Array.isArray(data?.tools) ? data.tools : null
+    if (!tools) {
+      if (data == null) toolNoteEl.textContent = '加载中…'
+      else if (data.reason === 'no-session') toolNoteEl.textContent = '还没有会话。'
+      else toolNoteEl.textContent = `读不到工具清单：${data.reason || '宿主未返回'}`
+      return
+    }
+    toolCountEl.textContent = String(tools.length)
+    const counts = { browser: 0, desktop: 0, '3d': 0 }
+    for (const tool of tools) {
+      const group = toolGroup(tool.name)
+      if (group in counts) counts[group] += 1
+      const chip = el('span', `tool-name${group === 'browser' || group === 'desktop' ? ' on' : ''}`, tool.name)
+      if (tool.description) chip.title = tool.description
+      toolListEl.append(chip)
+    }
+    toolNoteEl.textContent = [
+      `浏览器控制：${counts.browser ? `${counts.browser} 个 browser_* 工具` : '未挂载'}`,
+      `桌面控制：${counts.desktop ? `${counts.desktop} 个 desktop_* 工具` : '未挂载'}`,
+      `3D 建模：${counts['3d'] ? `${counts['3d']} 个相关工具` : '未发现专用工具'}`,
+    ].join(' · ')
+  }
+
+  async function loadTools() {
+    if (!STATE.sessionId || STATE.mode !== 'chat') return
+    try {
+      renderTools(await api(`/api/console/tools?sessionId=${encodeURIComponent(STATE.sessionId)}`))
+    } catch (error) {
+      renderTools({ reason: messageOf(error) })
+    }
   }
 
   async function bootstrap() {
@@ -1395,6 +1491,8 @@
       STATE.runs = []
       renderRuns()
       renderEmpty()
+      renderTools(null)
+      loadTools()
       pushToast('已开始新对话。', 'ok')
       connectEvents()
     } catch (error) {

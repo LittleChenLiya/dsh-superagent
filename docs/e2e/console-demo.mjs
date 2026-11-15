@@ -206,10 +206,14 @@ record({
     message: {
       content: [
         { type: 'text', text: '我先拉一遍 run 列表和成本，再把失败重试单独看一眼。' },
-        { type: 'tool-call', id: 'call-1', name: 'superagent_list', arguments: { limit: 20 } },
+        { type: 'tool-call', id: 'call-1', name: 'superagent_list', arguments: '{"limit":20}' },
       ],
     },
   },
+})
+record({
+  type: 'tool/result',
+  data: { callId: 'call-1', message: { content: [{ type: 'text', text: '7 runs · 5 completed · 1 partial · 1 cancelled' }] } },
 })
 record({ type: 'turn/end', data: {} })
 record({
@@ -229,6 +233,22 @@ record({
   },
 })
 record({ type: 'turn/end', data: {} })
+
+/** Real tool names registered by this plugin; the demo host reports these. */
+const PLUGIN_TOOLS = [
+  'superagent_start', 'superagent_status', 'superagent_list', 'superagent_cancel',
+  'superagent_resume', 'superagent_followup', 'superagent_inject', 'superagent_answer',
+  'superagent_memory', 'superagent_template', 'superagent_audit',
+]
+/**
+ * Optional preview knob for the capability panel, e.g.
+ * CONSOLE_DEMO_TOOLS=browser_open,browser_click,desktop_windows.
+ * Nothing is mounted here; it only lets the page draw a populated panel.
+ */
+const extraTools = String(process.env.CONSOLE_DEMO_TOOLS ?? '')
+  .split(',')
+  .map(name => name.trim())
+  .filter(Boolean)
 
 let listener = null
 let closed = false
@@ -258,6 +278,8 @@ const host = {
       effect: result?.effect?.detail ?? null,
     }
   },
+  listTools: async () => [...PLUGIN_TOOLS, ...extraTools]
+    .map(name => ({ name, description: null })),
   subscribe(sessionId, next) {
     listener = next
     emit({ type: 'stream.snapshot', header: { id: sessionId }, cursor: records.length, records })
