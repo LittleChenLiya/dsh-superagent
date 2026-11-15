@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 Doc-only releases: npm serves the README from the tarball, so a README edit is
 invisible on the package page until something is published. When the edit
@@ -42,6 +42,18 @@ README is updated to the version being released.
   and time window, and exports the matching events as one JSONL or CSV file.
 - `createAuditor(...).attachGuard(fn)` is the seam for a separate path/command
   guard: it can tighten a decision, never relax one.
+- `superagent_inject(run_id, message, subtask_index?, wait_seconds?)` steers a
+  running child instead of waiting for the next prompt. It calls the host's
+  documented live channel (`subagents.sendMessage`, which lands in the same
+  `Agent` inbox that `steer`/`inject` expose), so the message is claimed at the
+  child's next pre-step and becomes part of its next model request. A child
+  that had already decided to stop runs one more turn to read it. Receipts
+  record `latencyMs` from acceptance to the claim, or a `missedReason` when the
+  child is cancelled, disposed, or finishes before another boundary. On a real
+  `dsh@0.2.2-rc.1` host the measured delay was 2986 ms with a 4 s child step
+  and 6978 ms with an 8 s step, i.e. bounded by the remainder of the running
+  step, not by the plugin. A host without that channel degrades to the followup
+  queue and the reply labels it as such.
 
 ## 0.11.0 — 2026-11-15
 
@@ -75,15 +87,13 @@ still ships one file per module from `lib/`.
   one with the same key, and the planner digest now ranks notes against the run's
   goal instead of only taking the newest ones.
 - `superagent_followup(run_id, message)` appends an instruction to an active
-  run. There is no host interface for appending a message to a running child
-  activation, so delivery is boundary-scoped and the reply says so: the next
-  worker spawn or the aggregation carries it, whichever comes first, and
-  subtasks already running or finished keep their results. Each instruction
-  records `appliedAt` / `appliedAtStage`, or `missedAt` with a reason when the
-  run settled before another boundary ran. A paused run keeps the instruction
-  for its next resume; a completed run refuses it. A run owned by another
-  process is refused rather than written, because that owner's next save would
-  erase it.
+  run. It stays next-prompt by design: the next worker spawn or the aggregation
+  carries it, whichever comes first, and subtasks already running or finished
+  keep their results. Each instruction records `appliedAt` / `appliedAtStage`,
+  or `missedAt` with a reason when the run settled before another boundary ran.
+  A paused run keeps the instruction for its next resume; a completed run
+  refuses it. A run owned by another process is refused rather than written,
+  because that owner's next save would erase it.
 - `superagent_answer(run_id, attention_id?, answer, wait_seconds?)` answers one
   structured attention item. Attention items now carry stable ids (`q1`, `q2`, …)
   from a per-run counter; the answer is recorded on that item and the run

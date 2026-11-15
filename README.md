@@ -17,7 +17,7 @@ prints the cost once you give it a price for the route.
 planner and an aggregator on top. It is also the wrong tool for work that must
 finish inside a single turn, for a step that needs human approval in the middle,
 for anything that needs nested delegation (child depth is capped at 1), and for
-anyone who wants an in-host panel — this adds no UI, only ten tools. Children run
+anyone who wants an in-host panel — this adds no UI, only eleven tools. Children run
 with the host's credentials and filesystem; this is not a sandbox.
 
 **Install and run.** Node `>= 24.9.0`, a tool-calling route, and that route's key
@@ -36,7 +36,7 @@ The reply ends `completed` with the merged report, or with
 covers the path from an empty machine, including the reason not to install npm's
 unrelated `dsh` package by name.
 
-It adds no in-host UI and patches no host code: the ten `superagent_*` tools are
+It adds no in-host UI and patches no host code: the eleven `superagent_*` tools are
 the surface, plus four optional operator utilities (a terminal panel, an HTML
 report, an install doctor, and a run archive) that read the same run files.
 
@@ -272,7 +272,7 @@ subagent start request has no tool filter, and its own `subagent` tool rejects a
 supported way to narrow a child's tools; without a dedicated preset, workers
 inherit the session's tools. The `superagent_*` tools still exist in their tool
 list, but the run tools (`superagent_start`, `superagent_resume`, `superagent_cancel`,
-`superagent_followup`, `superagent_answer`) refuse to run from a worker session;
+`superagent_followup`, `superagent_inject`, `superagent_answer`) refuse to run from a worker session;
 only the top-level agent manages runs.
 
 ### Per-worker workspace isolation
@@ -500,18 +500,33 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
   holds an answer that never reached a prompt — then resume reopens it, because
   otherwise that decision would be stranded.
 - `superagent_followup(run_id, message)` adds an instruction to a run that is
-  already executing, instead of starting a second run. It is **not** a live
-  channel to the children: the host has no way to append a message to a running
-  child activation, so the instruction is queued on the run and the next prompt
-  built for it carries it — the next worker spawn or the aggregation, whichever
-  comes first. Subtasks that are already running or finished keep their results
-  and never see it. The reply names that boundary, and status shows the same
-  thing; an instruction that arrives after the last boundary is recorded as
+  already executing, instead of starting a second run. This tool is explicitly
+  next-prompt: the instruction is queued on the run and the next prompt built for
+  it carries it — the next worker spawn or the aggregation, whichever comes
+  first. Subtasks that are already running or finished keep their results and
+  never see it. The reply names that boundary, and status shows the same thing;
+  an instruction that arrives after the last boundary is recorded as
   `never took effect` rather than looking delivered. A paused run
   (`interrupted`, `failed`, `partial`, `cancelled`) keeps the instruction for
   the next round, which starts when it is resumed; a `completed` run refuses it.
   A run owned by another process is refused, because that owner's next save
-  would overwrite it. Only the session that started the run may add to it.
+  would overwrite it. Only the session that started the run may add to it. Use
+  `superagent_inject` when the running workers must read the instruction now.
+- `superagent_inject(run_id, message, subtask_index?, wait_seconds?)` delivers
+  one instruction into the workers that are running right now. It uses the
+  host's live steering channel (`subagents.sendMessage`, the same inbox the
+  agent loop drains at its next pre-step), so the message is part of the child's
+  next model request. It does not interrupt a model call already in flight: the
+  delay is the remainder of the step that is running (that model response plus
+  its tool batch). A live child that had already decided to stop runs one more
+  turn to read it, so an uncancelled child consumes it. The reply reports the
+  measured delay from acceptance to the child's next request, and marks a
+  message as `missed` — never as delivered — when the child is cancelled,
+  disposed, or finishes before another boundary. Worst case measured on a real
+  `dsh@0.2.2-rc.1` host: **6978 ms** with an 8 s child step and **2986 ms** with
+  a 4 s step, i.e. the bound tracks the step, not the plugin. With a host that
+  exposes no live channel, the tool degrades to the followup queue and says so
+  in the reply; it never calls that live.
 - `superagent_answer(run_id, attention_id?, answer, wait_seconds?)` answers one
   structured attention item so that run continues with the decision. An active
   run applies the answer at its next boundary; a finished run is reopened and
@@ -528,7 +543,7 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
   (project rules), `profile` (user preferences), or the run scope. `search`
   ranks notes against `query` (the current goal works well) and/or exact `tags`,
   so a relevant old note is found instead of only the newest ones; notes can
-  carry `tags` when set. The tool is additive: the nine other tools keep their
+  carry `tags` when set. The tool is additive: the ten other tools keep their
   arguments and output.
 - `superagent_template(action, id?, params?, template?, limit?)` lists, shows,
   expands, saves, or deletes a workflow template: a fixed goal skeleton with
@@ -539,10 +554,26 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
   widens what a run may do. Built-in ids are read-only; custom ones live under
   the template directory in the state directory, and a failure there is logged
   without disabling the run tools.
+- `superagent_inject(run_id, message, subtask_index?, wait_seconds?)` delivers
+  one instruction into the workers that are running right now. It uses the
+  host's live steering channel (`subagents.sendMessage`, the same inbox the
+  agent loop drains at its next pre-step), so the message is part of the child's
+  next model request. It does not interrupt a model call already in flight: the
+  delay is the remainder of the step that is running (that model response plus
+  its tool batch). A live child that had already decided to stop runs one more
+  turn to read it, so an uncancelled child consumes it. The reply reports the
+  measured delay from acceptance to the child's next request, and marks a
+  message as `missed` — never as delivered — when the child is cancelled,
+  disposed, or finishes before another boundary. Worst case measured on a real
+  `dsh@0.2.2-rc.1` host: **6978 ms** with an 8 s child step and **2986 ms** with
+  a 4 s step, i.e. the bound tracks the step, not the plugin. With a host that
+  exposes no live channel, the tool degrades to the followup queue and says so
+  in the reply; it never calls that live.
 - `superagent_audit(run_id?, subtask_id?, kind?, decision?, result?, target?,
   since?, until?, limit?, order?, format?, out_path?)` reads the audit trail, or
   exports the matching events as one JSONL or CSV file. See
   [Permissions and audit](#permissions-and-audit).
+
 
 ## Progress, decisions, and artifacts
 
@@ -565,11 +596,14 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
   archived (not deleted) when a resume retires it, which is what lets a late
   answer be refused with `expired at <time>` instead of being attached to
   whatever is open now.
-- **Instructions during a run.** `superagent_followup` appends to the same log.
-  The dialog is boundary-delivered by design: running children cannot be reached,
-  so each instruction records `appliedAt` / `appliedAtStage` when a prompt first
-  carries it, or `missedAt` when the run settled first. Status prints both, so
-  "delivered" and "waiting" are never confused.
+- **Instructions during a run.** Two boundaries, kept distinct.
+  `superagent_followup` appends to the dialog log and is carried by the next
+  prompt built for the run: each instruction records `appliedAt` /
+  `appliedAtStage` when a prompt first carries it, or `missedAt` when the run
+  settled first. `superagent_inject` instead steers a live child's inbox and is
+  claimed at its next pre-step; its receipt records `latencyMs` measured from
+  acceptance to that claim, or `missedReason` when the child left first. Status
+  prints both, so a queued instruction and a live one are never confused.
 - **Report file.** A terminal run writes its report to
   `<stateDir>/reports/<runId>.md` with an atomic rename, so the outcome has a
   path that can be opened or attached. The directory carries a `.gitignore` with
@@ -788,7 +822,7 @@ records the command plus a zero-external-reference audit.
 does. It reads only: no install, no mount, no edit to the profile. One block per
 check — imported files against the `files` whitelist, declared files against
 what is on disk, the installed copy against the published tarball for its
-version, the profile's bundle registration, and the ten registered tools — each
+version, the profile's bundle registration, and the eleven registered tools — each
 failure followed by the command that fixes it.
 
 ```bash
