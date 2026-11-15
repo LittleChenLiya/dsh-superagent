@@ -1,0 +1,20 @@
+﻿node : [e2e-stub-llm] registered route e2e-stub
+所在位置 行:15 字符: 4118
++ ... ib\bin.js'; node $dsh --profile headless "[e2e:inject] live injection ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([e2e-stub-llm] registered route e2e-stub:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[dsh-superagent] registered 9 tools; state C:\Users\18375\Documents\Trae-CN\temp_20261115_22\.dsh-inject-home\state\sup
+eragent
+INJECT-E2E: tool wall 7034ms
+instruction i1 accepted by 1/1 running worker(s) on run 20261115T033045-c4e2 — aggregating
+  subtask 1 (child a10b732c-43ac-423f-859d-e9df3364650b): seen at the child's next step after 6978 ms via subagents.sendMessage
+delivery: steering is read at the child's next step boundary, just before its next model request. It does not interrupt a model call already in flight, so the worst case is the remainder of that step (its model response plus tool batch).
+measured on this run: worst 6978 ms over 1 claimed message(s); the poll resolution is 25 ms.
+
+run 20261115T033045-c4e2 — aggregating
+goal: Compare two sorting strategies on the stub fixture and report one number for each.
+plan: planned; subtasks 2/2 completed; max 2 in parallel; 2 attempt(s) each
+[dsh-superagent] run 20261115T033045-c4e2 finished but its session session-33df7508-7310-453a-81ba-690173273918 is no l
+onger live

@@ -137,6 +137,22 @@ class StubAdapter {
         yield { type: 'finish', reason: { kind: 'tool-calls' } }
         return
       }
+      if (process.env.E2E_INJECT === '1' && title === 'Alpha' && !toolResults.length) {
+        // Hold the step open long enough for the parent to inject mid-flight,
+        // then take one tool step so a second pre-step really exists.
+        await delay(Number(process.env.E2E_INJECT_STEP_MS ?? 4000))
+        yield* toolChunks('call-child-list', 'superagent_list', {})
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (process.env.E2E_INJECT === '1' && title === 'Alpha') {
+        const seen = /INJECT-MARKER/.test(text) ? 'yes' : 'no'
+        yield* textChunks(`ALPHA-REPORT: measured 3 operations.\nINJECT-SEEN: ${seen}`)
+        yield usageChunk(400, 100, 64)
+        yield { type: 'finish', reason: { kind: 'stop' } }
+        return
+      }
       await delay(workerDelay(title))
       const attempt = process.env.E2E_CHILD_ATTEMPT === '1' && title === 'Alpha'
       yield* textChunks(attempt ? `CHILD-ATTEMPT-RESULT: ${lastToolText(messages)}` : workerText(text))
@@ -256,6 +272,36 @@ class StubAdapter {
         return
       }
       yield* textChunks(`notify sequence finished: ${lastToolText(messages)}`)
+      yield usageChunk(20, 5)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (kind === 'inject') {
+      if (step === 0) {
+        yield* toolChunks('call-start-inject', 'superagent_start', {
+          goal: GOAL, max_subtasks: 2, max_parallel: 2, wait_seconds: 0,
+        })
+        yield usageChunk(60, 12)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step === 1) {
+        const runId = runIdFrom(lastToolText(messages))
+        await delay(Number(process.env.E2E_INJECT_DELAY_MS ?? 1200))
+        globalThis.__injectIssued = Date.now()
+        yield* toolChunks('call-inject', 'superagent_inject', {
+          run_id: runId,
+          message: 'INJECT-MARKER: cap Alpha at one measured number.',
+          wait_seconds: 15,
+        })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      const wall = globalThis.__injectIssued ? Date.now() - globalThis.__injectIssued : -1
+      yield* textChunks(
+        `INJECT-E2E: tool wall ${wall}ms\n${lastToolText(messages).split('\n').slice(0, 8).join('\n')}`,
+      )
       yield usageChunk(20, 5)
       yield { type: 'finish', reason: { kind: 'stop' } }
       return
