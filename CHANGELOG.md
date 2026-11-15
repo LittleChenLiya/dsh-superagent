@@ -8,6 +8,40 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.14.4 — 2026-11-16
+
+This release gives a goal a life longer than one run, and fixes a check that
+could not see a file that was already on disk.
+
+### Added
+
+- **Long-term goals.** `superagent_goal` takes one goal and splits it into
+  ordered phases; each phase is still an ordinary run, so planning, parallel
+  subtasks, budgets, attention items, reports and resume keep working the way
+  they already did. Phases run in dependency order, retry within a budget, and
+  survive a host restart: a phase already finished is not planned again, and a
+  goal picks up from where the disk says it stopped. When a phase runs out of
+  budget, keeps failing without progress, or its worker and the machine check
+  disagree about the result, the goal stops and asks the person to decide —
+  `superagent_status` shows both sides of the evidence and the options (accept,
+  retry, stop) instead of guessing. The design is in `docs/LONG-GOAL.md`, now
+  shipped with the package.
+- The plugin mounts thirteen tools; the new one is listed in the README.
+
+### Fixed
+
+- **A deliverable that is on disk is no longer reported as missing.** In goal
+  mode the deliverable check resolved declared paths against the directory the
+  host was launched from, while the worker wrote into the goal's workspace. The
+  file existed, the check looked elsewhere, and the subtask failed with
+  `declared deliverable missing` — then retried with a fresh worker until the
+  attempts ran out. The check now uses the same base directory as the goal's
+  own acceptance step. Relative and absolute declarations, either separator,
+  and a different case on Windows all name the same file, and an absolute path
+  outside the workspace is still refused. A write that becomes visible only
+  just after the check starts is re-read inside a bounded 150 ms window; a file
+  that is never written still fails as missing.
+
 ## 0.14.3 — 2026-11-15
 
 The release is about the three things a run could not answer for itself: which

@@ -18,14 +18,14 @@
 
 三种安装方式，`dsh plugin add` 和桌面应用的 **Add plugin** 对话框都接受：
 
-- **npm 包名**：`@xiangyixie/dsh-superagent@0.14.3`，从 npm 安装。请写明版本号，原因见下文。
-- **GitHub 仓库**：`https://github.com/LittleChenLiya/dsh-superagent`，从仓库安装。需要固定版本时加 `#v0.14.3`。
+- **npm 包名**：`@xiangyixie/dsh-superagent@0.14.4`，从 npm 安装。请写明版本号，原因见下文。
+- **GitHub 仓库**：`https://github.com/LittleChenLiya/dsh-superagent`，从仓库安装。需要固定版本时加 `#v0.14.4`。
 - **本地目录**：`file:/absolute/path/to/dsh-superagent`，拷贝本地 checkout。改过源码之后要重新 add 一次。
 
 最常用的一条命令：
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.3
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.4
 ```
 
 ### 从插件索引安装（可选）
@@ -85,7 +85,7 @@ npx @deepseek-ai/dsh@0.2.2-rc.1 --version
 
 ```bash
 # 1. install the plugin into a profile (web, headless, ... whatever you run)
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.3
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.4
 
 # 2. confirm the bundle row exists in the merged config
 dsh --profile web --dump-config
@@ -95,8 +95,8 @@ dsh --profile web --dump-config
 
 | 对话框中的栏目 | 填写值 | 作用 |
 | --- | --- | --- |
-| 包名（Package name） | `@xiangyixie/dsh-superagent@0.14.3` | 从 npm 安装。要写明版本号（见上文）。 |
-| GitHub 仓库（GitHub repository） | `https://github.com/LittleChenLiya/dsh-superagent` | 从仓库安装。需要固定版本时加 `#v0.14.3`。 |
+| 包名（Package name） | `@xiangyixie/dsh-superagent@0.14.4` | 从 npm 安装。要写明版本号（见上文）。 |
+| GitHub 仓库（GitHub repository） | `https://github.com/LittleChenLiya/dsh-superagent` | 从仓库安装。需要固定版本时加 `#v0.14.4`。 |
 | 本地目录（Local directory） | `file:/absolute/path/to/dsh-superagent` | 拷贝本地 checkout。改过源码后需重新 add 一次。 |
 
 安装的三种形式和升级方式见上文的[安装](#安装)一节。查一下 dump 里有没有下面这一段。如果没有，说明插件装了但没挂载，任何 `superagent_*` 工具都不会存在：
@@ -1149,7 +1149,7 @@ SHA-256）。`--format html` 把同样的内容写成一个自包含
 
 | 你看到的 | 含义 | 怎么办 |
 | --- | --- | --- |
-| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.3` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
+| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.4` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
 | `Cannot find module .../lib/control.js`（或 `watch.js` / `report.js` / `wizard.js`），或宿主日志里的 `[dsh-superagent] dsh-superagent failed to load because a file it imports is missing: ...` | 那个 profile 里的副本不完整——被中断的 `add` 会留下残缺的解包结果。0.14.3 起的入口会直接点名缺哪个文件。已发布的包不是原因：每个版本都带全部三十四个 `lib/` 文件。 | 删掉 profile 的 `node_modules` 下该插件的目录（带 scope 的 `@xiangyixie/dsh-superagent`，或旧 tarball 安装留下的无 scope 的 `dsh-superagent`），再用同一条 `add` 命令重装，并带上版本号。不要手工拷贝文件进去。 |
 | `[error] the model provider rejected the API key` | 启动宿主的那个进程里缺 key 环境变量。 | 导出 `DEEPSEEK_API_KEY`（默认路由）或你那条路由声明的变量，然后重启 `dsh`。 |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | profile 的路由在环境里没有凭据。 | 设置该路由对应的环境变量并重启。错误行里写了路由名，以它为准，不要照本文。 |
