@@ -15,7 +15,8 @@
   "main": "lib/index.js",
   "bin": {
     "dsh-superagent-watch": "bin/watch.js",
-    "dsh-superagent-report": "bin/report.js"
+    "dsh-superagent-report": "bin/report.js",
+    "dsh-superagent-sync": "bin/sync.js"
   },
   "exports": {
     ".": "./lib/index.js",
@@ -38,8 +39,10 @@
     "lib/lock.js",
     "lib/watch.js",
     "lib/report.js",
+    "lib/sync.js",
     "bin/watch.js",
     "bin/report.js",
+    "bin/sync.js",
     "cordis.patch.yml",
     "CHANGELOG.md",
     "README.md"
@@ -50,7 +53,7 @@
     "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "scripts": {
-    "test": "node --test test/orchestrator.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/usage.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/notify.test.mjs"
+    "test": "node --test test/orchestrator.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/usage.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/notify.test.mjs test/sync.test.mjs"
   },
   "keywords": [
     "dsh",

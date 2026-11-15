@@ -440,7 +440,7 @@ _Top of a report rendered from 40 real host runs. The full page — timeline,
 swimlanes, call and cost curves, failure annotations, run table — is
 [docs/report-sample.html](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/report-sample.html)._
 
-Two operator utilities ship with the package. They read the same durable run
+Two read-only operator utilities ship with the package. They read the same durable run
 files as the tools, need no session, and add no runtime dependency.
 
 Run them from the installed copy inside the profile:
@@ -478,6 +478,81 @@ records the command plus a zero-external-reference audit.
 
 Neither utility is the install path: the plugin is installed with
 `dsh plugin add`, never with `npm i -g`.
+
+## Syncing one state directory across machines
+
+There is no server and no account. The state directory is a directory of files,
+so a git remote can carry it: `dsh-superagent-sync` makes that directory a
+repository, keeps the machine-local files out, and gives you `pull`, `push`, and
+`status`. `git` is the only requirement — the command has no dependency of its
+own.
+
+```bash
+PKG="${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/@xiangyixie/dsh-superagent"
+node "$PKG/bin/sync.js" init git@github.com:me/superagent-state.git   # once per machine
+node "$PKG/bin/sync.js" push                                          # after runs finish
+node "$PKG/bin/sync.js" pull                                          # before starting work
+node "$PKG/bin/sync.js" status
+```
+
+Or `node_modules/.bin/dsh-superagent-sync`. All four accept `--state-dir
+<path>` (default `$DSH_HOME/state/superagent`), and `--json` prints the raw
+result.
+
+**`init <remote>`** creates the repository, writes a managed block into
+`.gitignore`, sets `origin`, and makes the first commit. Re-running it refreshes
+the remote URL and that block without touching entries you added yourself. A
+machine with no `~/.gitconfig` gets a repository-local commit identity, so the
+first commit cannot fail on that alone.
+
+**`pull`** fetches `origin`, then merges. Uncommitted local changes are stashed
+first (`stash@{0}`, subject `dsh-sync auto-stash …`) and reapplied after the
+merge, so a pull never silently overwrites an edit. A conflict stops the merge
+with both sides still in the files: the paths are printed, nothing is chosen,
+and the stash is left unapplied with a line saying so.
+
+**`push`** commits everything and pushes the current branch, setting its
+upstream on the first push. A rejected push is reported, not forced and not
+auto-merged: run `pull`, resolve what it reports, then push again.
+
+**`status`** prints ahead/behind counts, uncommitted files, stashes, and the
+conflicted paths waiting for a decision.
+
+### What never leaves the machine
+
+`.owner`, `control.json` (a bearer token), `notifications.json`, `*.lock`,
+`*.cancel`, `*.corrupt-*`, `*.tmp`, `*.log`, and `.env` / key material. The
+notebook is the one exception worth knowing: `memory/.gitignore` normally holds
+a bare `*`, which would keep every note local, so `init` rewrites that one
+default to allow `<scope>.jsonl`. A file you customized is left alone.
+
+### When it conflicts
+
+Run records are one file per run (`runs/<runId>.json`), so ordinary concurrent
+work on two machines — different runs — never touches the same path. A conflict
+needs one of these:
+
+- the same run id written on both machines: a resume or cancel on the second
+  machine before pulling the first machine's state;
+- the same memory scope appended to on both machines (`memory/<scope>.jsonl` is
+  append-only, and two different tails collide);
+- the same `reports/<runId>.md` regenerated with different content;
+- `.gitignore` edited by hand on both machines.
+
+While a run file still contains conflict markers it is not valid JSON, and the
+plugin quarantines it at mount as `<runId>.json.corrupt-<ts>`. Resolve it before
+starting the host: keep the side you want, `git add` it, `git commit`.
+
+### Why this is approximate
+
+- Two machines writing at the same moment can conflict. The merge stops and you
+  decide; nothing is merged behind your back.
+- There is no live sync and no cross-machine lock. A machine sees another
+  machine's run only after `pull`, and `push` does not know what the other
+  machine is doing right now. Run one host per state directory at a time.
+- Keys are not distributed: each machine still needs its own model credential.
+- `keepRuns` pruning deletes files, and a deletion reaches the other machine
+  only on the next `pull`.
 
 ## Embedding over local HTTP
 
@@ -660,7 +735,7 @@ appears to "hang" until the ignored-abort child returns.
 | What you see | What it means | What to do |
 | --- | --- | --- |
 | `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.10.0` and read the host log for `[dsh-superagent]` lines. |
-| `Cannot find module .../lib/control.js` (or `watch.js` / `report.js`) and the plugin never activates | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. The published package is not the cause: every version ships all eleven `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
+| `Cannot find module .../lib/control.js` (or `watch.js` / `report.js`) and the plugin never activates | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. The published package is not the cause: every version ships all twelve `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |
 | `[error] the subagent service is unavailable` | The profile has no `subagents` service, so the plugin has nothing to spawn. | Use a profile built on the base bundle (`web` or `headless` from the stock image), or add the subagent plugin to the profile. |
@@ -706,6 +781,10 @@ A run that fails *after* it was accepted keeps its report and shows `error:`
   it cannot be exposed remotely, and there is no MCP server. A local process
   running as the same user can read the token, which is the same trust boundary
   as writing run files.
+- Cross-machine sync is a git repository, not a service: it is offline-first,
+  conflict-stop rather than conflict-free, has no realtime channel, and does
+  not move credentials between machines. Two hosts actively writing one state
+  directory on two machines still need a `pull` between them.
 
 ## Naming
 
