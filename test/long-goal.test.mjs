@@ -1,0 +1,507 @@
+import assert from 'node:assert/strict'
+import fsp from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import test from 'node:test'
+import { createLongGoalManager, formatStatus, parsePhasePlan } from '../lib/long-goal.js'
+
+function fakeOrchestrator() {
+  let seq = 0
+  const runs = new Map()
+  const calls = { start: [], resume: [], cancel: [], answer: [] }
+  const api = {
+    runs,
+    calls,
+    async start(args) {
+      const run = {
+        id: `r-${++seq}`,
+        goal: args.goal,
+        status: 'running',
+        parentSessionId: args.parentSessionId,
+        mode: args.mode,
+        origin: args.origin ?? null,
+        goalMode: args.goalMode
+          ? { ...args.goalMode, rounds: [], achieved: false, stop: null }
+          : null,
+        attention: { items: [] },
+        usage: { modelCalls: 1, totalTokens: 100 },
+        report: '',
+        error: null,
+        budgetStop: null,
+      }
+      runs.set(run.id, run)
+      calls.start.push(args)
+      return run
+    },
+    async status(runId) {
+      const run = runs.get(runId)
+      if (!run) throw new Error(`unknown run ${runId}`)
+      return run
+    },
+    async resume(runId) {
+      const run = runs.get(runId)
+      if (!run) throw new Error(`unknown run ${runId}`)
+      if (run.ownerLost) throw new Error('session is not open in this host process')
+      run.status = 'running'
+      calls.resume.push(runId)
+      return run
+    },
+    async cancel(runId) {
+      const run = runs.get(runId)
+      if (run) run.status = 'cancelled'
+      calls.cancel.push(runId)
+      return run
+    },
+    async answer(runId, attentionId, text) {
+      const run = runs.get(runId)
+      const item = run?.attention?.items?.find(entry => entry.id === attentionId)
+      if (!item) throw new Error(`unknown attention ${attentionId}`)
+      item.answer = text
+      run.status = 'running'
+      calls.answer.push({ runId, attentionId, text })
+      return run
+    },
+  }
+  api.complete = (run, report = 'done') => {
+    run.status = 'completed'
+    run.report = report
+    if (run.goalMode) {
+      run.goalMode.achieved = true
+      run.goalMode.rounds.push({ round: 1, changed: true, failed: [] })
+    }
+    return run
+  }
+  api.fail = (run, { error = 'goal mode stopped after 3 round(s)', stop = 'rounds', failed = [], changed = true } = {}) => {
+    run.status = 'failed'
+    run.error = error
+    if (run.goalMode) {
+      run.goalMode.achieved = false
+      run.goalMode.stop = { reason: stop, detail: error }
+      run.goalMode.rounds.push({ round: 1, changed, failed })
+    }
+    return run
+  }
+  return api
+}
+
+const agent = { id: 'session-1' }
+
+async function tempRoot(label) {
+  return fsp.mkdtemp(path.join(os.tmpdir(), `dsh-long-goal-${label}-`))
+}
+
+function phase(id, extra = {}) {
+  return {
+    id,
+    title: `Title ${id}`,
+    objective: `Objective ${id}`,
+    acceptance: [`${id} is done`],
+    ...extra,
+  }
+}
+
+async function manager(root, orchestrator, overrides = {}) {
+  return createLongGoalManager({
+    root,
+    orchestrator,
+    resolveOwner: async () => agent,
+    notify: async () => ({ delivered: true }),
+    autoTick: false,
+    now: overrides.now ?? (() => Date.now()),
+    ...overrides,
+  })
+}
+
+test('parses a fenced phase plan and rejects nonsense', () => {
+  const ok = parsePhasePlan('```json\n{"phases":[{"id":"p1","objective":"x"}]}\n```')
+  assert.equal(ok.phases.length, 1)
+  assert.equal(ok.error, null)
+  assert.equal(parsePhasePlan('I cannot help').phases, null)
+  assert.match(parsePhasePlan('{"phases":[]}').error, /empty/)
+  assert.match(parsePhasePlan('{"phases":"nope"}').error, /no "phases" array/)
+})
+
+test('rejects an invalid phase graph before creating anything', async () => {
+  const root = await tempRoot('invalid')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  await assert.rejects(
+    () => goals.create({
+      goal: 'g',
+      parentSessionId: agent.id,
+      phases: [phase('p1', { dependsOn: ['missing'] })],
+    }),
+    /unknown phase "missing"/,
+  )
+  await assert.rejects(
+    () => goals.create({
+      goal: 'g',
+      parentSessionId: agent.id,
+      phases: [phase('p1', { dependsOn: ['p2'] }), phase('p2', { dependsOn: ['p1'] })],
+    }),
+    /cycle/,
+  )
+  assert.deepEqual(await goals.list(), [])
+})
+
+test('runs phases in dependency order and completes the goal', async () => {
+  const root = await tempRoot('order')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'ship 1.0',
+    parentSessionId: agent.id,
+    phases: [phase('p1'), phase('p2', { dependsOn: ['p1'] })],
+  })
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  assert.equal(state.goal.phases[0].status, 'running')
+  assert.equal(state.goal.phases[1].status, 'pending')
+  assert.equal(orchestrator.calls.start.length, 1)
+
+  orchestrator.complete(orchestrator.runs.get(state.goal.phases[0].currentRunId), 'p1 report')
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.phases[0].status, 'completed')
+  assert.equal(state.goal.phases[1].status, 'running')
+  // The second phase prompt carries the first phase's result.
+  assert.match(orchestrator.calls.start.at(-1).goal, /p1 report/)
+
+  orchestrator.complete(orchestrator.runs.get(state.goal.phases[1].currentRunId), 'p2 report')
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'completed')
+  assert.equal(state.goal.phases[1].status, 'completed')
+})
+
+test('starts independent phases in parallel under the cap', async () => {
+  const root = await tempRoot('parallel')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  await goals.create({
+    goal: 'parallel',
+    parentSessionId: agent.id,
+    maxParallelPhases: 2,
+    phases: [phase('p1'), phase('p2'), phase('p3')],
+  })
+  await goals.tick()
+  const started = orchestrator.calls.start.length
+  assert.equal(started, 2)
+  assert.deepEqual(
+    [...orchestrator.runs.values()].map(run => run.goalMode !== null),
+    [true, true],
+  )
+})
+
+test('a restarted host resumes the interrupted phase, not the finished one', async () => {
+  const root = await tempRoot('restart')
+  const orchestrator = fakeOrchestrator()
+  const first = await manager(root, orchestrator)
+  const goal = await first.create({
+    goal: 'restart',
+    parentSessionId: agent.id,
+    phases: [phase('p1'), phase('p2')],
+  })
+  await first.tick()
+  let state = await first.status(goal.id)
+  const p1RunId = state.goal.phases[0].currentRunId
+  orchestrator.complete(orchestrator.runs.get(p1RunId), 'p1 done')
+  await first.tick()
+  state = await first.status(goal.id)
+  const p2RunId = state.goal.phases[1].currentRunId
+  assert.ok(p2RunId)
+  const p2Attempts = state.goal.phases[1].attempts
+
+  // The host dies mid-phase: recovery marks the run interrupted.
+  orchestrator.runs.get(p2RunId).status = 'interrupted'
+  const second = await manager(root, orchestrator)
+  await second.init()
+  state = await second.status(goal.id)
+  assert.equal(state.goal.phases[0].status, 'completed')
+  assert.equal(state.goal.phases[1].status, 'ready')
+  assert.equal(state.goal.phases[1].resumeRunId, p2RunId)
+
+  await second.tick()
+  state = await second.status(goal.id)
+  assert.equal(state.goal.phases[1].status, 'running')
+  assert.deepEqual(orchestrator.calls.resume, [p2RunId])
+  assert.equal(state.goal.phases[1].currentRunId, p2RunId)
+  // A resume is not a new attempt and does not start phase 1 again.
+  assert.equal(state.goal.phases[1].attempts, p2Attempts)
+  assert.equal(state.goal.phases[1].runIds.length, p2Attempts)
+  assert.equal(orchestrator.calls.start.filter(args => /phase 1 of 2/.test(args.goal)).length, 1)
+})
+
+test('retries a failed phase with a new run, then asks a person after the last attempt', async () => {
+  const root = await tempRoot('retry')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'retry',
+    parentSessionId: agent.id,
+    maxAttemptsPerPhase: 2,
+    phases: [phase('p1')],
+  })
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  const firstRun = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+  orchestrator.fail(firstRun, { failed: [{ id: 'a1', text: 'p1 is done', why: 'file missing' }] })
+  await goals.tick()
+  state = await goals.status(goal.id)
+  // The retry starts in the same tick: a ready phase is dispatched right away.
+  assert.equal(state.goal.phases[0].status, 'running')
+  assert.equal(state.goal.phases[0].attempts, 2)
+  assert.match(orchestrator.calls.start.at(-1).goal, /Still failing/)
+
+  const secondRun = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+  orchestrator.fail(secondRun, { failed: [{ id: 'a1', text: 'p1 is done', why: 'file missing' }] })
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.phases[0].status, 'failed')
+  assert.equal(state.goal.status, 'needs-decision')
+  const decision = state.goal.decisions.at(-1)
+  assert.equal(decision.kind, 'phase-exhausted')
+  assert.deepEqual(decision.options, ['retry', 'skip', 'stop'])
+
+  await goals.answer(goal.id, decision.id, 'retry', { note: 'write the file first', parent: agent })
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.phases[0].status, 'ready')
+  assert.equal(state.goal.phases[0].attempts, 0)
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.phases[0].status, 'running')
+  assert.match(orchestrator.calls.start.at(-1).goal, /write the file first/)
+})
+
+test('a negative worker claim does not complete a phase whose machine check passed', async () => {
+  const root = await tempRoot('conflict-claim')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'verify 1.0',
+    parentSessionId: agent.id,
+    phases: [phase('p1')],
+  })
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  const run = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+  run.status = 'completed'
+  run.report = 'Verification remains blocked: both required commands exited 1 (spawn EPERM).'
+  run.goalMode.achieved = true
+  run.goalMode.rounds.push({
+    round: 1,
+    changed: true,
+    failed: [],
+    checks: [{
+      id: 'a1',
+      text: 'node --test exits 0',
+      source: 'command',
+      command: 'node --test test/long-goal.test.mjs',
+      ok: true,
+      exitCode: 0,
+      detail: 'exit 0 in 408 ms',
+    }],
+  })
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.phases[0].status, 'needs-decision')
+  assert.equal(state.goal.status, 'needs-decision')
+  const decision = state.goal.decisions.at(-1)
+  assert.equal(decision.kind, 'verification-conflict')
+  assert.deepEqual(decision.options, ['accept', 'retry', 'stop'])
+  // Both sides are recorded verbatim: the worker's words and the machine command.
+  assert.match(decision.source.worker[0], /Verification remains blocked/)
+  assert.equal(decision.source.machine[0].command, 'node --test test/long-goal.test.mjs')
+  assert.equal(decision.source.machine[0].exitCode, 0)
+
+  await goals.answer(goal.id, decision.id, 'accept', { note: 'the exit code wins here' })
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.phases[0].status, 'completed')
+  assert.equal(state.goal.phases[0].lastOutcome.acceptedByUser, true)
+  assert.equal(state.goal.status, 'completed')
+})
+
+test('a success claim does not complete a phase whose machine check failed', async () => {
+  const root = await tempRoot('conflict-machine')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'verify 1.0',
+    parentSessionId: agent.id,
+    maxAttemptsPerPhase: 2,
+    phases: [phase('p1')],
+  })
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  const run = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+  run.status = 'completed'
+  run.report = 'All checks passed: node --test and check-pack both succeeded.'
+  // The acceptance model was fooled by the claim; the exit code still says 1.
+  run.goalMode.achieved = true
+  run.goalMode.rounds.push({
+    round: 1,
+    changed: true,
+    failed: [{ id: 'a1', text: 'node --test exits 0', why: 'exit 1' }],
+    checks: [{
+      id: 'a1',
+      text: 'node --test exits 0',
+      source: 'command',
+      command: 'node --test test/long-goal.test.mjs',
+      ok: false,
+      exitCode: 1,
+      detail: 'exit 1 in 300 ms',
+    }],
+  })
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.notEqual(state.goal.phases[0].status, 'completed')
+  assert.notEqual(state.goal.status, 'completed')
+  // The machine failure wins: the phase retries with a new team.
+  assert.equal(state.goal.phases[0].status, 'running')
+  assert.equal(orchestrator.calls.start.length, 2)
+  assert.match(orchestrator.calls.start.at(-1).goal, /Still failing/)
+  assert.equal(state.goal.phases[0].lastOutcome.conflict, 'machine-failed')
+})
+
+test('a whole-goal budget stops dispatch before the next phase starts', async () => {
+  const root = await tempRoot('budget')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator, {
+    config: { phaseBudget: { maxModelCalls: 5, maxTokens: 5000 } },
+  })
+  const goal = await goals.create({
+    goal: 'budget',
+    parentSessionId: agent.id,
+    budget: { maxModelCalls: 1 },
+    phases: [phase('p1'), phase('p2', { dependsOn: ['p1'] })],
+  })
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  assert.equal(state.goal.phases[0].status, 'running')
+  orchestrator.complete(orchestrator.runs.get(state.goal.phases[0].currentRunId))
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'budget-stopped')
+  assert.equal(state.goal.phases[1].status, 'pending')
+  assert.equal(orchestrator.calls.start.length, 1)
+  assert.match(state.goal.stoppedReason.detail, /model-call budget/)
+})
+
+test('a worker question is answered through the run attention path', async () => {
+  const root = await tempRoot('question')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'question',
+    parentSessionId: agent.id,
+    phases: [phase('p1')],
+  })
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  const run = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+  run.status = 'failed'
+  run.attention.items.push({ id: 'q1', question: 'Which directory should the report go in?', answer: null })
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'needs-decision')
+  assert.equal(state.goal.phases[0].status, 'needs-decision')
+  const decision = state.goal.decisions.at(-1)
+  assert.equal(decision.kind, 'worker-question')
+  assert.deepEqual(decision.options, ['answer', 'stop'])
+  assert.match(formatStatus(state.goal, state.runs), /Needs your decision/)
+
+  await goals.answer(goal.id, decision.id, 'answer', { note: 'docs/report.md', parent: agent })
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'running')
+  assert.equal(state.goal.phases[0].status, 'running')
+  assert.deepEqual(orchestrator.calls.answer, [
+    { runId: run.id, attentionId: 'q1', text: 'docs/report.md' },
+  ])
+})
+
+test('a goal that makes no progress opens a stall decision instead of retrying', async () => {
+  let clock = Date.parse('2026-11-16T00:00:00.000Z')
+  const root = await tempRoot('stall')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator, { now: () => clock })
+  const goal = await goals.create({
+    goal: 'stall',
+    parentSessionId: agent.id,
+    stallAfterMinutes: 1,
+    maxWallClockMinutes: 600,
+    phases: [phase('p1')],
+  })
+  await goals.tick()
+  clock += 2 * 60 * 1000
+  await goals.tick()
+  const state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'needs-decision')
+  const decision = state.goal.decisions.at(-1)
+  assert.equal(decision.kind, 'stalled')
+  assert.deepEqual(decision.options, ['continue', 'stop'])
+})
+
+test('auto-decomposes a natural-language goal, then starts the first phase', async () => {
+  const root = await tempRoot('decompose')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({ goal: 'make a 1.0 roadmap', parentSessionId: agent.id })
+  assert.equal(goal.status, 'planning')
+
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  assert.ok(state.goal.decomposeRunId)
+  const plannerRun = orchestrator.runs.get(state.goal.decomposeRunId)
+  orchestrator.complete(plannerRun, '```json\n{"phases":[{"id":"p1","title":"scope","objective":"write the scope",'
+    + '"acceptance":["scope exists"]},{"id":"p2","title":"ship","objective":"implement it","dependsOn":["p1"],'
+    + '"acceptance":["tests pass"]}]}\n```')
+
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'running')
+  assert.equal(state.goal.phases.length, 2)
+  assert.equal(state.goal.phases[0].status, 'pending')
+
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.phases[0].status, 'running')
+  assert.match(orchestrator.calls.start.at(-1).goal, /phase 1 of 2/)
+})
+
+test('an unusable phase plan fails after one repair instead of looping', async () => {
+  const root = await tempRoot('decompose-fail')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({ goal: 'unplannable', parentSessionId: agent.id })
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  orchestrator.complete(orchestrator.runs.get(state.goal.decomposeRunId), 'not json at all')
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.decomposeAttempts, 2)
+  orchestrator.complete(orchestrator.runs.get(state.goal.decomposeRunId), 'still not json')
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'failed')
+  assert.equal(state.goal.stoppedReason.reason, 'decompose-failed')
+  assert.equal(orchestrator.calls.start.filter(args => args.mode === 'direct').length, 2)
+})
+
+test('cancel stops the goal and its active phase runs', async () => {
+  const root = await tempRoot('cancel')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'cancel me',
+    parentSessionId: agent.id,
+    phases: [phase('p1')],
+  })
+  await goals.tick()
+  const state = await goals.status(goal.id)
+  const runId = state.goal.phases[0].currentRunId
+  await goals.cancel(goal.id)
+  const after = await goals.status(goal.id)
+  assert.equal(after.goal.status, 'cancelled')
+  assert.deepEqual(orchestrator.calls.cancel, [runId])
+})

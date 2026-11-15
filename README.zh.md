@@ -10,7 +10,7 @@
 
 **以下情况不要用它**：一次模型调用就能答完的时候——那样你只是在为 planner 和 aggregator 额外付钱。必须在一轮之内结束的工作、中间需要人工审批的步骤、需要嵌套委派的任务（子 agent 深度上限为 1）、以及想要宿主内嵌面板的人，也不适合；下文那个可选的工作区面板是回环地址上的网页，不是宿主 UI。子 agent 运行时用的是宿主的凭据和文件系统，这里不是沙箱。
 
-它不添加宿主内 UI（工作区面板和对话控制台都是回环页面），也不修改宿主代码：对外的接口就是十二个 `superagent_*` 工具，另外还有六个可选的运维工具（终端面板、HTML 报告、安装自检、run 归档、git 同步、工作区面板），它们读的是同一批 run 文件。浏览器与桌面控制是独立的一层：设置 `runtime.enabled` 后会再注册十四个工具；默认值是 `false`，此时这些工具一个都不存在。
+它不添加宿主内 UI（工作区面板和对话控制台都是回环页面），也不修改宿主代码：对外的接口就是十三个 `superagent_*` 工具，另外还有六个可选的运维工具（终端面板、HTML 报告、安装自检、run 归档、git 同步、工作区面板），它们读的是同一批 run 文件。浏览器与桌面控制是独立的一层：设置 `runtime.enabled` 后会再注册十四个工具；默认值是 `false`，此时这些工具一个都不存在。
 
 个人项目，与 DeepSeek 及 harness 维护方无关。MIT 许可，© 2026 Admire (LittleChenLiya)；详见[许可证](#许可证)。
 
@@ -521,11 +521,20 @@ cost: ¥0.0952 + $0.0248 (estimate; all models priced)
 - `superagent_memory(action, key?, kind?, text?, scope?, query?, tags?, limit?)`
   列出、搜索、添加、更正或遗忘笔记本里的笔记。`set` 一个已存在的 key 会取代旧的；`forget` 撤回它。`scope` 指向 `rules`
   （项目规则）、`profile`（用户偏好），或 run scope。`search`
-  按 `query`（当前 goal 效果不错）和/或精确 `tags` 给笔记排序，于是相关的老笔记能被找到，而不只是最新的几条；笔记在设置时可以携带 `tags`。这个工具是增量的：另外十一个工具的参数和输出都不变。
+  按 `query`（当前 goal 效果不错）和/或精确 `tags` 给笔记排序，于是相关的老笔记能被找到，而不只是最新的几条；笔记在设置时可以携带 `tags`。这个工具是增量的：另外十二个工具的参数和输出都不变。
 - `superagent_template(action, id?, params?, template?, limit?)` 列出、展示、展开、保存或删除一个工作流模板：一个固定的 goal 骨架，带必需参数、适用场景和不适用场景。`expand` 返回一个普通 goal 字符串，`superagent_start` 会像对待手打的 goal 一样规划它；缺失或为空的参数会按名字被拒绝，而不是取默认值。模板不能设置限额、预算、模式或覆盖项，所以用模板永远不会扩大 run 的权限。内置 id 只读；自定义模板放在状态目录的模板目录下，那里的失败会被记录，但不会让 run 工具失效。
 - `superagent_schedule(action, id?, name?, goal?, template_id?, params?, cron?,
   every_minutes?, timezone?, miss_policy?, goal_mode?, acceptance?, max_rounds?,
   max_wall_clock_minutes?, no_progress_rounds?, budget?, human_priority?)` 创建、列出、暂停、恢复、删除或立即运行一个定时计划。计划保存一个 goal（或展开后的模板）、一个时钟和它自己的限额；它能跨宿主重启存活，并启动没人手动发起的 run。没有计划之前不会武装任何东西。见[定时运行](#定时运行)。
+- `superagent_goal(action, goal_id?, goal?, phases?, cwd?, budget?, phase_budget?,
+  max_parallel_phases?, max_attempts_per_phase?, auto_resume?, decision_id?, answer?,
+  note?, limit?)` 把一个自然语言目标拆成有依赖关系的阶段，每个阶段是一个普通 run，按
+  `max_parallel_phases` 并行推进，跨宿主重启不丢。`create` 在没给 `phases` 时先用一次
+  direct run 拆阶段；`status`/`list` 给出阶段状态、run id、用量和待决策项；`answer` 结算
+  阶段耗尽、验收证据冲突和停滞决策；`pause`/`resume`/`cancel` 管住整个目标。阶段预算收紧到
+  目标剩余额度，目标预算合计所有阶段、重试和拆阶段 run。它扩展而不是替换 run：
+  planner、子任务依赖图、预算、attention、持久化和 resume 还是同一套，见
+  [docs/LONG-GOAL.md](docs/LONG-GOAL.md)。
 - `superagent_audit(run_id?, subtask_id?, kind?, decision?, result?, target?,
   since?, until?, limit?, order?, format?, out_path?)` 读审计轨迹，或把匹配的事件导出成一个 JSONL 或 CSV 文件。见
   [权限与审计](#权限与审计)。
@@ -793,7 +802,7 @@ worker 的重试链和它占 run 墙钟的比例列在结果旁边，所以一�
 [docs/e2e/transcripts/report-cli.log](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/e2e/transcripts/report-cli.log)
 记录了命令本身，以及一次零外部引用的审计。
 
-**`doctor`** 在宿主之前回答"装是装上了，为什么什么都不工作？"。它只读：不安装、不挂载、不修改 profile。每项检查一个块——导入的文件对 `files` 白名单、声明的文件对磁盘实况、已安装副本对同版本已发布的 tarball、profile 的 bundle 注册，以及注册的十二个工具——每个失败后面跟着能修好它的命令。
+**`doctor`** 在宿主之前回答"装是装上了，为什么什么都不工作？"。它只读：不安装、不挂载、不修改 profile。每项检查一个块——导入的文件对 `files` 白名单、声明的文件对磁盘实况、已安装副本对同版本已发布的 tarball、profile 的 bundle 注册，以及注册的十三个工具——每个失败后面跟着能修好它的命令。
 
 ```bash
 PKG="${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/@xiangyixie/dsh-superagent"

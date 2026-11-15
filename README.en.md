@@ -40,7 +40,7 @@ covers the path from an empty machine, including the reason not to install npm's
 unrelated `dsh` package by name.
 
 It adds no in-host UI (the workspace panel and the conversation console are
-loopback pages) and patches no host code: the twelve `superagent_*` tools are the
+loopback pages) and patches no host code: the thirteen `superagent_*` tools are the
 surface, plus six optional operator utilities (a terminal panel, an HTML report,
 an install doctor, a run archive, git sync, and the workspace panel) that read the
 same run files. Browser and desktop control is a separate layer: with
@@ -823,7 +823,7 @@ lookup, one edit, one command, one short piece of writing — does not need a ru
   (project rules), `profile` (user preferences), or the run scope. `search`
   ranks notes against `query` (the current goal works well) and/or exact `tags`,
   so a relevant old note is found instead of only the newest ones; notes can
-  carry `tags` when set. The tool is additive: the eleven other tools keep their
+  carry `tags` when set. The tool is additive: the twelve other tools keep their
   arguments and output.
 - `superagent_template(action, id?, params?, template?, limit?)` lists, shows,
   expands, saves, or deletes a workflow template: a fixed goal skeleton with
@@ -841,6 +841,18 @@ lookup, one edit, one command, one short piece of writing — does not need a ru
   goal (or an expanded template), a clock, and its own limits; it survives a host
   restart and starts runs nobody asked for. Nothing is armed until a plan exists.
   See [Scheduled runs](#scheduled-runs).
+- `superagent_goal(action, goal_id?, goal?, phases?, cwd?, budget?, phase_budget?,
+  max_parallel_phases?, max_attempts_per_phase?, auto_resume?, decision_id?, answer?,
+  note?, limit?)` turns one natural-language goal into dependent phases, each phase
+  an ordinary run, advancing up to `max_parallel_phases` at once and surviving a host
+  restart. `create` decomposes with one direct run when `phases` is omitted;
+  `status`/`list` report phase state, run ids, usage, and open decisions; `answer`
+  settles phase-exhausted, verification-conflict, and stalled decisions;
+  `pause`/`resume`/`cancel` govern the whole goal. A phase budget is clamped to what
+  the goal has left, and the goal budget sums every phase, retry, and decompose run.
+  It extends the run engine rather than replacing it: planner, dependency graph,
+  budgets, attention, persistence, and resume are the same code. See
+  [docs/LONG-GOAL.md](docs/LONG-GOAL.md).
 - `superagent_audit(run_id?, subtask_id?, kind?, decision?, result?, target?,
   since?, until?, limit?, order?, format?, out_path?)` reads the audit trail, or
   exports the matching events as one JSONL or CSV file. See
@@ -1294,7 +1306,7 @@ records the command plus a zero-external-reference audit.
 does. It reads only: no install, no mount, no edit to the profile. One block per
 check — imported files against the `files` whitelist, declared files against
 what is on disk, the installed copy against the published tarball for its
-version, the profile's bundle registration, and the twelve registered tools — each
+version, the profile's bundle registration, and the thirteen registered tools — each
 failure followed by the command that fixes it.
 
 ```bash
