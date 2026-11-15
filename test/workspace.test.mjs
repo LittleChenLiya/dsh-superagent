@@ -42,15 +42,19 @@ async function makeRepo(files = { 'notes.txt': 'line one\nline two\n' }) {
   return dir
 }
 
-/** A manager whose worktrees live outside the repository, like the plugin's. */
+/** Compare paths the way Windows does: git reports forward slashes and its own casing. */
+function normalize(value) {
+  return String(value).replace(/\\/g, '/').toLowerCase()
+}
+
+/** A manager with the plugin's layout: checkouts inside the repository, where the host sandbox can write. */
 function managerFor(baseDir) {
-  const root = path.join(path.dirname(baseDir), `${path.basename(baseDir)}-worktrees`)
-  return { root, manager: createWorkspaceManager({ root, baseDir, sleep: () => Promise.resolve() }) }
+  return createWorkspaceManager({ baseDir, sleep: () => Promise.resolve() })
 }
 
 test('a directory that is not a git repository is reported instead of isolated', async () => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-ws-plain-'))
-  const { manager } = managerFor(dir)
+  const manager = managerFor(dir)
   const verdict = await manager.probe()
   assert.equal(verdict.ok, false)
   assert.match(verdict.reason, /not a git working tree/)
@@ -62,7 +66,7 @@ test('a directory that is not a git repository is reported instead of isolated',
 
 test('two workers get separate checkouts and cannot see each other edits', async () => {
   const repo = await makeRepo()
-  const { manager } = managerFor(repo)
+  const manager = managerFor(repo)
   const one = await manager.prepare({ runId: 'run-a', index: 1 })
   const two = await manager.prepare({ runId: 'run-a', index: 2 })
 
@@ -78,9 +82,33 @@ test('two workers get separate checkouts and cannot see each other edits', async
   assert.match(await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']), /main/)
 })
 
+test('checkouts live inside the repository, the host sandbox writable boundary', async () => {
+  const repo = await makeRepo()
+  const manager = managerFor(repo)
+  const work = await manager.prepare({ runId: 'run-pool', index: 1 })
+  assert.equal(work.ok, true, work.reason)
+  const relative = path.relative(repo, work.dir)
+  assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative), `${work.dir} is outside ${repo}`)
+  assert.equal(normalize(manager.root), normalize(path.join(repo, '.superagent', 'worktrees')))
+  // The pool ignores itself, so a waiting merge does not see a dirty checkout.
+  assert.equal((await git(repo, ['status', '--porcelain'])).trim(), '')
+})
+
+test('a resume keeps a checkout recorded under the previous pool location', async () => {
+  const repo = await makeRepo()
+  const legacyRoot = path.join(path.dirname(repo), `${path.basename(repo)}-old-worktrees`)
+  const legacy = await createWorkspaceManager({ root: legacyRoot, baseDir: repo, sleep: () => Promise.resolve() })
+    .prepare({ runId: 'run-old', index: 1 })
+  assert.equal(legacy.ok, true, legacy.reason)
+  const resumed = await managerFor(repo).prepare({ runId: 'run-old', index: 1 })
+  assert.equal(resumed.ok, true, resumed.reason)
+  assert.equal(resumed.reused, true)
+  assert.equal(normalize(resumed.dir), normalize(legacy.dir))
+})
+
 test('preparing the same worker twice reuses its checkout instead of failing', async () => {
   const repo = await makeRepo()
-  const { manager } = managerFor(repo)
+  const manager = managerFor(repo)
   const first = await manager.prepare({ runId: 'run-b', index: 1 })
   await fsp.writeFile(path.join(first.dir, 'notes.txt'), 'kept\n', 'utf8')
   const again = await manager.prepare({ runId: 'run-b', index: 1 })
@@ -92,7 +120,7 @@ test('preparing the same worker twice reuses its checkout instead of failing', a
 
 test('a clean worker branch merges back into the main checkout', async () => {
   const repo = await makeRepo()
-  const { manager } = managerFor(repo)
+  const manager = managerFor(repo)
   const work = await manager.prepare({ runId: 'run-c', index: 1 })
   await fsp.writeFile(path.join(work.dir, 'notes.txt'), 'worker one\n', 'utf8')
   await fsp.writeFile(path.join(work.dir, 'added.txt'), 'new file\n', 'utf8')
@@ -112,7 +140,7 @@ test('a clean worker branch merges back into the main checkout', async () => {
 
 test('a worker that changed nothing is reported and its checkout is dropped', async () => {
   const repo = await makeRepo()
-  const { manager } = managerFor(repo)
+  const manager = managerFor(repo)
   const work = await manager.prepare({ runId: 'run-d', index: 1 })
   const harvested = await manager.harvest({ dir: work.dir, branch: work.branch, index: 1 })
   assert.equal(harvested.status, 'no-changes')
@@ -121,7 +149,7 @@ test('a worker that changed nothing is reported and its checkout is dropped', as
 
 test('a conflicting edit is exposed with its files and the main checkout is restored', async () => {
   const repo = await makeRepo()
-  const { manager } = managerFor(repo)
+  const manager = managerFor(repo)
   const work = await manager.prepare({ runId: 'run-e', index: 1 })
   await fsp.writeFile(path.join(work.dir, 'notes.txt'), 'line one worker\nline two\n', 'utf8')
   await manager.harvest({ dir: work.dir, branch: work.branch, index: 1 })
@@ -145,7 +173,7 @@ test('a conflicting edit is exposed with its files and the main checkout is rest
 
 test('an uncommitted main checkout holds the merge instead of mixing edits', async () => {
   const repo = await makeRepo()
-  const { manager } = managerFor(repo)
+  const manager = managerFor(repo)
   const work = await manager.prepare({ runId: 'run-f', index: 1 })
   await fsp.writeFile(path.join(work.dir, 'notes.txt'), 'worker\n', 'utf8')
   await manager.harvest({ dir: work.dir, branch: work.branch, index: 1 })
