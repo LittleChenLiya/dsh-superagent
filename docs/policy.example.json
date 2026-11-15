@@ -1,0 +1,38 @@
+{
+  // Copy this file to <stateDir>/policy.json (or point `policyFile` at it).
+  // Comments and trailing whitespace are allowed; unknown keys are an error
+  // reported with the line they are on.
+  "version": 1,
+
+  // What happens to an action no rule mentions. "allow" keeps today's
+  // behaviour; "confirm" holds everything until a person approves it;
+  // "deny" stops everything that is not explicitly allowed below.
+  "defaultLevel": "allow",
+
+  "paths": {
+    // Relative patterns match at any directory boundary, so the same file
+    // works wherever the workspace is mounted. Deny always wins over allow.
+    "allow": ["src/**", "docs/**", "test/**"],
+    "deny": ["**/.env", "**/.git/**", "**/node_modules/**", "/etc/**", "**/*.pem"]
+  },
+
+  "commands": {
+    // A bare entry is a prefix: "npm test" also permits "npm test -- --watch".
+    // An entry with * or ? is a glob over the whole command line. A composite
+    // line ("git status && ...") never gets more than "confirm" from a prefix.
+    "allow": ["git status", "git diff", "git log", "npm test", "npm run lint", "node --test"],
+    "deny": ["rm -rf", "git push", "npm publish", "sudo"]
+  },
+
+  "confirm": {
+    // Action classes that always need a person, whatever the default level is.
+    // "path.*" covers both path.read and path.write.
+    "actions": ["network"]
+  },
+
+  "runs": {
+    // Per-run override of defaultLevel, written by hand when one run deserves
+    // stricter limits than the rest.
+    "20261115T101500-abcd1234": { "level": "confirm", "note": "watch this one by hand" }
+  }
+}

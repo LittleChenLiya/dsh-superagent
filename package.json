@@ -36,11 +36,14 @@
     "lib/memory.js",
     "lib/notify.js",
     "lib/lock.js",
+    "lib/policy.js",
+    "lib/audit.js",
     "lib/watch.js",
     "lib/report.js",
     "bin/watch.js",
     "bin/report.js",
     "cordis.patch.yml",
+    "docs/policy.example.json",
     "CHANGELOG.md",
     "README.md"
   ],
@@ -50,7 +53,7 @@
     "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "scripts": {
-    "test": "node --test test/orchestrator.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/usage.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/notify.test.mjs"
+    "test": "node --test test/orchestrator.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/usage.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/notify.test.mjs test/audit.test.mjs"
   },
   "keywords": [
     "dsh",

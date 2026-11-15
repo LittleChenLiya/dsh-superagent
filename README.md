@@ -224,6 +224,9 @@ Row config in `<profile>/cordis.patch.yml`:
 | `memoryDigestEntries` | `12` | Notes injected into a prompt. |
 | `memoryDigestChars` | `1600` | Character budget for the note part of that prompt. |
 | `keepRuns` | `0` | Delete terminal runs older than this many days at mount; `0` keeps everything. |
+| `audit` | `true` | Append-only audit trail. It only observes; turning it off removes the trail, never the run behaviour. |
+| `policyFile` | `<stateDir>/policy.json` when it exists | Permission policy. Unset and absent means no policy, i.e. the old behaviour. |
+| `auditDir` | `<stateDir>/audit` | Where `audit.jsonl` and its exports live. |
 | `controlPort` | off | Loopback port for the embedding surface; `0` picks a free one. See [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md). |
 
 ### Switching models
@@ -343,6 +346,10 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
   `forget` retracts it. `scope` addresses `rules` (project rules), `profile`
   (user preferences), or the run scope. The tool is additive: the five run tools
   keep their arguments and output.
+- `superagent_audit(run_id?, subtask_id?, kind?, decision?, result?, target?,
+  since?, until?, limit?, order?, format?, out_path?)` reads the audit trail, or
+  exports the matching events as one JSONL or CSV file. See
+  [Permissions and audit](#permissions-and-audit).
 
 ## Progress, decisions, and artifacts
 
@@ -361,6 +368,78 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
   `<stateDir>/reports/<runId>.md` with an atomic rename, so the outcome has a
   path that can be opened or attached. The directory carries a `.gitignore` with
   `*`, and the path is recorded in `run.artifacts` and shown in status.
+
+## Permissions and audit
+
+Two independent layers sit around a run. A **policy** decides whether an action
+may happen; an **audit trail** records what was decided and what followed. The
+trail is on by default because it only observes. A policy changes nothing until
+one exists, and it can only tighten what the plugin does on its own.
+
+### Policy
+
+Copy [docs/policy.example.json](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/policy.example.json) to
+`<stateDir>/policy.json`, or name another file with `policyFile`. Rules are
+matched in this order:
+
+1. a `paths.deny` / `commands.deny` pattern -> `deny` (deny always wins);
+2. an explicit `paths.allow` / `commands.allow` entry -> `allow`;
+3. the action kind listed under `confirm.actions` -> `confirm`;
+4. the run's `runs.<id>.level`, else `defaultLevel`.
+
+An allow entry that beats a `confirm` or a per-run `deny` is recorded with
+`meta.relaxedFrom`, so a person can always see where the policy was opened up.
+Relative path patterns match at any directory boundary (`src/**` covers
+`/anywhere/repo/src/a.js`) but not a sibling that merely ends the same way
+(`xsrc/a.js`). A command entry without `*` is a prefix on whole tokens
+(`git status` permits `git status --short`, not `git statusx`); a composite line
+(`git status && curl ...`) can never be lifted above `confirm` by a prefix.
+
+`policy.json` may contain `//`, `#`, and `/* */` comments. A schema problem is
+reported with the file, line, and column:
+
+```
+policy.json: 1 problem in the permission policy
+  policy.json:3:19 [defaultLevel] must be one of allow | confirm | deny
+      "defaultLevel": "maybe",
+                      ^
+```
+
+An unreadable or invalid policy **fails closed**: governed actions are denied and
+`superagent_audit` prints the problem. A start or resume that is denied is
+refused before any state changes; one held for `confirm` needs
+`approve_policy: true` on the next call, and that approval is written as an
+`approved` event naming the held event. An approval cannot release a `deny`.
+
+### Audit
+
+`<stateDir>/audit/audit.jsonl`, one JSON object per event:
+
+```json
+{"v":1,"id":"evt_...","at":"2026-11-15T10:04:11.238Z","runId":"20261115T100400-ab12cd34","subtaskId":"subtask-2","actor":"session:9f3c","kind":"path.write","action":"path.write","target":"C:/work/app/src/db.js","decision":"allow","result":"ok","durationMs":4,"rule":"paths.allow[0]","source":"policy","meta":{"relaxedFrom":"confirm","reason":"..."}}
+```
+
+Every event carries the run, the subtask, the actor, a timestamp, the decision,
+the result, and how long the check took. Higher layers may add `tool.call` and
+`command.exec` events. Triggered by the plugin itself: `run.start`, `run.resume`,
+`run.cancel`, `run.finish`, `attention`, plus `blocked` when a policy denies and
+`approved` when a person releases a held action.
+
+Appends are serialized inside the process and guarded by a `wx` lock file across
+processes, and each event is written with one append, so two workers finishing at
+the same moment cannot splice a line. A trailing fragment left by a crash is
+reported as `torn` and skipped; a damaged line is counted as `invalid` and does
+not hide the rest.
+
+`superagent_audit` reads by run, subtask, kind, decision, result, target text, and
+time window. With `format: "jsonl"` or `format: "csv"` it writes one deliverable
+file (default `<stateDir>/audit/audit-export-<time>.<ext>`) and returns its path.
+
+A path/command guard can be attached without the audit layer knowing its rules:
+`createAuditor({ dir, policyFile }).attachGuard(request => ({ decision, reason }))`.
+The guard may only tighten the decision the policy produced; a guard that throws
+is treated as a block. A guard that answers `{ blocked, rule, reason }` — the
+shape a tool-call guard already produces — is understood as well.
 
 ## Cross-run memory
 
