@@ -17,8 +17,9 @@ prints the cost once you give it a price for the route.
 planner and an aggregator on top. It is also the wrong tool for work that must
 finish inside a single turn, for a step that needs human approval in the middle,
 for anything that needs nested delegation (child depth is capped at 1), and for
-anyone who wants an in-host panel — this adds no UI, only eleven tools. Children run
-with the host's credentials and filesystem; this is not a sandbox.
+anyone who wants an in-host panel — the optional workspace panel below is a
+loopback page, not host UI. Children run with the host's credentials and
+filesystem; this is not a sandbox.
 
 **Install and run.** Node `>= 24.9.0`, a tool-calling route, and that route's key
 in the environment:
@@ -36,9 +37,10 @@ The reply ends `completed` with the merged report, or with
 covers the path from an empty machine, including the reason not to install npm's
 unrelated `dsh` package by name.
 
-It adds no in-host UI and patches no host code: the eleven `superagent_*` tools are
-the surface, plus four optional operator utilities (a terminal panel, an HTML
-report, an install doctor, and a run archive) that read the same run files.
+It adds no in-host UI (the opt-in workspace panel is a loopback page) and patches
+no host code: the eleven `superagent_*` tools are the surface, plus six optional
+operator utilities (a terminal panel, an HTML report, an install doctor, a run
+archive, git sync, and the workspace panel) that read the same run files.
 
 Personal project, not affiliated with DeepSeek or the harness maintainers. MIT
 licensed, © 2026 Admire (LittleChenLiya); details in [License](#license).
@@ -234,6 +236,8 @@ Row config in `<profile>/cordis.patch.yml`:
 | `controlPort` | off | Loopback port for the embedding surface; `0` picks a free one. See [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md). |
 | `workspaceIsolation` | `false` | Give every worker its own git worktree so parallel workers cannot overwrite each other. See [Per-worker workspace isolation](#per-worker-workspace-isolation). |
 | `workspaceRoot` | host cwd | Repository the workers are isolated in when `workspaceIsolation` is on. Must be a git working tree with at least one commit. |
+| `workbenchPort` | off | Loopback port for the local workspace panel; `0` picks a free one. The panel reads and edits files itself, without a host API. |
+| `workbenchRoot` | `process.cwd()` | Directory the panel may browse and edit. Every path outside it is refused. |
 
 ### Switching models
 
@@ -950,6 +954,44 @@ The full contract — routes, error ids, security model, lifecycle, client
 examples — is [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md). It is opt-in, loopback
 only, and there is no remote or unauthenticated mode.
 
+## Workspace panel
+
+`workbenchPort` adds a local, IDE-shaped panel over one directory. It has its
+own file tree, editor, diff preview, and run change view; nothing is proxied
+through the host.
+
+```bash
+npx dsh-superagent-workbench --root /path/to/project --port 8787
+```
+
+The same server can run inside the host, with its Runs view wired to the plugin
+state directory:
+- id: superagent
+  config:
+    workbenchPort: 0          # off by default; 0 = OS picks a free loopback port
+    workbenchRoot: /path/to/project
+```
+
+The standalone command serves the same page and defaults its run state to
+`<root>/.dsh-workbench`; pass `--state-dir <plugin state directory>` to read
+existing runs. Neither form opens a socket unless you ask for it.
+
+The bound URL and a fresh per-process token are written to
+`<stateDir>/workbench.json` (mode `0600`). Open `http://127.0.0.1:<port>/?token=<token>`
+once; the page keeps the token in `sessionStorage` and strips it from the
+address bar. Without the token every route answers `401`.
+
+The panel can list, read, and edit regular text files under `workbenchRoot`. It
+refuses absolute paths, `..` traversal, symlinks that leave the root, the plugin
+state directory, binary files, and files above 512 KB. Saving sends the hash and
+mtime the editor read; if either changed on disk, the save is refused with
+`external-change` instead of overwriting another process's work. Before a save
+is confirmed the page shows a unified diff.
+
+When `workbenchPort` is on, the plugin records the files each run changed into
+that run's JSON record (`run.changes`), so the Runs view can show those files and
+their diff against `git HEAD` later.
+
 ## State and recovery
 
 One file per run: `$DSH_HOME/state/superagent/runs/<runId>.json`, written with a
@@ -1145,7 +1187,7 @@ appears to "hang" until the ignored-abort child returns.
 | What you see | What it means | What to do |
 | --- | --- | --- |
 | `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.11.0` and read the host log for `[dsh-superagent]` lines. |
-| `Cannot find module .../lib/control.js` (or `watch.js` / `report.js`) and the plugin never activates | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. The published package is not the cause: every version ships all twelve `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
+| `Cannot find module .../lib/control.js` (or `watch.js` / `report.js`) and the plugin never activates | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. The published package is not the cause: every version ships all twenty-two `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |
 | `[error] the subagent service is unavailable` | The profile has no `subagents` service, so the plugin has nothing to spawn. | Use a profile built on the base bundle (`web` or `headless` from the stock image), or add the subagent plugin to the profile. |

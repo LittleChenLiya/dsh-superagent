@@ -68,6 +68,18 @@ README is updated to the version being released.
   collide; the remaining shared surface is an append-only memory scope. The
   README documents the limits: no realtime channel, no cross-machine lock, no
   key distribution.
+- **Local workspace panel.** `workbenchPort` (off by default, loopback only)
+  serves an IDE-shaped page from `public/workbench.html`: file tree, text editor,
+  diff preview before save, and a run view that lists the files a run changed.
+  The plugin reads and edits the filesystem itself, so no host API is involved.
+  Every request needs the per-process bearer token in `workbench.json`; absolute
+  paths, traversal, symlinks out of the root, the state directory, binaries, and
+  files above 512 KB are refused with a reason. Saving requires the hash and
+  mtime the editor read, so an external edit is never overwritten.
+- `dsh-superagent-workbench` runs the same panel standalone, with `--root`,
+  `--port`, and `--state-dir`; no host is required.
+- Run records now carry `changes` (recorded when the panel is on), which is what
+  the panel's run view reads and diffs against `git HEAD`.
 
 ## 0.11.0 — 2026-11-15
 
@@ -189,6 +201,7 @@ still ships one file per module from `lib/`.
 - Status prints the attention id, any recorded answer, and how many instructions
   were applied, are waiting, or never took effect; notifications lead with the
   question id so `superagent_answer` can be called directly.
+
 
 
 
