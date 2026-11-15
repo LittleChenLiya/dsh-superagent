@@ -51,7 +51,7 @@ test('the plugin mounts, registers six tools, and runs a goal end to end', async
     assert.deepEqual(inject, ['tools', 'agents'])
     assert.deepEqual(
       [...tools.keys()].sort(),
-      ['superagent_cancel', 'superagent_list', 'superagent_memory', 'superagent_resume', 'superagent_start', 'superagent_status'],
+      ['superagent_cancel', 'superagent_list', 'superagent_memory', 'superagent_resume', 'superagent_start', 'superagent_status', 'superagent_template'],
     )
 
     const started = await tools.get('superagent_start').execute(
@@ -313,7 +313,7 @@ test('without a subagents service the tools still mount and explain what is miss
 
   try {
     apply(ctx, { stateDir })
-    assert.equal(tools.size, 6, 'the tools must not vanish when the service is optional')
+    assert.equal(tools.size, 7, 'the tools must not vanish when the service is optional')
 
     const started = await tools.get('superagent_start').execute({ goal: 'needs workers' }, { agent: { id: 'session-1' } })
     assert.match(started, /subagent service is unavailable/)
