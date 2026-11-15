@@ -1943,6 +1943,7 @@
         add('备份', WIZ.saved.backup?.id || '无')
         add('key', WIZ.saved.key.mask || '已保存')
         wizardBodyEl.append(kv)
+        if (WIZ.saved.restartHint) wizardBodyEl.append(el('p', 'wiz-note', WIZ.saved.restartHint))
       }
       const error = wizardErrorNode()
       if (error) wizardBodyEl.append(error)
