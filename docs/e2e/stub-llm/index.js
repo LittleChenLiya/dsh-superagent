@@ -17,6 +17,7 @@ export const inject = ['llm']
 
 const PLANNER_MARK = 'You are the planner for a long-horizon autonomous run.'
 const WORKER_MARK = 'You are one worker in a long-horizon autonomous run.'
+const DIRECT_MARK = 'You are completing one task directly in an autonomous run.'
 const AGGREGATOR_MARK = 'You are the aggregator of a long-horizon autonomous run.'
 
 const GOAL = 'Compare two sorting strategies on the stub fixture and report one number for each.'
@@ -87,7 +88,9 @@ function planText() {
   })
 }
 
+/** A worker reply that is deliberately empty, for the artifact-honesty scenario. */
 function workerText(prompt) {
+  if (process.env.E2E_EMPTY_ARTIFACT === '1') return ''
   const match = /Your assigned subtask \(([^)]+)\)/.exec(prompt)
   const title = match ? match[1] : 'Unknown'
   return [
@@ -128,6 +131,13 @@ class StubAdapter {
     }
 
     if (text.includes(WORKER_MARK)) {
+      if (process.env.E2E_EMPTY_ARTIFACT === '1') {
+        // End the turn with `completed` but no text: the artifact-honesty test
+        // expects the host to refuse this as a completion.
+        yield usageChunk(10, 0)
+        yield { type: 'finish', reason: { kind: 'stop' } }
+        return
+      }
       const title = /Your assigned subtask \(([^)]+)\)/.exec(text)?.[1] ?? 'Beta'
       if (process.env.E2E_CHILD_ATTEMPT === '1' && title === 'Alpha' && !toolResults.length) {
         // Try to start a nested run from inside a worker. Whatever the host
@@ -157,6 +167,19 @@ class StubAdapter {
       const attempt = process.env.E2E_CHILD_ATTEMPT === '1' && title === 'Alpha'
       yield* textChunks(attempt ? `CHILD-ATTEMPT-RESULT: ${lastToolText(messages)}` : workerText(text))
       yield usageChunk(400, 100, 64)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+
+    if (text.includes(DIRECT_MARK)) {
+      await delay(workerDelay('direct'))
+      if (process.env.E2E_EMPTY_ARTIFACT === '1') {
+        yield usageChunk(10, 0)
+        yield { type: 'finish', reason: { kind: 'stop' } }
+        return
+      }
+      yield* textChunks('DIRECT-REPORT: the direct worker measured 5 operations on the stub fixture.')
+      yield usageChunk(300, 80)
       yield { type: 'finish', reason: { kind: 'stop' } }
       return
     }
@@ -346,6 +369,124 @@ class StubAdapter {
         return
       }
       yield* textChunks(`resume sequence finished: ${lastToolText(messages)}`)
+      yield usageChunk(20, 5)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+
+    if (kind === 'schedule-create') {
+      if (step === 0) {
+        yield* toolChunks('call-schedule-create', 'superagent_schedule', {
+          action: 'create',
+          name: 'minute-probe',
+          goal: 'Probe the release gate and report the numbers the stub measured.',
+          every_minutes: 1,
+          timezone: 'Asia/Shanghai',
+        })
+        yield usageChunk(60, 12)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step === 1) {
+        // Stay in the turn across one real minute so the timer fires while the
+        // host is alive, then read the plan back.
+        await delay(Number(process.env.E2E_SCHEDULE_HOLD_MS ?? 75000))
+        yield* toolChunks('call-schedule-list', 'superagent_schedule', { action: 'list' })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      yield* textChunks(`schedule-create sequence finished:\n${lastToolText(messages)}`)
+      yield usageChunk(20, 5)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (kind === 'schedule-wait') {
+      if (step === 0) {
+        // Nothing is called first: this process only loads the plugin, which
+        // reloads the plan and must run the missed window during startup.
+        await delay(Number(process.env.E2E_RESTART_HOLD_MS ?? 90000))
+        yield* toolChunks('call-schedule-list-after-restart', 'superagent_schedule', { action: 'list' })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      yield* textChunks(`schedule-wait sequence finished:\n${lastToolText(messages)}`)
+      yield usageChunk(20, 5)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (kind === 'schedule-empty') {
+      if (step === 0) {
+        yield* toolChunks('call-schedule-empty-create', 'superagent_schedule', {
+          action: 'create',
+          name: 'empty-artifact-probe',
+          goal: 'Produce the probe report.',
+          every_minutes: 60,
+          timezone: 'Asia/Shanghai',
+          mode: 'direct',
+        })
+        yield usageChunk(60, 12)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step === 1) {
+        const planId = /(sch-[0-9a-f]{8})/.exec(lastToolText(messages))?.[1] ?? null
+        yield* toolChunks('call-schedule-empty-run', 'superagent_schedule', {
+          action: 'run-now',
+          ...(planId ? { id: planId } : {}),
+        })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step === 2) {
+        await delay(2000)
+        const runId = /started (\S+) now for schedule/.exec(lastToolText(messages))?.[1]
+        yield* toolChunks('call-schedule-empty-status', 'superagent_status', {
+          ...(runId ? { run_id: runId } : {}),
+          wait_seconds: 60,
+        })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      yield* textChunks(`schedule-empty sequence finished:\n${lastToolText(messages)}`)
+      yield usageChunk(20, 5)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (kind === 'schedule-run-now') {
+      if (step === 0) {
+        yield* toolChunks('call-schedule-now-create', 'superagent_schedule', {
+          action: 'create',
+          name: 'run-now-probe',
+          goal: 'Probe the release gate now.',
+          every_minutes: 60,
+          timezone: 'Asia/Shanghai',
+          mode: 'direct',
+        })
+        yield usageChunk(60, 12)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step === 1) {
+        const planId = /(sch-[0-9a-f]{8})/.exec(lastToolText(messages))?.[1] ?? null
+        yield* toolChunks('call-schedule-now-run', 'superagent_schedule', {
+          action: 'run-now',
+          ...(planId ? { id: planId } : {}),
+        })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step === 2) {
+        yield* toolChunks('call-schedule-now-status', 'superagent_status', { wait_seconds: 60 })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      yield* textChunks(`schedule-run-now sequence finished:\n${lastToolText(messages)}`)
       yield usageChunk(20, 5)
       yield { type: 'finish', reason: { kind: 'stop' } }
       return

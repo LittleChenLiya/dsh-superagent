@@ -60,6 +60,7 @@ async function harness({
   tickSeconds = 30,
   humanPriority = true,
   maxConsecutiveFailures = 3,
+  resolveOwner = () => ({ id: OWNER }),
 } = {}) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-schedule-'))
   const clock = { value: Date.parse(now) }
@@ -68,7 +69,7 @@ async function harness({
   const scheduler = createScheduler({
     stateFile: path.join(dir, 'schedules.json'),
     orchestrator,
-    resolveOwner: () => ({ id: OWNER }),
+    resolveOwner,
     notify: input => {
       notifications.push(input)
     },
@@ -235,6 +236,84 @@ test('miss policy "none" skips every due window after downtime', async () => {
   }
 })
 
+test('a restarted host runs the newest missed window and counts it as a catch-up', async () => {
+  const h = await harness({ now: '2026-11-15T08:00:00Z' })
+  try {
+    await h.scheduler.create(planInput({ everyMinutes: 1, ownerRecovery: 'resume' }))
+    h.scheduler.stop()
+
+    // The host was down for two windows (08:01, 08:02); the third is now due.
+    h.clock.value = Date.parse('2026-11-15T08:03:10Z')
+    const restarted = createScheduler({
+      stateFile: h.stateFile,
+      orchestrator: h.orchestrator,
+      resolveOwner: () => ({ id: OWNER }),
+      now: () => h.clock.value,
+      setInterval: h.timers.setInterval,
+      clearInterval: h.timers.clearInterval,
+      maxActiveRuns: 2,
+    })
+    await restarted.init()
+    const [after] = await restarted.list()
+
+    assert.equal(h.orchestrator.calls.length, 1, 'the newest missed window runs after restart')
+    assert.equal(after.totalRuns, 1)
+    assert.equal(after.catchUpRuns, 1)
+    assert.equal(after.missedRuns, 2, '08:01 and 08:02 are counted, not replayed')
+    assert.equal(after.lastRunAt, '2026-11-15T08:03:00.000Z')
+    assert.match(after.history.find(entry => entry.event === 'started').reason, /catch-up run .* after 2 missed window/)
+    restarted.stop()
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('a plan whose owner cannot be restored is blocked, not silently paused', async () => {
+  const h = await harness({ now: '2026-11-15T00:00:00Z', resolveOwner: () => null })
+  try {
+    await h.scheduler.create(planInput({ everyMinutes: 1, ownerRecovery: 'none' }))
+    h.clock.value = Date.parse('2026-11-15T00:01:00Z')
+    await h.scheduler.tick()
+    h.clock.value = Date.parse('2026-11-15T00:02:00Z')
+    await h.scheduler.tick()
+    h.clock.value = Date.parse('2026-11-15T00:03:00Z')
+    await h.scheduler.tick()
+
+    const [after] = await h.scheduler.list()
+    assert.equal(after.enabled, true, 'a missing session must not pause a plan the host cannot make durable')
+    assert.equal(after.requiresLiveSession, true)
+    assert.equal(after.consecutiveFailures, 0)
+    assert.equal(after.lastOutcome, 'blocked')
+    assert.equal(after.totalRuns, 0)
+    assert.equal(h.notifications.filter(item => item.event === 'blocked').length, 1, 'announced once, not every window')
+    assert.match(after.history.find(entry => entry.event === 'blocked').reason, /requires a resident session/)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('a restarted host adopts a replacement session when the old one is gone', async () => {
+  const h = await harness({
+    now: '2026-11-15T00:00:00Z',
+    resolveOwner: async () => ({ agent: { id: 'fresh-session' }, sessionId: 'fresh-session' }),
+  })
+  try {
+    const plan = await h.scheduler.create(planInput({ everyMinutes: 1, ownerRecovery: 'resume' }))
+    assert.equal(plan.ownerSessionId, OWNER)
+    h.clock.value = Date.parse('2026-11-15T00:01:00Z')
+    await h.scheduler.tick()
+
+    assert.equal(h.orchestrator.calls.length, 1)
+    assert.equal(h.orchestrator.calls[0].parentSessionId, 'fresh-session')
+    assert.equal(h.orchestrator.calls[0].parent.id, 'fresh-session')
+    const [after] = await h.scheduler.list()
+    assert.equal(after.ownerSessionId, 'fresh-session')
+    assert.ok(after.history.some(entry => entry.event === 'owner-recovered'))
+  } finally {
+    await h.cleanup()
+  }
+})
+
 test('a window is skipped while the previous run of the same plan is still active', async () => {
   const h = await harness({ now: '2026-11-15T00:00:00Z' })
   try {
@@ -250,6 +329,7 @@ test('a window is skipped while the previous run of the same plan is still activ
     assert.equal(outcomes[0].reason, 'skipped: previous run still active')
     const after = (await h.scheduler.list()).find(entry => entry.id === plan.id)
     assert.equal(after.lastOutcome, 'skipped')
+    assert.equal(after.skippedRuns, 1)
     assert.match(after.history.at(-1).reason, /skipped: previous run still active/)
     assert.equal(after.nextRunAt, '2026-11-15T00:03:00.000Z')
   } finally {
