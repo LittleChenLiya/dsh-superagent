@@ -8,13 +8,15 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
-## Unreleased
+## 0.11.0 — 2026-11-15
 
 Runs became something you can talk back to and shape: instructions and answers
 reach a run that already exists, planned subtasks can depend on each other,
 workers can be isolated in their own worktrees, and the panel and report show
-parallel structure instead of opaque rows. No runtime dependencies were added,
-and the package still ships one file per module from `lib/`.
+parallel structure instead of opaque rows. Runs are now priced down to the
+subtask, spending is kept in a ledger, common goals start from a template, and
+an install can check itself. No runtime dependencies were added, and the package
+still ships one file per module from `lib/`.
 
 ### Added
 
@@ -76,6 +78,28 @@ and the package still ships one file per module from `lib/`.
   run's wall clock next to the outcome.
 - **Documentation site.** `docs/site/` holds a quickstart, a comparison page,
   and a single-file landing page; nothing in `lib/` changed for it.
+- **Per-run and per-subtask pricing.** `pricing` in the plugin config maps a
+  model to input/output prices per million tokens. Every run and every subtask
+  now carries a `cost` with micro-unit totals, and status, the panel, and the
+  report print it (`cost ¥0.3519+`). A model absent from the table is reported as
+  `unpriced` — never as `0.0000`, and a total that mixes priced and unpriced work
+  is printed with a trailing `+` so it cannot be read as complete.
+- **Spend ledger.** `lib/ledger.js` keeps a durable per-run spend record, mounted
+  from settled runs so a restart backfills what no tool was watching, and
+  `superagent_status` reports the rolling spend and how many runs in the window
+  were only partially priced.
+- **Workflow templates.** `superagent_template` lists, shows, and expands a
+  reusable goal template (built-ins plus files under the template directory), so
+  a common goal is expanded into its steps instead of being retyped. Templates
+  are optional: a template directory that cannot be created is logged and the
+  run tools keep working.
+- **Install self-check.** `dsh-superagent-doctor` reports, without installing or
+  editing anything, whether every imported file is in the `files` whitelist and
+  on disk, whether the installed copy matches its published tarball, whether the
+  profile registers the bundle row, and whether all nine tools are registered.
+  Every failure prints the command that fixes it. `npm test` also asserts that
+  `npm pack --dry-run` ships every file reachable from the entry points
+  (`scripts/check-pack.mjs`), which is the check the 0.9.x tarball lacked.
 - **Run archives.** `dsh-superagent-archive` (`bin/archive.js`) adds three
   subcommands. `prune` lists terminal runs older than `--older-than <days>`,
   optionally filtered by `--status`, with the files and bytes it would remove;
@@ -89,6 +113,8 @@ and the package still ships one file per module from `lib/`.
   `planPrune`, `buildArchive`, `exportRun`, and `importRun`; `prune` gained
   `dryRun` and `statuses` and now returns the plan alongside `removed`. No
   runtime dependency was added.
+- New config: `queueOnFull`, `maxQueuedRuns`, `queueTimeoutMinutes`,
+  `workspaceIsolation`, `workspaceRoot`, `pricing`.
 
 ### Changed
 
@@ -165,26 +191,10 @@ added, and the package still ships one file per module from `lib/`.
   was tried, and `self-heal:` appears in `superagent_status`.
 - **`memoryMaxEntries` is a compaction trigger.** Exceeding it, 400 lines, or
   128 KB compacts the notebook on the next write.
-- **Per-worker workspace isolation (opt-in).** `workspaceIsolation: true` gives
-  every worker its own git worktree of `workspaceRoot` on a
-  `superagent/<runId>-w<n>` branch, so parallel workers cannot overwrite each
-  other's files. Finished workers are committed and merged back one at a time;
-  a conflict aborts the merge, restores the main checkout, and appears in
-  `superagent_status` with the conflicting files and the branch to merge by
-  hand. A non-git target, a missing git binary, or an empty repository makes the
-  run fall back to the shared directory and say so. Off by default: the old
-  behaviour is byte-for-byte unchanged when it is off.
 - New config: `memory`, `memoryScope`, `memoryMaxEntries`, `memoryMaxAgeDays`,
   `memoryDigestEntries`, `memoryDigestChars`, `maxNotificationsPerHour`,
   `notifyRetries`, `notifyRetryDelayMs`, `autoResumeRounds`,
-  `childModelFallback`, `workspaceIsolation`, `workspaceRoot`.
-- **Install self-check.** `dsh-superagent-doctor` reports, without installing or
-  editing anything, whether every imported file is in the `files` whitelist and
-  on disk, whether the installed copy matches its published tarball, whether the
-  profile registers the bundle row, and whether all six tools are registered.
-  Every failure prints the command that fixes it. `npm test` also asserts that
-  `npm pack --dry-run` ships every file reachable from the entry points
-  (`scripts/check-pack.mjs`), which is the check the 0.9.x tarball lacked.
+  `childModelFallback`.
 
 ### Changed
 

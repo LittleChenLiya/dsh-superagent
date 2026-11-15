@@ -1,4 +1,4 @@
-# dsh-superagent
+﻿# dsh-superagent
 
 Long-horizon runs for [DeepSeek Harness](https://dshai.org): one goal in,
 model-planned parallel subtasks, one merged report — and the run survives a host
@@ -17,14 +17,14 @@ prints the cost once you give it a price for the route.
 planner and an aggregator on top. It is also the wrong tool for work that must
 finish inside a single turn, for a step that needs human approval in the middle,
 for anything that needs nested delegation (child depth is capped at 1), and for
-anyone who wants an in-host panel — this adds no UI, only six tools. Children run
+anyone who wants an in-host panel — this adds no UI, only nine tools. Children run
 with the host's credentials and filesystem; this is not a sandbox.
 
 **Install and run.** Node `>= 24.9.0`, a tool-calling route, and that route's key
 in the environment:
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.10.0
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.11.0
 ```
 
 Then ask the session for a run — a real call, not a sketch:
@@ -36,9 +36,9 @@ The reply ends `completed` with the merged report, or with
 covers the path from an empty machine, including the reason not to install npm's
 unrelated `dsh` package by name.
 
-It adds no in-host UI and patches no host code: the six `superagent_*` tools are
-the surface, plus two optional operator utilities (a terminal panel and an HTML
-report) that read the same run files.
+It adds no in-host UI and patches no host code: the nine `superagent_*` tools are
+the surface, plus four optional operator utilities (a terminal panel, an HTML
+report, an install doctor, and a run archive) that read the same run files.
 
 Personal project, not affiliated with DeepSeek or the harness maintainers. MIT
 licensed, © 2026 Admire (LittleChenLiya); details in [License](#license).
@@ -73,7 +73,7 @@ your `PATH`, use `npx @deepseek-ai/dsh@0.2.2-rc.1` instead.
 
 ```bash
 # 1. install the plugin into a profile (web, headless, ... whatever you run)
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.10.0
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.11.0
 
 # 2. confirm the bundle row exists in the merged config
 dsh --profile web --dump-config
@@ -464,8 +464,17 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
   (project rules), `profile` (user preferences), or the run scope. `search`
   ranks notes against `query` (the current goal works well) and/or exact `tags`,
   so a relevant old note is found instead of only the newest ones; notes can
-  carry `tags` when set. The tool is additive: the seven run tools keep their
+  carry `tags` when set. The tool is additive: the eight other tools keep their
   arguments and output.
+- `superagent_template(action, id?, params?, template?, limit?)` lists, shows,
+  expands, saves, or deletes a workflow template: a fixed goal skeleton with
+  required parameters, when it fits, and when it does not. `expand` returns one
+  ordinary goal string, which `superagent_start` plans exactly like a typed goal;
+  a missing or empty parameter is refused by name instead of defaulted. A
+  template cannot set limits, budgets, a mode, or an override, so using one never
+  widens what a run may do. Built-in ids are read-only; custom ones live under
+  the template directory in the state directory, and a failure there is logged
+  without disabling the run tools.
 
 ## Progress, decisions, and artifacts
 
@@ -639,7 +648,7 @@ records the command plus a zero-external-reference audit.
 does. It reads only: no install, no mount, no edit to the profile. One block per
 check — imported files against the `files` whitelist, declared files against
 what is on disk, the installed copy against the published tarball for its
-version, the profile's bundle registration, and the six registered tools — each
+version, the profile's bundle registration, and the nine registered tools — each
 failure followed by the command that fixes it.
 
 ```bash
@@ -657,7 +666,7 @@ the entry points must appear in `npm pack --dry-run`, which is the check the
 None of these utilities is the install path: the plugin is installed with
 `dsh plugin add`, never with `npm i -g`.
 
-**`archive`** is the third utility. It prunes terminal runs and exports or
+**`archive`** is the fourth utility. It prunes terminal runs and exports or
 imports one run as a self-contained archive; see [Retention](#retention) and
 [Archives](#archives).
 
@@ -887,7 +896,7 @@ appears to "hang" until the ignored-abort child returns.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.10.0` and read the host log for `[dsh-superagent]` lines. |
+| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.11.0` and read the host log for `[dsh-superagent]` lines. |
 | `Cannot find module .../lib/control.js` (or `watch.js` / `report.js`) and the plugin never activates | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. The published package is not the cause: every version ships all twelve `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |
