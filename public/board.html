@@ -1,0 +1,1110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>任务看板 · dsh-superagent</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --panel-2: #fbfbfc;
+    --ink: #1b1f24;
+    --muted: #626b76;
+    --faint: #8a939e;
+    --line: #e4e7eb;
+    --line-strong: #d3d8de;
+    --accent: #2f6feb;
+    --accent-soft: #eaf1ff;
+    --ok: #1f8a5b;
+    --ok-soft: #e8f6ef;
+    --warn: #a8690b;
+    --warn-soft: #fdf3e2;
+    --bad: #c0362c;
+    --bad-soft: #fdeceb;
+    --idle: #6b7480;
+    --idle-soft: #eff1f4;
+    --radius: 14px;
+    --radius-sm: 10px;
+    --shadow: 0 1px 2px rgba(20, 26, 33, .05), 0 8px 24px rgba(20, 26, 33, .05);
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, textarea, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  a { color: var(--accent); }
+
+  .shell { max-width: 1280px; margin: 0 auto; padding: 20px 24px 56px; }
+  header.top {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 2px 18px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .logo {
+    width: 30px; height: 30px; border-radius: 9px; flex: none;
+    background: linear-gradient(145deg, #2f6feb, #7aa2f7);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.35);
+    position: relative;
+  }
+  .logo::after {
+    content: ""; position: absolute; inset: 8px; border-radius: 4px;
+    border: 2px solid rgba(255,255,255,.9); border-right-color: transparent; border-bottom-color: transparent;
+    transform: rotate(45deg);
+  }
+  .brand h1 { font-size: 17px; margin: 0; letter-spacing: .2px; white-space: nowrap; }
+  .brand p { margin: 0; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .top-spacer { flex: 1; }
+  .conn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 11px; border-radius: 999px; background: var(--panel);
+    border: 1px solid var(--line); color: var(--muted); font-size: 12px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--idle); }
+  .conn.live .dot { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+  .conn.down .dot { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+  .conn.connecting .dot { background: var(--warn); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  nav.tabs {
+    display: inline-flex; gap: 3px; padding: 4px; border: 1px solid var(--line);
+    background: var(--panel); border-radius: 12px; box-shadow: var(--shadow);
+  }
+  nav.tabs button {
+    border: 0; background: transparent; padding: 8px 16px; border-radius: 9px;
+    color: var(--muted); font-weight: 500; display: inline-flex; align-items: center; gap: 8px;
+  }
+  nav.tabs button:hover { background: var(--panel-2); color: var(--ink); }
+  nav.tabs button[aria-selected="true"] { background: var(--ink); color: #fff; }
+  nav.tabs button[aria-selected="true"] .badge { background: #fff; color: var(--ink); }
+  .badge {
+    min-width: 19px; height: 19px; padding: 0 6px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent);
+    font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .badge.hot { background: var(--warn-soft); color: var(--warn); }
+
+  main { margin-top: 18px; }
+  .view[hidden] { display: none !important; }
+
+  .board-grid { display: grid; grid-template-columns: 310px minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 940px) { .board-grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+  }
+  .panel-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px; border-bottom: 1px solid var(--line);
+  }
+  .panel-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .3px; color: var(--muted); text-transform: none; }
+  .panel-head .hint { margin-left: auto; color: var(--faint); font-size: 12px; }
+
+  .run-list { max-height: calc(100vh - 230px); overflow: auto; }
+  .run-item {
+    display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line);
+    background: transparent; padding: 13px 16px; transition: background .12s ease;
+  }
+  .run-item:last-child { border-bottom: 0; }
+  .run-item:hover { background: var(--panel-2); }
+  .run-item[aria-current="true"] { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+  .run-item .goal {
+    font-weight: 600; font-size: 13.5px; line-height: 1.4; margin: 0 0 7px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .run-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; color: var(--faint); font-size: 11.5px; align-items: center; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
+    border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap;
+    background: var(--idle-soft); color: var(--idle);
+  }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.run { background: var(--accent-soft); color: var(--accent); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.bad { background: var(--bad-soft); color: var(--bad); }
+  .pill.idle { background: var(--idle-soft); color: var(--idle); }
+  .pill .mini-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .pill.run .mini-dot { animation: pulse 1.2s infinite; }
+
+  .detail { min-height: 320px; }
+  .detail-head { padding: 18px 20px 16px; border-bottom: 1px solid var(--line); }
+  .detail-head .goal { margin: 0 0 10px; font-size: 16px; line-height: 1.45; word-break: break-word; }
+  .detail-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .stat-row { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 12px; color: var(--muted); font-size: 12.5px; }
+  .stat-row b { color: var(--ink); font-weight: 600; }
+  .stat-row .mono { font-family: var(--mono); font-size: 12px; }
+
+  .cards { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+  .card {
+    border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+    padding: 14px 15px; transition: border-color .12s ease;
+  }
+  .card:hover { border-color: var(--line-strong); }
+  .card.running { border-color: #b9cdf5; box-shadow: 0 0 0 3px #eef4ff; }
+  .card.failed, .card.unverified { border-color: #edc9c5; }
+  .card-top { display: flex; align-items: flex-start; gap: 12px; }
+  .card-index {
+    flex: none; width: 26px; height: 26px; border-radius: 8px; background: var(--panel-2);
+    border: 1px solid var(--line); color: var(--muted);
+    font: 600 12px/24px var(--mono); text-align: center;
+  }
+  .card-title { flex: 1; min-width: 0; }
+  .card-title h3 { margin: 0; font-size: 14px; line-height: 1.45; font-weight: 600; word-break: break-word; }
+  .card-sub { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 6px; color: var(--faint); font-size: 12px; }
+  .card-sub span { display: inline-flex; gap: 5px; align-items: center; }
+  .card-sub .mono { font-family: var(--mono); }
+  .card-actions { display: flex; gap: 6px; flex: none; }
+
+  .btn {
+    border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink);
+    border-radius: 9px; padding: 6px 12px; font-size: 12.5px; font-weight: 500;
+    transition: background .12s ease, border-color .12s ease, transform .06s ease;
+  }
+  .btn:hover { background: var(--panel-2); border-color: #b9c0c8; }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #245fd0; }
+  .btn.danger { color: var(--bad); border-color: #e7c2be; background: #fffafa; }
+  .btn.danger:hover { background: var(--bad-soft); }
+  .btn.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+  .btn.ghost:hover { background: var(--panel-2); color: var(--ink); }
+
+  .explain {
+    margin-top: 12px; padding: 12px 13px; border-radius: 10px;
+    background: var(--warn-soft); border: 1px solid #f0dcb8;
+  }
+  .explain.bad { background: var(--bad-soft); border-color: #efcbc7; }
+  .explain.ok { background: var(--ok-soft); border-color: #c6e7d5; }
+  .explain h4 { margin: 0 0 4px; font-size: 13px; }
+  .explain p { margin: 0; color: #57483a; font-size: 12.5px; }
+  .explain.bad p { color: #6b3b37; }
+  .explain .why { margin-top: 4px; color: var(--muted); }
+  .explain .acts { display: flex; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
+  details.raw { margin-top: 9px; }
+  details.raw summary { cursor: pointer; color: var(--faint); font-size: 11.5px; }
+  details.raw pre {
+    margin: 7px 0 0; padding: 10px; border-radius: 8px; background: #1e2228; color: #dfe4ea;
+    font: 11.5px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto;
+  }
+  .empty {
+    padding: 46px 20px; text-align: center; color: var(--muted);
+  }
+  .empty strong { display: block; color: var(--ink); font-size: 14px; margin-bottom: 4px; }
+  .empty .emoji { font-size: 22px; margin-bottom: 8px; }
+
+  .inbox-list { display: flex; flex-direction: column; gap: 12px; }
+  .inbox-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 18px 20px;
+  }
+  .inbox-card header { display: flex; gap: 10px; align-items: flex-start; }
+  .inbox-card h3 { margin: 0; font-size: 15px; line-height: 1.45; flex: 1; }
+  .inbox-card .why { margin: 10px 0 0; color: var(--muted); font-size: 13px; }
+  .inbox-card .impact {
+    margin-top: 10px; padding: 9px 11px; border-radius: 9px; background: var(--panel-2);
+    border: 1px dashed var(--line-strong); color: var(--muted); font-size: 12.5px;
+  }
+  .answer-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
+  .choice {
+    border: 1px solid var(--line-strong); background: var(--panel); border-radius: 9px;
+    padding: 7px 13px; font-size: 13px;
+  }
+  .choice:hover { border-color: var(--accent); color: var(--accent); }
+  .choice[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .answer-box { margin-top: 12px; display: flex; gap: 8px; align-items: flex-end; }
+  .answer-box textarea {
+    flex: 1; min-height: 42px; max-height: 160px; resize: vertical; padding: 9px 11px;
+    border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel-2);
+  }
+  .answer-box textarea:focus { outline: 2px solid #c8d9fb; border-color: var(--accent); background: #fff; }
+
+  .tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+  .tpl-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 18px; display: flex; flex-direction: column; gap: 10px;
+    cursor: pointer; transition: border-color .12s ease, box-shadow .12s ease;
+    text-align: left;
+  }
+  .tpl-card:hover { border-color: #b9cdf5; box-shadow: 0 2px 4px rgba(20,26,33,.05), 0 14px 32px rgba(47,111,235,.10); }
+  .tpl-card[aria-current="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .tpl-card h3 { margin: 0; font-size: 15px; line-height: 1.4; }
+  .tpl-card p { margin: 0; color: var(--muted); font-size: 12.5px; }
+  .tpl-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+  .tag { padding: 3px 8px; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); font-size: 11.5px; }
+
+  .tpl-form { margin-top: 16px; }
+  .field { margin-top: 13px; }
+  .field label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 5px; }
+  .field .desc { color: var(--faint); font-size: 12px; margin: 0 0 6px; }
+  .field input, .field textarea {
+    width: 100%; padding: 9px 11px; border: 1px solid var(--line-strong);
+    border-radius: 9px; background: var(--panel-2);
+  }
+  .field textarea { min-height: 74px; resize: vertical; }
+  .field input:focus, .field textarea:focus { outline: 2px solid #c8d9fb; border-color: var(--accent); background: #fff; }
+  .form-foot { display: flex; gap: 10px; align-items: center; margin-top: 16px; }
+  .form-foot .note { color: var(--faint); font-size: 12px; }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(20, 26, 33, .38); backdrop-filter: blur(2px);
+    display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 40;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    width: min(860px, 100%); max-height: 86vh; display: flex; flex-direction: column;
+    background: var(--panel); border-radius: 16px; box-shadow: 0 24px 64px rgba(10, 15, 22, .28);
+    overflow: hidden;
+  }
+  .modal header { display: flex; align-items: center; gap: 12px; padding: 15px 18px; border-bottom: 1px solid var(--line); }
+  .modal header h3 { margin: 0; font-size: 14px; flex: 1; }
+  .modal .body { padding: 16px 18px 20px; overflow: auto; }
+  .modal .body h4 { margin: 16px 0 6px; font-size: 13px; color: var(--muted); }
+  .modal .body h4:first-child { margin-top: 0; }
+  .modal pre {
+    margin: 0; padding: 12px; border-radius: 10px; background: #f2f4f7; border: 1px solid var(--line);
+    font: 12px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto;
+  }
+  .audit-row { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
+  .audit-row:last-child { border-bottom: 0; }
+  .audit-row time { flex: none; color: var(--faint); font-family: var(--mono); font-size: 11px; width: 138px; }
+  .audit-row .what { flex: 1; color: var(--muted); word-break: break-word; }
+  .audit-row .what b { color: var(--ink); font-weight: 600; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(10px);
+    background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 10px;
+    font-size: 13px; box-shadow: 0 12px 32px rgba(10,15,22,.24); opacity: 0;
+    pointer-events: none; transition: opacity .18s ease, transform .18s ease; z-index: 60;
+    max-width: 80vw;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.bad { background: var(--bad); }
+
+  .gate { min-height: 70vh; display: flex; align-items: center; justify-content: center; }
+  .gate .panel { width: min(520px, 100%); padding: 28px; }
+  .gate h2 { margin: 0 0 6px; font-size: 18px; }
+  .gate p { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+  .gate input {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 9px;
+    background: var(--panel-2); font-family: var(--mono); font-size: 12.5px;
+  }
+  .gate .row { display: flex; gap: 8px; margin-top: 12px; }
+  .gate .err { color: var(--bad); font-size: 12.5px; margin-top: 10px; min-height: 18px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+</style>
+</head>
+<body>
+<div class="shell" id="shell">
+  <header class="top">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"></div>
+      <div>
+        <h1>任务看板</h1>
+        <p>dsh-superagent · 谁在做什么，什么在等你</p>
+      </div>
+    </div>
+    <div class="top-spacer"></div>
+    <div class="conn connecting" id="conn" role="status" aria-live="polite">
+      <span class="dot"></span><span id="conn-text">正在连接</span>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="页面">
+    <button role="tab" id="tab-board" aria-controls="view-board" aria-selected="true" data-tab="board">看板</button>
+    <button role="tab" id="tab-inbox" aria-controls="view-inbox" aria-selected="false" data-tab="inbox">
+      待办 <span class="badge" id="inbox-count" hidden>0</span>
+    </button>
+    <button role="tab" id="tab-templates" aria-controls="view-templates" aria-selected="false" data-tab="templates">模板</button>
+  </nav>
+
+  <main>
+    <section class="view" id="view-board" role="tabpanel" aria-labelledby="tab-board">
+      <div class="board-grid">
+        <aside class="panel">
+          <div class="panel-head"><h2>最近的运行</h2><span class="hint" id="run-count"></span></div>
+          <div class="run-list" id="run-list"></div>
+        </aside>
+        <section class="panel detail" id="detail">
+          <div class="empty"><strong>正在读取运行</strong>看板会自己刷新，不需要手动点。</div>
+        </section>
+      </div>
+    </section>
+
+    <section class="view" id="view-inbox" role="tabpanel" aria-labelledby="tab-inbox" hidden>
+      <div id="inbox"></div>
+    </section>
+
+    <section class="view" id="view-templates" role="tabpanel" aria-labelledby="tab-templates" hidden>
+      <div class="tpl-grid" id="tpl-grid"></div>
+      <section class="panel tpl-form" id="tpl-form-panel" hidden>
+        <div class="panel-head">
+          <h2 id="tpl-form-title">发起运行</h2>
+          <span class="hint">填完直接启动，然后跳到看板</span>
+        </div>
+        <div style="padding: 18px 20px 22px">
+          <p id="tpl-purpose" style="margin:0;color:var(--muted);font-size:13px"></p>
+          <div id="tpl-fields"></div>
+          <div class="form-foot">
+            <button class="btn primary" id="tpl-start">启动这次运行</button>
+            <span class="note" id="tpl-note"></span>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+</div>
+
+<div class="gate" id="gate" hidden>
+  <div class="panel">
+    <h2>需要访问口令</h2>
+    <p>看板只接受本机访问。打开插件状态目录里的 <code>board.json</code>，把 <code>token</code> 粘到下面，或直接打开带 <code>?token=</code> 的地址。</p>
+    <label class="sr-only" for="gate-token">访问口令</label>
+    <input id="gate-token" placeholder="粘贴 token" autocomplete="off" spellcheck="false">
+    <div class="row"><button class="btn primary" id="gate-submit">连接看板</button></div>
+    <div class="err" id="gate-err"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <header>
+      <h3 id="modal-title">详情</h3>
+      <button class="btn ghost" id="modal-close">关闭</button>
+    </header>
+    <div class="body" id="modal-body"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const $ = (id) => document.getElementById(id);
+  const state = {
+    token: '',
+    snapshot: null,
+    selectedRunId: null,
+    detail: null,
+    detailSig: '',
+    tab: 'board',
+    templateId: null,
+    inboxDraft: new Map(),
+    source: null,
+    retry: 0,
+    timer: null,
+    busy: new Set(),
+  };
+
+  const RUN_PILL = {
+    queued: 'idle', planning: 'run', running: 'run', aggregating: 'run',
+    completed: 'ok', partial: 'warn', failed: 'bad', cancelled: 'idle', interrupted: 'warn',
+  };
+  const SUB_PILL = {
+    pending: 'idle', waiting: 'idle', running: 'run', completed: 'ok',
+    failed: 'bad', skipped: 'idle', unverified: 'warn', cancelled: 'idle', blocked: 'warn',
+  };
+
+  function esc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function pill(status, label, kind) {
+    return `<span class="pill ${kind || ''}"><span class="mini-dot"></span>${esc(label || status)}</span>`;
+  }
+  function runPill(run) { return pill(run.status, run.statusLabel, RUN_PILL[run.status] || 'idle'); }
+  function subPill(subtask) { return pill(subtask.status, subtask.statusLabel, SUB_PILL[subtask.status] || 'idle'); }
+  function fmtDuration(ms) {
+    if (ms == null || !Number.isFinite(ms)) return '—';
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return s + ' 秒';
+    const m = Math.floor(s / 60), h = Math.floor(m / 60);
+    if (h > 0) return h + ' 小时 ' + (m % 60) + ' 分';
+    return m + ' 分 ' + (s % 60) + ' 秒';
+  }
+  function fmtTime(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+  function fmtTokens(n) {
+    if (n == null || !Number.isFinite(n)) return '—';
+    return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+  }
+  function fmtCost(cost) { return cost && cost.text ? cost.text : '—'; }
+
+  function toast(message, bad = false) {
+    const el = $('toast');
+    el.textContent = message;
+    el.className = 'toast show' + (bad ? ' bad' : '');
+    clearTimeout(el._timer);
+    el._timer = setTimeout(() => { el.className = 'toast' + (bad ? ' bad' : ''); }, 3200);
+  }
+
+  function tokenFromUrl() {
+    const url = new URL(location.href);
+    const value = url.searchParams.get('token');
+    if (!value) return '';
+    url.searchParams.delete('token');
+    history.replaceState(null, '', url.pathname + (url.search ? url.search : '') + url.hash);
+    return value;
+  }
+
+  function readToken() {
+    const fromUrl = tokenFromUrl();
+    if (fromUrl) {
+      try { localStorage.setItem('dsh.board.token', fromUrl); } catch {}
+      return fromUrl;
+    }
+    try { return localStorage.getItem('dsh.board.token') || ''; } catch { return ''; }
+  }
+
+  function showGate(message) {
+    $('gate').hidden = false;
+    $('shell').style.display = 'none';
+    if (message) $('gate-err').textContent = message;
+    $('gate-token').focus();
+  }
+  function hideGate() {
+    $('gate').hidden = true;
+    $('shell').style.display = '';
+  }
+
+  async function api(path, options = {}) {
+    const headers = { authorization: 'Bearer ' + state.token };
+    if (options.body !== undefined) headers['content-type'] = 'application/json';
+    const res = await fetch(path, {
+      method: options.method || 'GET',
+      headers,
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    });
+    let payload = null;
+    try { payload = await res.json(); } catch {}
+    if (res.status === 401 || res.status === 403 && payload?.error?.id === 'unauthorized') {
+      try { localStorage.removeItem('dsh.board.token'); } catch {}
+      showGate('口令不正确或已过期，请重新粘贴。');
+      throw new Error('访问口令不正确');
+    }
+    if (!res.ok) {
+      const message = payload?.error?.summary || payload?.error?.message || ('请求失败（' + res.status + '）');
+      const hint = payload?.error?.hint;
+      throw new Error(hint ? message + ' ' + hint : message);
+    }
+    return payload?.data ?? payload;
+  }
+
+  // ---------- connection ----------
+
+  function setConn(kind, text) {
+    const el = $('conn');
+    el.className = 'conn ' + kind;
+    $('conn-text').textContent = text;
+  }
+
+  function connect() {
+    if (!state.token) { showGate(); return; }
+    hideGate();
+    if (state.source) { try { state.source.close(); } catch {} }
+    setConn('connecting', '正在连接');
+    const source = new EventSource('/api/board/events?token=' + encodeURIComponent(state.token));
+    state.source = source;
+    source.addEventListener('board', (event) => {
+      let frame = null;
+      try { frame = JSON.parse(event.data); } catch { return; }
+      if (frame.type === 'snapshot' && frame.data) {
+        state.retry = 0;
+        setConn('live', '实时更新中');
+        applySnapshot(frame.data);
+      } else if (frame.type === 'error') {
+        toast(frame.message || '看板读取失败', true);
+      }
+    });
+    source.onopen = () => { state.retry = 0; setConn('live', '实时更新中'); };
+    source.onerror = () => {
+      setConn('down', '连接断开，正在重连');
+      if (source.readyState === EventSource.CLOSED) {
+        scheduleReconnect();
+      }
+    };
+  }
+
+  function scheduleReconnect() {
+    clearTimeout(state.timer);
+    const delay = Math.min(15000, 700 * Math.pow(1.6, state.retry++));
+    state.timer = setTimeout(connect, delay);
+  }
+
+  // ---------- render ----------
+
+  function applySnapshot(snapshot) {
+    state.snapshot = snapshot;
+    renderRunList();
+    renderInbox();
+    renderTemplates();
+    renderDetailIfNeeded();
+    const count = snapshot.inbox ? snapshot.inbox.length : 0;
+    const badge = $('inbox-count');
+    badge.textContent = String(count);
+    badge.hidden = count === 0;
+    badge.className = 'badge' + (count > 0 ? ' hot' : '');
+    $('run-count').textContent = snapshot.runs.length + ' 次';
+    if (!state.selectedRunId && snapshot.runs[0]) {
+      state.selectedRunId = snapshot.runs[0].id;
+      renderRunList();
+      loadDetail();
+    }
+    if (!state.snapshot.capabilities.start) {
+      $('tpl-note').textContent = snapshot.capabilities.reason || '当前宿主不能从看板发起运行';
+    }
+  }
+
+  function renderRunList() {
+    const list = $('run-list');
+    const runs = state.snapshot?.runs || [];
+    if (runs.length === 0) {
+      list.innerHTML = '<div class="empty"><strong>还没有运行</strong>去「模板」发起第一次，或者让助手调用 superagent_start。</div>';
+      return;
+    }
+    list.innerHTML = runs.map(run => `
+      <button class="run-item" aria-current="${run.id === state.selectedRunId}" data-run="${esc(run.id)}">
+        <p class="goal">${esc(run.goal)}</p>
+        <div class="run-meta">
+          ${runPill(run)}
+          <span>${esc(fmtDuration(run.elapsedMs))}</span>
+          <span>${run.counts.completed || 0}/${run.counts.total} 完成</span>
+          ${run.attentionCount ? '<span>· ' + run.attentionCount + ' 个待答</span>' : ''}
+        </div>
+      </button>`).join('');
+    list.querySelectorAll('[data-run]').forEach(button => {
+      button.addEventListener('click', () => {
+        state.selectedRunId = button.dataset.run;
+        state.detail = null;
+        state.detailSig = '';
+        renderRunList();
+        renderDetailIfNeeded(true);
+        loadDetail();
+      });
+    });
+  }
+
+  function renderDetailIfNeeded(force) {
+    const run = (state.snapshot?.runs || []).find(item => item.id === state.selectedRunId);
+    if (!run) {
+      $('detail').innerHTML = '<div class="empty"><strong>还没有选中运行</strong>左侧点一次运行，这里会显示每条子任务的进度。</div>';
+      return;
+    }
+    const sig = JSON.stringify(run.subtasks.map(s => [s.key, s.status, s.attempts, s.tokens, s.finishedAt]));
+    if (!force && state.detail && state.detailSig === sig) return;
+    state.detailSig = sig;
+    renderDetail(run);
+    loadDetail();
+  }
+
+  function renderDetail(run) {
+    const detail = state.detail && state.detail.run.id === run.id ? state.detail : null;
+    const capacity = state.snapshot?.capabilities || {};
+    const explanation = run.explanation;
+    const parts = [];
+    parts.push(`<div class="detail-head">
+      <p class="goal">${esc(run.goal)}</p>
+      <div class="detail-actions">
+        ${runPill(run)}
+        ${run.active && capacity.answer ? '<button class="btn danger" id="run-cancel">停止这次运行</button>' : ''}
+        ${!run.active && capacity.answer ? '<button class="btn" id="run-resume">继续未完成的工作</button>' : ''}
+        <button class="btn ghost" id="run-report">${detail && detail.report ? '查看最终报告' : '刷新详情'}</button>
+      </div>
+      <div class="stat-row">
+        <span>建立于 <b>${esc(fmtTime(run.createdAt))}</b></span>
+        <span>耗时 <b>${esc(fmtDuration(run.elapsedMs))}</b></span>
+        <span>tokens <b class="mono">${esc(fmtTokens(run.tokens))}</b></span>
+        <span>花费 <b class="mono">${esc(fmtCost(run.cost))}</b></span>
+        <span>子任务 <b>${run.counts.completed || 0}/${run.counts.total} 完成</b></span>
+      </div>
+      ${run.preflight && run.preflight.blocked ? `<div class="explain bad" style="margin-top:14px"><h4>有 ${run.preflight.blocked} 条子任务缺少能力，没有启动</h4><p>它们在下面标成「缺少能力，未启动」，补上工具后可以单独重跑。</p></div>` : ''}
+    </div>`);
+
+    if (explanation && run.status !== 'completed') {
+      parts.push(errorBlock(explanation, run, null));
+    }
+
+    if (!run.subtasks.length) {
+      parts.push('<div class="empty"><strong>还没有拆出子任务</strong>运行可能还在规划，或规划没有产出可用步骤。</div>');
+    } else {
+      parts.push('<div class="cards">' + run.subtasks.map(subtask => cardHtml(run, subtask, capacity)).join('') + '</div>');
+    }
+    const el = $('detail');
+    el.innerHTML = parts.join('');
+    wireDetail(run);
+  }
+
+  function errorBlock(explanation, run, subtask) {
+    const tone = explanation.code === 'needs-review' || explanation.code === 'blocked' ? '' : ' bad';
+    const subKey = subtask?.key || explanation.subtaskKey || '';
+    return `<div class="explain${tone}" style="margin:12px 14px 0">
+      <h4>${esc(explanation.title)}</h4>
+      <p>${esc(explanation.what)}</p>
+      <p class="why">${esc(explanation.why)}</p>
+      <div class="acts">
+        ${actionButton(explanation.action, run, subKey)}
+        <button class="btn ghost" data-diagnostics="${esc(run.id)}" data-sub="${esc(subKey)}">复制诊断信息</button>
+      </div>
+      ${explanation.detail ? `<details class="raw"><summary>原始错误（给技术同学看）</summary><pre>${esc(explanation.detail)}</pre></details>` : ''}
+    </div>`;
+  }
+
+  function actionButton(action, run, subKey) {
+    if (!action) return '';
+    const map = {
+      retry: { label: action.label || '重试', attrs: `data-act="retry" data-run="${esc(run.id)}" data-sub="${esc(subKey)}"` },
+      rerun: { label: action.label || '重跑这一条', attrs: `data-act="rerun" data-run="${esc(run.id)}" data-sub="${esc(subKey)}"` },
+      config: { label: action.label || '查看配置说明', attrs: 'data-act="config"' },
+      model: { label: action.label || '检查模型配置', attrs: 'data-act="config"' },
+      review: { label: action.label || '去验收', attrs: 'data-act="review"' },
+    };
+    const item = map[action.kind];
+    if (!item) return '';
+    return `<button class="btn primary" ${item.attrs}>${esc(item.label)}</button>`;
+  }
+
+  function cardHtml(run, subtask, capacity) {
+    const deps = subtask.dependsOn.length
+      ? `<span>依赖 ${subtask.dependsOn.map(esc).join('、')}</span>` : '';
+    const waiting = subtask.waitingOn.length
+      ? `<span>等待 ${subtask.waitingOn.map(esc).join('、')}</span>` : '';
+    const usage = [
+      subtask.tokens != null ? `<span>tokens <b class="mono">${esc(fmtTokens(subtask.tokens))}</b></span>` : '',
+      subtask.cost ? `<span>花费 <b class="mono">${esc(fmtCost(subtask.cost))}</b></span>` : '',
+      subtask.attempts ? `<span>尝试 <b>${subtask.attempts}</b> 次</span>` : '',
+      subtask.startedAt ? `<span>开始 ${esc(fmtTime(subtask.startedAt))}</span>` : '',
+      subtask.elapsedMs != null ? `<span>耗时 <b>${esc(fmtDuration(subtask.elapsedMs))}</b></span>` : '',
+    ].join('');
+    return `<article class="card ${esc(subtask.status)}" data-sub-card="${esc(subtask.key)}">
+      <div class="card-top">
+        <div class="card-index">${esc(subtask.index ?? '·')}</div>
+        <div class="card-title">
+          <h3>${esc(subtask.title)}</h3>
+          <div class="card-sub">
+            ${subPill(subtask)}
+            ${subtask.childId ? `<span class="mono">${esc(subtask.childId)}</span>` : ''}
+            ${deps}${waiting}
+            ${subtask.hasResult ? '<span>有输出</span>' : ''}
+          </div>
+          ${usage ? `<div class="card-sub">${usage}</div>` : ''}
+        </div>
+        <div class="card-actions">
+          <button class="btn ghost" data-act="output" data-run="${esc(run.id)}" data-sub="${esc(subtask.key)}">输出</button>
+          ${subtask.canCancel && capacity.answer ? `<button class="btn danger" data-act="cancel" data-run="${esc(run.id)}" data-sub="${esc(subtask.key)}">取消</button>` : ''}
+          ${subtask.canRerun && capacity.answer ? `<button class="btn" data-act="rerun" data-run="${esc(run.id)}" data-sub="${esc(subtask.key)}">重跑</button>` : ''}
+        </div>
+      </div>
+      ${subtask.skipReason ? `<div class="explain"><h4>为什么没跑</h4><p>${esc(subtask.skipReason)}</p></div>` : ''}
+      ${subtask.explanation ? errorBlock(subtask.explanation, run, subtask) : ''}
+    </article>`;
+  }
+
+  function wireDetail(run) {
+    const el = $('detail');
+    el.querySelectorAll('[data-act]').forEach(button => {
+      button.addEventListener('click', () => onAction(button.dataset.act, button.dataset.run || run.id, button.dataset.sub || ''));
+    });
+    const cancel = $('run-cancel');
+    if (cancel) cancel.addEventListener('click', () => cancelRun(run.id));
+    const resume = $('run-resume');
+    if (resume) resume.addEventListener('click', () => resumeRun(run.id));
+    const report = $('run-report');
+    if (report) report.addEventListener('click', () => showReport(run.id));
+  }
+
+  function onAction(act, runId, subKey) {
+    if (act === 'cancel') return cancelSubtask(runId, subKey);
+    if (act === 'rerun' || act === 'retry') return rerunSubtask(runId, subKey);
+    if (act === 'output') return showOutput(runId, subKey);
+    if (act === 'config') return showConfigHelp(runId, subKey);
+    if (act === 'review') { switchTab('inbox'); return; }
+    if (act === 'diagnostics') return copyDiagnostics(runId, subKey);
+  }
+
+  async function loadDetail() {
+    const runId = state.selectedRunId;
+    if (!runId) return;
+    try {
+      const detail = await api('/api/board/runs/' + encodeURIComponent(runId));
+      if (state.selectedRunId !== runId) return;
+      state.detail = detail;
+      const run = (state.snapshot?.runs || []).find(item => item.id === runId);
+      if (run) renderDetail(run);
+    } catch (error) {
+      toast(error.message, true);
+    }
+  }
+
+  async function post(path, body) {
+    const data = await api(path, { method: 'POST', body });
+    await refresh();
+    return data;
+  }
+
+  async function refresh() {
+    try {
+      const snapshot = await api('/api/board/state');
+      applySnapshot(snapshot);
+      if (state.selectedRunId) await loadDetail();
+    } catch (error) {
+      toast(error.message, true);
+    }
+  }
+
+  async function cancelSubtask(runId, subKey) {
+    if (!subKey) { toast('先选中一条子任务再取消', true); return; }
+    const key = 'cancel:' + runId + ':' + subKey;
+    if (state.busy.has(key)) return;
+    state.busy.add(key);
+    try {
+      await post('/api/board/runs/' + encodeURIComponent(runId) + '/subtasks/' + encodeURIComponent(subKey) + '/cancel', {});
+      toast('已取消这一条，其他子任务继续。');
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      state.busy.delete(key);
+    }
+  }
+
+  async function rerunSubtask(runId, subKey) {
+    if (!subKey) { toast('这条失败不属于某一条子任务，先点「继续未完成的工作」', true); return; }
+    const key = 'rerun:' + runId + ':' + subKey;
+    if (state.busy.has(key)) return;
+    state.busy.add(key);
+    try {
+      await post('/api/board/runs/' + encodeURIComponent(runId) + '/subtasks/' + encodeURIComponent(subKey) + '/rerun', {});
+      toast('已重新排队这一条，其他已完成的不重跑。');
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      state.busy.delete(key);
+    }
+  }
+
+  async function cancelRun(runId) {
+    try {
+      // The board only knows per-subtask cancel; a whole-run stop is the sum of
+      // its open subtasks, done one by one so the audit trail stays readable.
+      const detail = state.detail && state.detail.run.id === runId ? state.detail : null;
+      const open = (detail?.subtasks || []).filter(subtask => subtask.canCancel);
+      if (!open.length) { toast('这次运行没有可停止的子任务', true); return; }
+      for (const subtask of open) {
+        await api('/api/board/runs/' + encodeURIComponent(runId) + '/subtasks/' + encodeURIComponent(subtask.key) + '/cancel', { method: 'POST', body: {} });
+      }
+      await refresh();
+      toast('已停止未完成的子任务。');
+    } catch (error) {
+      toast(error.message, true);
+    }
+  }
+
+  async function resumeRun(runId) {
+    try {
+      await post('/api/board/runs/' + encodeURIComponent(runId) + '/resume', {});
+      toast('已继续未完成的工作。');
+    } catch (error) {
+      toast(error.message, true);
+    }
+  }
+
+  function showReport(runId) {
+    const detail = state.detail && state.detail.run.id === runId ? state.detail : null;
+    if (!detail || !detail.report) {
+      loadDetail().then(() => showReport(runId));
+      return;
+    }
+    openModal('最终报告', '<pre>' + esc(detail.report) + '</pre>');
+  }
+
+  function showOutput(runId, subKey) {
+    const detail = state.detail && state.detail.run.id === runId ? state.detail : null;
+    if (!detail) { loadDetail().then(() => showOutput(runId, subKey)); return; }
+    const subtask = (detail.subtasks || []).find(item => item.key === subKey);
+    if (!subtask) { toast('这条子任务的详情暂时读不到', true); return; }
+    const audit = (subtask.audit || []).slice().reverse().map(entry => auditHtml(entry)).join('');
+    openModal(subtask.title + ' · 输出与审计', [
+      '<h4>它拿到的任务</h4><pre>' + esc(subtask.prompt || '(没有单独的任务说明)') + '</pre>',
+      '<h4>输出</h4><pre>' + esc(subtask.result || '(还没有输出)') + '</pre>',
+      subtask.deliverables.length ? '<h4>交付物</h4><pre>' + esc(subtask.deliverables.join('\n')) + '</pre>' : '',
+      '<h4>审计记录</h4>' + (audit || '<p style="color:var(--muted);font-size:12.5px">这条子任务还没有审计记录。</p>'),
+    ].join(''));
+  }
+
+  function auditHtml(entry) {
+    return `<div class="audit-row"><time>${esc(fmtTime(entry.at))}</time>
+      <div class="what"><b>${esc(entry.kind || entry.action || '事件')}</b>
+      ${entry.actor ? ' · ' + esc(entry.actor) : ''}
+      ${entry.decision ? ' · ' + esc(entry.decision) : ''}
+      ${entry.result ? ' · ' + esc(entry.result) : ''}
+      ${entry.reason ? '<br>' + esc(entry.reason) : ''}</div></div>`;
+  }
+
+  function showConfigHelp(runId, subKey) {
+    const run = (state.snapshot?.runs || []).find(item => item.id === runId);
+    const subtask = run?.subtasks.find(item => item.key === subKey);
+    const explanation = subtask?.explanation || run?.explanation;
+    const lines = [
+      '<h4>先看这一句</h4><p>' + esc(explanation?.what || '没有读到具体原因，先复制诊断信息。') + '</p>',
+      '<h4>可以检查的地方</h4>',
+      '<ul style="margin:0;padding-left:18px;color:var(--muted);font-size:13px;line-height:1.8">',
+      '<li>宿主的工具/权限配置：缺能力、spawn EPERM、沙箱写入被拒，都来自这里。</li>',
+      '<li>模型配置：地址、密钥、模型名、额度和超时。</li>',
+      '<li>工作目录：子任务只能写父会话可写的目录。</li>',
+      '</ul>',
+      '<h4>诊断信息</h4><pre>' + esc(diagnostics(runId, subKey)) + '</pre>',
+    ];
+    openModal('配置说明', lines.join(''));
+  }
+
+  function diagnostics(runId, subKey) {
+    const run = (state.snapshot?.runs || []).find(item => item.id === runId);
+    const subtask = run?.subtasks.find(item => item.key === subKey);
+    return JSON.stringify({
+      runId,
+      subtask: subKey || null,
+      runStatus: run?.status,
+      runError: run?.error,
+      subtaskStatus: subtask?.status,
+      subtaskError: subtask?.explanation?.detail || null,
+      missingCapabilities: subtask?.missingCapabilities,
+      requires: subtask?.requires,
+      at: new Date().toISOString(),
+    }, null, 2);
+  }
+
+  async function copyDiagnostics(runId, subKey) {
+    const text = diagnostics(runId, subKey);
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('诊断信息已复制。');
+    } catch {
+      openModal('诊断信息', '<pre>' + esc(text) + '</pre>');
+    }
+  }
+
+  function openModal(title, html) {
+    $('modal-title').textContent = title;
+    $('modal-body').innerHTML = html;
+    $('modal').hidden = false;
+  }
+  function closeModal() { $('modal').hidden = true; }
+
+  // ---------- inbox ----------
+
+  function renderInbox() {
+    const items = state.snapshot?.inbox || [];
+    const root = $('inbox');
+    if (items.length === 0) {
+      root.innerHTML = `<div class="panel"><div class="empty"><div class="emoji">✓</div><strong>当前没有需要你处理的事</strong>运行会自己往前走；出问题时这里会亮起来。</div></div>`;
+      return;
+    }
+    root.innerHTML = '<div class="inbox-list">' + items.map(item => {
+      const draft = state.inboxDraft.get(item.id) || { text: '', choice: '' };
+      const choices = item.options.map(option =>
+        `<button class="choice" aria-pressed="${draft.choice === option}" data-choice="${esc(option)}" data-item="${esc(item.id)}">${esc(option)}</button>`
+      ).join('');
+      return `<article class="inbox-card" data-inbox="${esc(item.id)}">
+        <header>
+          ${pill(item.kind, item.kindLabel, item.kind === 'review' ? 'warn' : item.kind === 'permission' ? 'bad' : 'run')}
+          <h3>${esc(item.title)}</h3>
+        </header>
+        <p class="why">${esc(item.what)}</p>
+        <p class="why">${esc(item.why)}</p>
+        <div class="impact">${esc(item.impact)}</div>
+        ${choices ? '<div class="answer-row">' + choices + '</div>' : ''}
+        <div class="answer-box">
+          <textarea data-answer="${esc(item.id)}" placeholder="也可以直接写你的回答或补充说明"></textarea>
+          <button class="btn primary" data-send="${esc(item.id)}">提交回答</button>
+        </div>
+      </article>`;
+    }).join('') + '</div>';
+
+    root.querySelectorAll('[data-choice]').forEach(button => {
+      button.addEventListener('click', () => {
+        const id = button.dataset.item;
+        const draft = state.inboxDraft.get(id) || { text: '', choice: '' };
+        draft.choice = button.dataset.choice;
+        state.inboxDraft.set(id, draft);
+        const card = root.querySelector('[data-inbox="' + cssEscape(id) + '"]');
+        if (card) card.querySelectorAll('[data-choice]').forEach(other => {
+          other.setAttribute('aria-pressed', String(other.dataset.choice === draft.choice));
+        });
+        const area = root.querySelector('[data-answer="' + cssEscape(id) + '"]');
+        if (area && !area.value) area.value = draft.choice;
+      });
+    });
+    root.querySelectorAll('[data-send]').forEach(button => {
+      button.addEventListener('click', () => sendInbox(button.dataset.send));
+    });
+  }
+
+  function cssEscape(value) {
+    return String(value).replace(/["\\]/g, '\\$&');
+  }
+
+  async function sendInbox(itemId) {
+    const card = document.querySelector('[data-inbox="' + cssEscape(itemId) + '"]');
+    const area = card?.querySelector('[data-answer]');
+    const draft = state.inboxDraft.get(itemId) || { choice: '' };
+    const answer = (area?.value || draft.choice || '').trim();
+    if (!answer) { toast('先选一个选项，或写一句你的回答', true); return; }
+    const key = 'answer:' + itemId;
+    if (state.busy.has(key)) return;
+    state.busy.add(key);
+    if (area) area.disabled = true;
+    try {
+      const data = await post('/api/board/inbox/' + encodeURIComponent(itemId) + '/answer', { answer });
+      state.inboxDraft.delete(itemId);
+      toast(data?.message || '已提交，运行会从这里继续。');
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      state.busy.delete(key);
+      if (area) area.disabled = false;
+    }
+  }
+
+  // ---------- templates ----------
+
+  function renderTemplates() {
+    const templates = state.snapshot?.templates || [];
+    const grid = $('tpl-grid');
+    grid.innerHTML = templates.map(template => `
+      <button class="tpl-card" data-tpl="${esc(template.id)}" aria-current="${state.templateId === template.id}">
+        <h3>${esc(template.title)}</h3>
+        <p>${esc(template.purpose)}</p>
+        <div class="tpl-tags">
+          <span class="tag">约 ${template.estimate} 个子任务</span>
+          <span class="tag">${template.params.length} 个参数</span>
+          <span class="tag">${esc(template.bestFor)}</span>
+        </div>
+      </button>`).join('');
+    grid.querySelectorAll('[data-tpl]').forEach(button => {
+      button.addEventListener('click', () => selectTemplate(button.dataset.tpl));
+    });
+    if (state.templateId) renderTemplateForm();
+  }
+
+  function selectTemplate(id) {
+    state.templateId = id;
+    renderTemplates();
+    renderTemplateForm();
+    $('tpl-form-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function renderTemplateForm() {
+    const template = (state.snapshot?.templates || []).find(item => item.id === state.templateId);
+    const panel = $('tpl-form-panel');
+    if (!template) { panel.hidden = true; return; }
+    panel.hidden = false;
+    $('tpl-form-title').textContent = template.title;
+    $('tpl-purpose').textContent = template.purpose + '。预计约 ' + template.estimate + ' 个子任务，规划器可能会合并步骤。';
+    $('tpl-fields').innerHTML = template.params.map(param => `
+      <div class="field">
+        <label for="p-${esc(param.name)}">${esc(param.label)}</label>
+        <p class="desc">${esc(param.hint)}${param.description ? ' · ' + esc(param.description) : ''}</p>
+        <textarea id="p-${esc(param.name)}" data-param="${esc(param.name)}" rows="3"></textarea>
+      </div>`).join('');
+    $('tpl-start').disabled = !(state.snapshot?.capabilities.start);
+    if (!state.snapshot?.capabilities.start) {
+      $('tpl-note').textContent = state.snapshot?.capabilities.reason || '当前宿主不能从看板发起运行';
+    } else {
+      $('tpl-note').textContent = '启动后会直接跳到看板，实时显示每条子任务。';
+    }
+  }
+
+  async function startTemplate() {
+    const template = (state.snapshot?.templates || []).find(item => item.id === state.templateId);
+    if (!template) return;
+    const values = {};
+    const missing = [];
+    document.querySelectorAll('[data-param]').forEach(input => {
+      const value = input.value.trim();
+      values[input.dataset.param] = value;
+      if (!value) missing.push(input.previousElementSibling?.previousElementSibling?.textContent || input.dataset.param);
+    });
+    if (missing.length) { toast('还差：' + missing.join('、'), true); return; }
+    const button = $('tpl-start');
+    button.disabled = true;
+    try {
+      const data = await post('/api/board/templates/' + encodeURIComponent(template.id) + '/start', { values });
+      if (data?.runId) {
+        state.selectedRunId = data.runId;
+        state.detail = null;
+        state.detailSig = '';
+        switchTab('board');
+        await refresh();
+        toast('已启动，跳到看板了。');
+      }
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  // ---------- tabs ----------
+
+  function switchTab(tab) {
+    state.tab = tab;
+    document.querySelectorAll('nav.tabs button').forEach(button => {
+      button.setAttribute('aria-selected', String(button.dataset.tab === tab));
+    });
+    document.querySelectorAll('.view').forEach(view => {
+      view.hidden = view.id !== 'view-' + tab;
+    });
+  }
+
+  // ---------- boot ----------
+
+  function boot() {
+    document.querySelectorAll('nav.tabs button').forEach(button => {
+      button.addEventListener('click', () => switchTab(button.dataset.tab));
+    });
+    $('gate-submit').addEventListener('click', () => {
+      const value = $('gate-token').value.trim();
+      if (!value) { $('gate-err').textContent = '先粘贴 token。'; return; }
+      try { localStorage.setItem('dsh.board.token', value); } catch {}
+      state.token = value;
+      $('gate-err').textContent = '';
+      connect();
+    });
+    $('gate-token').addEventListener('keydown', event => {
+      if (event.key === 'Enter') $('gate-submit').click();
+    });
+    $('modal-close').addEventListener('click', closeModal);
+    $('modal').addEventListener('click', event => {
+      if (event.target === $('modal')) closeModal();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeModal();
+    });
+    $('tpl-start').addEventListener('click', startTemplate);
+
+    state.token = readToken();
+    if (!state.token) { showGate(); return; }
+    connect();
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>

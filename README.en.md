@@ -268,6 +268,8 @@ Row config in `<profile>/cordis.patch.yml`:
 | `consolePort` | off | Loopback port for the conversation console; `0` picks a free one. Requires the host `sessionController` service. |
 | `consoleRoot` | `workbenchRoot`, then host cwd | Directory the console's conversation session joins. |
 | `consolePreset` | host default | Agent preset id the console session mounts. Tools follow this preset, not this plugin. |
+| `boardPort` | off | Loopback port for the task board; `0` picks a free one. One page with subtask cards, the human inbox, and the built-in templates. See [Task board](#task-board). |
+| `boardRoot` | `consoleRoot`, then `workbenchRoot` | Directory the board's own conversation session joins, and where template-started runs work. |
 | `schedulerTickSeconds` | `30` | How often a live plan is checked for a due window, in seconds (1–3600). Nothing is armed until a plan exists, so this has no effect on an install with no schedules. |
 | `schedulerHumanPriority` | `true` | Default for a plan's `human_priority`: a scheduled run may not take the last free concurrency slot. |
 | `schedulerMaxConsecutiveFailures` | `3` | Consecutive failed executions before a plan pauses itself and says so once (1–20). |
@@ -1488,6 +1490,62 @@ is confirmed the page shows a unified diff.
 When `workbenchPort` is on, the plugin records the files each run changed into
 that run's JSON record (`run.changes`), so the Runs view can show those files and
 their diff against `git HEAD` later.
+
+## Task board
+
+`boardPort` adds the page to open when you do not want to read a run record.
+It is written for someone who has never seen the plugin: every subtask is a
+card, everything that waits for a person is in one inbox, and the four built-in
+templates start with a form instead of a prompt.
+
+```yaml
+- id: superagent
+  config:
+    boardPort: 0              # off by default; 0 = OS picks a free loopback port
+    boardRoot: /path/to/project
+```
+
+Open the URL in `<stateDir>/board.json` (mode `0600`), or use
+`http://127.0.0.1:<port>/?token=<token>`; the token is stored in the browser and
+removed from the address bar. Every route and the event stream answer `401`
+without it, and a non-loopback `Host` answers `403`. The stream opens with a
+full snapshot, so a reconnect or a page refresh restores the board from durable
+run records instead of a blank page.
+
+**Board.** One card per subtask with its status, attempts, elapsed time, tokens,
+cost, dependencies, and — when it did not run — the dependency that stopped it.
+Each card can be cancelled on its own or rerun on its own. `cancelSubtask`
+aborts only that child; the rest of the run keeps going, and dependents are
+skipped with `not started because w2 was cancelled`. `rerunSubtask` resets that
+one subtask (plus dependents that were skipped only because of it) and resumes
+the run; completed siblings are not touched. A run whose entire remaining work
+was cancelled reports `cancelled`, not `failed`.
+
+**Inbox.** Planner `needsInput` questions, deliverable reviews (`unverified`),
+missing capabilities, policy confirmations, browser checks that need a person,
+and interrupted runs. Each item says what happened, why a person is needed, the
+options, and what answering will do. Answers go through the same
+`orchestrator.answer` path as `superagent_answer`, with the run's owning session
+as the actor, and the audit trail records who answered what. When nothing is
+waiting, the page says "当前没有需要你处理的事" instead of showing an empty
+column.
+
+**Templates.** `bugfix-verify`, `review-fix`, `docs-examples`, and
+`research-report` are forms: purpose, parameters, and the expected subtask
+count. Submitting expands the template, starts one run from the board's own
+persisted Host Session, and jumps to its board.
+
+**Plain-language failures.** Capability preflight blocks, unparsable plans,
+missing or wrong-type deliverables, sandbox write denial, `spawn EPERM`,
+unavailable models/endpoints, budget or deadline exhaustion, and a dead
+scheduler owner session each map to one Chinese sentence plus one action
+(retry, rerun, open configuration, or copy diagnostics). The raw stack stays
+folded under "原始错误（给技术同学看）".
+
+The board never owns a run. It resolves the run's `parentSessionId` through the
+host and calls the same orchestrator methods the tools call. Without
+`sessionController` it still shows every run and explains, in Chinese, why the
+action buttons are unavailable; it does not fake a chat or an agent.
 
 ## State and recovery
 

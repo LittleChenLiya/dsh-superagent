@@ -212,6 +212,8 @@ report:
 | `consolePort` | 关 | 对话控制台的回环端口；`0` 让系统挑一个空闲端口。需要宿主的 `sessionController` 服务。 |
 | `consoleRoot` | 先取 `workbenchRoot`，再取宿主 cwd | 控制台的对话会话所加入的目录。 |
 | `consolePreset` | 宿主默认 | 控制台会话挂载的 agent preset id。工具跟着这个 preset 走，不跟本插件走。 |
+| `boardPort` | 关 | 任务看板的回环端口；`0` 让系统挑一个空闲端口。一个页面里放子任务卡片、待办收件箱和内置模板。见[任务看板](#任务看板)。 |
+| `boardRoot` | 先取 `consoleRoot`，再取 `workbenchRoot` | 看板自己的对话会话所加入的目录，也是从模板启动的 run 的工作目录。 |
 | `schedulerTickSeconds` | `30` | 检查活跃计划是否到点的频率，单位秒（1–3600）。没有计划之前不会武装任何东西，所以对没有定时任务的安装没有影响。 |
 | `schedulerHumanPriority` | `true` | 计划 `human_priority` 的默认值：定时 run 不能占掉最后一个空闲并发位。 |
 | `schedulerMaxConsecutiveFailures` | `3` | 连续失败多少次后计划自动暂停并只通知一次（1–20）。 |
@@ -954,6 +956,51 @@ mtime；如果磁盘上任一已变，保存会以
 `workbenchPort` 打开时，插件把每次 run 改动的文件记录进
 该 run 的 JSON 记录（`run.changes`），这样 Runs 视图之后可以显示这些文件及其
 针对 `git HEAD` 的 diff。
+
+## 任务看板
+
+`boardPort` 增加一个页面，给不想读 run 记录的人用：每条子任务是一张卡，
+所有需要人介入的事收在一个收件箱里，四个内置模板填表就能起。
+
+```yaml
+- id: superagent
+  config:
+    boardPort: 0              # 默认关闭；0 表示让系统挑一个空闲的回环端口
+    boardRoot: /path/to/project
+```
+
+打开 `<stateDir>/board.json` 里的 URL（权限 `0600`），或者用
+`http://127.0.0.1:<port>/?token=<token>`；页面会把 token 存在浏览器里，再从
+地址栏去掉。没有 token 时每个路由和事件流都返回 `401`，`Host` 不是回环地址时
+返回 `403`。事件流第一帧是完整快照，所以刷新页面或断线重连会从磁盘上的 run
+记录恢复看板，而不是留下一片空白。
+
+**看板。** 每条子任务一张卡：状态、尝试次数、耗时、tokens、花费、依赖关系，
+以及没跑起来时究竟是被哪条依赖卡住的。每张卡都能单独取消或单独重跑。
+`cancelSubtask` 只中止那一个子 agent，run 的其余部分照常继续，依赖它的子任务
+会以 `not started because w2 was cancelled` 跳过。`rerunSubtask` 只重置那一条
+子任务（以及仅因为它被跳过的下游），然后恢复 run；已完成的兄弟任务不受影响。
+如果剩下的活儿全被取消了，run 以 `cancelled` 结束，而不是 `failed`。
+
+**收件箱。** planner 的 `needsInput` 提问、交付物待验收（`unverified`）、
+能力缺失、权限确认、需要人看的浏览器检查、被中断的 run，都在这里。每条都会
+说明发生了什么、为什么需要你、有哪些选项、回答之后会怎样。作答走的是和
+`superagent_answer` 同一条 `orchestrator.answer` 路径，actor 是 run 的归属
+会话，审计里会记下谁答了什么。没有待办时，页面显示"当前没有需要你处理的事"，
+而不是留一列空白。
+
+**模板。** `bugfix-verify`、`review-fix`、`docs-examples`、`research-report`
+四个模板是表单：用途、要填的参数、预计会起几个子任务。提交后展开模板，用看板
+自己持久化的 Host Session 起一个 run，并跳到它的看板。
+
+**报错说人话。** 能力预检被拦、计划不可解析、交付物缺失或类型不符、沙箱拒绝
+写入、`spawn EPERM`、模型或端点不可用、预算或超时耗尽、定时计划的 owner 会话
+已不在，各自对应一句中文说明加一个动作（重试、重跑、打开配置、复制诊断信息）。
+原始堆栈折叠在"原始错误（给技术同学看）"下面。
+
+看板从不占有 run。它通过宿主解析 run 的 `parentSessionId`，然后调用工具调用的
+同一批 orchestrator 方法。没有 `sessionController` 时，它照样列出所有 run，
+并用中文说明为什么按钮不可用；它不会伪造一段对话或一个 agent。
 
 ## 状态与恢复
 
