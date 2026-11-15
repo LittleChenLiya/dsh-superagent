@@ -238,6 +238,9 @@ Row config in `<profile>/cordis.patch.yml`:
 | `workspaceRoot` | host cwd | Repository the workers are isolated in when `workspaceIsolation` is on. Must be a git working tree with at least one commit. |
 | `workbenchPort` | off | Loopback port for the local workspace panel; `0` picks a free one. The panel reads and edits files itself, without a host API. |
 | `workbenchRoot` | `process.cwd()` | Directory the panel may browse and edit. Every path outside it is refused. |
+| `consolePort` | off | Loopback port for the conversation console; `0` picks a free one. Requires the host `sessionController` service. |
+| `consoleRoot` | `workbenchRoot`, then host cwd | Directory the console's conversation session joins. |
+| `consolePreset` | host default | Agent preset id the console session mounts. Tools follow this preset, not this plugin. |
 | `schedulerTickSeconds` | `30` | How often a live plan is checked for a due window, in seconds (1–3600). Nothing is armed until a plan exists, so this has no effect on an install with no schedules. |
 | `schedulerHumanPriority` | `true` | Default for a plan's `human_priority`: a scheduled run may not take the last free concurrency slot. |
 | `schedulerMaxConsecutiveFailures` | `3` | Consecutive failed executions before a plan pauses itself and says so once (1–20). |
@@ -1162,6 +1165,62 @@ curl -s -H "Authorization: Bearer $TOKEN" "$URL/runs"
 The full contract — routes, error ids, security model, lifecycle, client
 examples — is [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md). It is opt-in, loopback
 only, and there is no remote or unauthenticated mode.
+
+## Conversation console
+
+`consolePort` adds a local page where you talk to a **real Host Session**, not a
+mock chat and not a re-skinned `superagent_start(goal)` form:
+
+```yaml
+- id: superagent
+  config:
+    consolePort: 0            # off by default; 0 = OS picks a free loopback port
+    consoleRoot: /path/to/project
+```
+
+The plugin creates the session with the host's `sessionController.create()`,
+sends each message with `prompt({ mode: 'queue' | 'steer' })`, and forwards
+`follow({ assistantStream: true })` plus `observeState()` to the page. Follow-up
+messages therefore continue the same conversation; they are not a new session.
+The right-hand column lists the runs whose `parentSessionId` is that session, so
+the page shows exactly the subtasks the conversation derived. An attention card
+answers through `orchestrator.answer`, the same path as the
+`superagent_answer` tool, with the conversation agent as the run owner.
+
+The bound URL and a fresh per-process token are written to
+`<stateDir>/console.json` (mode `0600`). Open
+`http://127.0.0.1:<port>/?token=<token>` once; the page stores the token in
+`sessionStorage` and removes it from the address bar. Every route, including
+the event stream, answers `401` without it, and every request with a non-loopback
+`Host` header answers `403`.
+
+If the host does not mount `sessionController` (for example a headless profile
+without the web session API), the page says so and refuses to create a session.
+It does **not** pretend to be a chat. The console also keeps one active
+conversation per process; "新对话" creates a new Host Session and leaves the old
+one intact. Approval prompts that appear as host `pendingInput` are surfaced in
+the status line but are not answered by this page; only run attention questions
+are.
+
+### Tools the conversation gets
+
+The console session is created with no tool list of its own: it mounts whatever
+the host's agent preset mounts, which is the same set the Web app's own
+sessions get. The plugin registers no conversation tools and filters none; the
+only filter it can apply is the opt-in `guard` for child agent calls. To see the
+real list, the page asks the host for `ctx.tools.definitions(agent)` and shows
+it under "这个会话挂载的工具"; when the host cannot enumerate, the page says so
+instead of printing a fixed list. `consolePreset` passes `agentPreset` to
+`sessionController.create()` when you want a preset other than the profile
+default.
+
+Browser and desktop control are not implemented here. They come from
+`feat/runtime-control`, which registers host-scope `browser_*` and `desktop_*`
+tools; those are visible to the console session like any other host tool. On a
+build without that branch the page reports them as "未挂载". Neither branch ships a 3D tool; when
+the preset includes `bash` or `pwsh`, a headless Blender can be driven through
+it (`blender --background --python`), which is the scriptable path the console
+can already reach.
 
 ## Workspace panel
 

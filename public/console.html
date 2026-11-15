@@ -1,0 +1,1616 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Superagent Console</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0f12;
+    --panel: #11171c;
+    --panel-2: #151d23;
+    --line: #233039;
+    --line-soft: #1a242b;
+    --text: #e7eef4;
+    --muted: #8b9aa7;
+    --faint: #5f707c;
+    --accent: #5eead4;
+    --accent-ink: #06231f;
+    --amber: #f6c177;
+    --amber-soft: rgba(246, 193, 119, .10);
+    --red: #ff7b72;
+    --green: #63d6a4;
+    --blue: #7fb4ff;
+    --radius: 14px;
+    --mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(900px 480px at 12% -10%, rgba(94, 234, 212, .07), transparent 60%),
+      radial-gradient(720px 420px at 100% 0%, rgba(127, 180, 255, .05), transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font: 14px/1.55 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  .mono { font-family: var(--mono); }
+  .muted { color: var(--muted); }
+
+  .shell { height: 100%; display: flex; flex-direction: column; }
+  .topbar {
+    flex: 0 0 58px;
+    display: flex; align-items: center; gap: 18px;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--line-soft);
+    background: rgba(11, 15, 18, .82);
+    backdrop-filter: blur(10px);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 176px; }
+  .mark {
+    width: 30px; height: 30px; border-radius: 9px;
+    display: grid; place-items: center;
+    background: linear-gradient(145deg, var(--accent), #2aa99a);
+    color: var(--accent-ink);
+    font-weight: 800; font-size: 15px;
+    box-shadow: 0 0 0 1px rgba(94, 234, 212, .35), 0 8px 24px rgba(94, 234, 212, .12);
+  }
+  .brand strong { display: block; font-size: 14px; letter-spacing: .2px; }
+  .brand span { display: block; color: var(--faint); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+  .topbar-mid { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 24px; padding: 0 9px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--panel);
+    color: var(--muted); font-size: 12px; white-space: nowrap;
+  }
+  .badge.chat { color: var(--green); border-color: rgba(99, 214, 164, .32); background: rgba(99, 214, 164, .08); }
+  .badge.off { color: var(--amber); border-color: rgba(246, 193, 119, .32); background: var(--amber-soft); }
+  .badge .pulse { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .session-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+  .topbar-actions { display: flex; align-items: center; gap: 12px; }
+  .conn { display: inline-flex; align-items: center; gap: 7px; color: var(--faint); font-size: 12px; white-space: nowrap; }
+  .conn i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .conn.live i { background: var(--green); box-shadow: 0 0 0 4px rgba(99, 214, 164, .12); }
+  .conn.warn i { background: var(--amber); }
+  .btn {
+    height: 30px; padding: 0 12px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+    font-size: 12px;
+  }
+  .btn:hover { color: var(--text); border-color: #35464f; background: #172028; }
+  .btn:disabled { opacity: .45; cursor: default; }
+
+  .grid {
+    flex: 1; min-height: 0;
+    display: grid; grid-template-columns: minmax(0, 1fr) 392px;
+    gap: 14px; padding: 14px 18px 18px;
+  }
+  .panel {
+    min-height: 0; display: flex; flex-direction: column;
+    border: 1px solid var(--line-soft); border-radius: var(--radius);
+    background: linear-gradient(180deg, var(--panel), #0f1519);
+    overflow: hidden;
+  }
+  .chat-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+    padding: 16px 20px 13px; border-bottom: 1px solid var(--line-soft);
+  }
+  .chat-head h1 { margin: 0; font-size: 15px; letter-spacing: .1px; }
+  .chat-head p { margin: 4px 0 0; color: var(--faint); font-size: 12px; }
+  .chat-head p strong { color: var(--muted); font-weight: 600; }
+  .typing { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
+  .typing span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: blink 1.2s infinite; }
+  .typing span:nth-child(2) { animation-delay: .18s; }
+  .typing span:nth-child(3) { animation-delay: .36s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .2; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+
+  .messages {
+    flex: 1; min-height: 0; overflow-y: auto;
+    padding: 20px 20px 26px; scroll-behavior: smooth;
+  }
+  .messages::-webkit-scrollbar, .run-list::-webkit-scrollbar, pre::-webkit-scrollbar { width: 10px; height: 10px; }
+  .messages::-webkit-scrollbar-thumb, .run-list::-webkit-scrollbar-thumb, pre::-webkit-scrollbar-thumb {
+    background: #26343d; border: 3px solid transparent; background-clip: padding-box; border-radius: 999px;
+  }
+  .msg { display: flex; flex-direction: column; max-width: 820px; margin: 0 0 18px; animation: rise .18s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .msg.user { margin-left: auto; align-items: flex-end; }
+  .msg.assistant { margin-right: auto; align-items: flex-start; }
+  .who { margin: 0 4px 5px; color: var(--faint); font-size: 11px; letter-spacing: .05em; }
+  .bubble {
+    position: relative; max-width: 100%;
+    padding: 10px 13px; border-radius: 12px;
+    border: 1px solid var(--line-soft); background: var(--panel-2);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .msg.user .bubble {
+    background: linear-gradient(180deg, rgba(94, 234, 212, .13), rgba(94, 234, 212, .07));
+    border-color: rgba(94, 234, 212, .26);
+    border-bottom-right-radius: 4px;
+  }
+  .msg.assistant .bubble { border-bottom-left-radius: 4px; }
+  .msg.pending .bubble { opacity: .72; }
+  .msg.failed .bubble { border-color: rgba(255, 123, 114, .48); }
+  .msg .text { min-height: 1em; }
+  .msg .text .para { white-space: pre-wrap; }
+  .msg .text pre {
+    margin: 8px 0; padding: 10px 11px; border-radius: 8px;
+    border: 1px solid var(--line); background: #0a0f12;
+    overflow: auto; font: 12px/1.6 var(--mono); white-space: pre;
+  }
+  .msg .text .cursor {
+    display: inline-block; width: 7px; height: 15px; margin-left: 2px;
+    background: var(--accent); vertical-align: -2px; animation: caret 1s steps(2) infinite;
+  }
+  @keyframes caret { 50% { opacity: 0; } }
+  .msg .meta { margin: 5px 4px 0; color: var(--faint); font-size: 11px; }
+  .msg .meta .failed { color: var(--red); }
+  .reasoning { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 7px; }
+  .reasoning summary { color: var(--faint); font-size: 11px; cursor: pointer; }
+  .reasoning pre { margin: 6px 0 0; color: var(--muted); font: 12px/1.6 var(--mono); white-space: pre-wrap; }
+  .tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+  .tool {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 8px; border-radius: 999px;
+    border: 1px solid var(--line); background: #0e1418;
+    color: var(--muted); font: 11px/1.5 var(--mono);
+  }
+  .tool .tdot { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); }
+  .tool.ok .tdot { background: var(--green); }
+  .tool.err .tdot { background: var(--red); }
+  .tool.running .tdot { background: var(--amber); animation: blink 1.1s infinite; }
+  .tool details { display: inline; }
+  .tool summary { color: var(--faint); cursor: pointer; list-style: none; }
+  .tool summary::-webkit-details-marker { display: none; }
+  .tool pre { max-width: 520px; max-height: 180px; overflow: auto; margin: 6px 0 0; font: 11px/1.5 var(--mono); white-space: pre-wrap; }
+  .tool .targs {
+    max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--faint); font-size: 10.5px;
+  }
+  .tool.err { border-color: #5a2c2c; }
+  .tool .err-mark { color: var(--red); }
+
+  .empty { max-width: 560px; margin: 7vh auto 0; text-align: center; }
+  .empty .orb {
+    width: 58px; height: 58px; margin: 0 auto 18px; border-radius: 18px;
+    display: grid; place-items: center;
+    background: linear-gradient(145deg, rgba(94, 234, 212, .22), rgba(47, 126, 115, .18));
+    border: 1px solid rgba(94, 234, 212, .3);
+    color: var(--accent); font-size: 24px; font-weight: 800;
+    box-shadow: 0 18px 50px rgba(94, 234, 212, .08);
+  }
+  .empty h1 { margin: 0 0 8px; font-size: 23px; letter-spacing: -.02em; }
+  .empty p { margin: 0 auto 18px; max-width: 460px; color: var(--muted); }
+  .examples { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  .examples button {
+    padding: 7px 11px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+    font-size: 12px;
+  }
+  .examples button:hover { color: var(--text); border-color: rgba(94, 234, 212, .35); }
+  .empty.unavailable .orb { background: var(--amber-soft); border-color: rgba(246, 193, 119, .35); color: var(--amber); }
+  .empty.unavailable h1 { font-size: 20px; }
+  .empty .reason {
+    margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid rgba(246, 193, 119, .28); background: var(--amber-soft);
+    color: #e8c690; font-size: 12px; text-align: left; white-space: pre-wrap;
+  }
+
+  .composer { padding: 12px 14px 14px; border-top: 1px solid var(--line-soft); background: #0e1418; }
+  .composer-box {
+    border: 1px solid var(--line); border-radius: 12px; background: #0a1014;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .composer-box:focus-within { border-color: rgba(94, 234, 212, .42); box-shadow: 0 0 0 3px rgba(94, 234, 212, .07); }
+  .composer textarea {
+    display: block; width: 100%; min-height: 46px; max-height: 180px;
+    padding: 12px 13px 4px; border: 0; outline: 0; resize: none;
+    background: transparent; color: var(--text);
+  }
+  .composer textarea::placeholder { color: var(--faint); }
+  .composer-bar { display: flex; align-items: center; gap: 10px; padding: 4px 8px 8px 10px; }
+  .segmented { display: inline-flex; padding: 2px; border-radius: 8px; background: #111a20; border: 1px solid var(--line-soft); }
+  .segmented button {
+    height: 24px; padding: 0 8px; border: 0; border-radius: 6px;
+    background: transparent; color: var(--faint); font-size: 11px;
+  }
+  .segmented button.active { background: #1d2a31; color: var(--text); }
+  .hint { flex: 1; color: var(--faint); font-size: 11px; text-align: right; }
+  .send {
+    width: 32px; height: 32px; border-radius: 9px; border: 1px solid rgba(94, 234, 212, .4);
+    background: linear-gradient(145deg, var(--accent), #35c7b5); color: var(--accent-ink);
+    font-size: 17px; font-weight: 800; line-height: 1;
+  }
+  .send:disabled { opacity: .35; cursor: default; }
+  .composer.note { color: var(--faint); font-size: 12px; text-align: center; padding: 18px; }
+
+  .runs-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+    padding: 16px 17px 13px; border-bottom: 1px solid var(--line-soft);
+  }
+  .runs-head h2 { margin: 0; font-size: 14px; }
+  .runs-head p { margin: 3px 0 0; color: var(--faint); font-size: 11px; }
+  .count {
+    min-width: 24px; height: 22px; padding: 0 7px; border-radius: 999px;
+    display: inline-grid; place-items: center;
+    background: #172129; border: 1px solid var(--line); color: var(--muted);
+    font: 11px var(--mono);
+  }
+  .tools:empty { display: none; }
+  .tools-panel { border-bottom: 1px solid var(--line-soft); padding: 10px 14px; }
+  .tools-panel summary {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    color: var(--muted); font-size: 12px; list-style: none;
+  }
+  .tools-panel summary::-webkit-details-marker { display: none; }
+  .tools-panel summary::before { content: "▸"; color: var(--faint); font-size: 10px; }
+  .tools-panel[open] summary::before { content: "▾"; }
+  .tools-panel .count { margin-left: auto; }
+  .tools-note { margin: 7px 0 0; color: var(--faint); font-size: 11px; line-height: 1.6; }
+  .tool-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; max-height: 132px; overflow-y: auto; }
+  .tool-name {
+    padding: 2px 6px; border-radius: 6px; border: 1px solid var(--line);
+    background: #121a20; color: var(--muted); font: 10.5px var(--mono);
+  }
+  .tool-name.on { border-color: #2c5a48; color: #9fe0c2; }
+  .run-list { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
+  .run-empty { padding: 26px 18px; color: var(--faint); text-align: center; font-size: 12px; line-height: 1.7; }
+  .run-empty .line { display: block; width: 30px; height: 1px; margin: 12px auto; background: var(--line); }
+  .run {
+    position: relative; margin-bottom: 10px; padding: 12px;
+    border: 1px solid var(--line-soft); border-radius: 11px;
+    background: #10161b;
+  }
+  .run::before {
+    content: ""; position: absolute; left: 0; top: 11px; bottom: 11px; width: 2px; border-radius: 2px;
+    background: var(--line);
+  }
+  .run.running::before { background: var(--amber); }
+  .run.completed::before { background: var(--green); }
+  .run.failed::before, .run.interrupted::before { background: var(--red); }
+  .run-top { display: flex; align-items: flex-start; gap: 8px; }
+  .run-title { flex: 1; min-width: 0; }
+  .run-title h3 { margin: 0; font-size: 12.5px; font-weight: 600; line-height: 1.45; word-break: break-word; }
+  .run-title p { margin: 3px 0 0; color: var(--faint); font: 10.5px var(--mono); }
+  .status-pill {
+    flex: none; padding: 2px 7px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); font-size: 10.5px; white-space: nowrap;
+  }
+  .status-pill.running { color: var(--amber); border-color: rgba(246, 193, 119, .32); background: var(--amber-soft); }
+  .status-pill.completed { color: var(--green); border-color: rgba(99, 214, 164, .32); background: rgba(99, 214, 164, .07); }
+  .status-pill.failed, .status-pill.interrupted { color: var(--red); border-color: rgba(255, 123, 114, .32); background: rgba(255, 123, 114, .07); }
+  .run-meta { display: flex; flex-wrap: wrap; gap: 10px; margin: 9px 0 0; color: var(--faint); font-size: 11px; }
+  .run-meta b { color: var(--muted); font-weight: 600; }
+  .progress { height: 3px; margin: 9px 0 0; border-radius: 999px; background: #1b252c; overflow: hidden; }
+  .progress i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #3dc6b5, var(--accent)); transition: width .3s; }
+  .subtasks { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+  .subtask {
+    max-width: 100%; padding: 2px 7px; border-radius: 6px;
+    border: 1px solid var(--line-soft); color: var(--faint); font-size: 10.5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .subtask.completed { color: var(--green); border-color: rgba(99, 214, 164, .22); }
+  .subtask.running { color: var(--amber); border-color: rgba(246, 193, 119, .22); }
+  .subtask.failed { color: var(--red); border-color: rgba(255, 123, 114, .22); }
+  .attention-card {
+    margin-top: 10px; padding: 10px; border-radius: 9px;
+    border: 1px solid rgba(246, 193, 119, .36); background: var(--amber-soft);
+  }
+  .attention-card .kicker {
+    color: var(--amber); font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  }
+  .attention-card p { margin: 5px 0 0; color: #edd7b2; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+  .attention-card .reason { color: #b9a789; font-size: 11px; }
+  .options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .options button {
+    padding: 4px 9px; border-radius: 7px;
+    border: 1px solid rgba(246, 193, 119, .38); background: rgba(246, 193, 119, .08);
+    color: #f3d8ac; font-size: 11px;
+  }
+  .options button:hover { background: rgba(246, 193, 119, .18); }
+  .options button:disabled { opacity: .45; }
+  .free { display: flex; gap: 6px; margin-top: 7px; }
+  .free input {
+    flex: 1; min-width: 0; height: 29px; padding: 0 8px;
+    border: 1px solid rgba(246, 193, 119, .28); border-radius: 7px;
+    background: rgba(10, 15, 18, .65); color: var(--text); font-size: 11.5px; outline: 0;
+  }
+  .free input:focus { border-color: rgba(246, 193, 119, .55); }
+  .free button {
+    height: 29px; padding: 0 9px; border-radius: 7px; border: 1px solid rgba(246, 193, 119, .4);
+    background: rgba(246, 193, 119, .14); color: #f3d8ac; font-size: 11px;
+  }
+  .report { margin-top: 9px; border-top: 1px dashed var(--line-soft); padding-top: 8px; }
+  .report summary { color: var(--muted); font-size: 11px; cursor: pointer; }
+  .report pre {
+    max-height: 280px; overflow: auto; margin: 7px 0 0; padding: 9px;
+    border-radius: 8px; border: 1px solid var(--line-soft); background: #0a0f12;
+    color: var(--muted); font: 11px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word;
+  }
+  .run-actions { display: flex; gap: 8px; margin-top: 8px; }
+  .run-actions button {
+    height: 25px; padding: 0 8px; border-radius: 6px;
+    border: 1px solid var(--line); background: transparent; color: var(--faint); font-size: 10.5px;
+  }
+  .run-actions button:hover { color: var(--text); border-color: #35464f; }
+
+  .toasts { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 30; pointer-events: none; }
+  .toast {
+    max-width: 520px; padding: 9px 13px; border-radius: 9px;
+    border: 1px solid var(--line); background: #182229; color: var(--text);
+    box-shadow: 0 12px 36px rgba(0, 0, 0, .35); font-size: 12px;
+    animation: rise .16s ease-out;
+  }
+  .toast.err { border-color: rgba(255, 123, 114, .4); color: #ffc0bb; }
+  .toast.ok { border-color: rgba(99, 214, 164, .35); }
+
+  .gate {
+    position: fixed; inset: 0; z-index: 40; display: grid; place-items: center;
+    background: rgba(7, 10, 12, .86); backdrop-filter: blur(8px); padding: 20px;
+  }
+  .gate[hidden] { display: none; }
+  .gate-card {
+    width: min(420px, 100%); padding: 24px; border-radius: 16px;
+    border: 1px solid var(--line); background: var(--panel);
+    box-shadow: 0 30px 90px rgba(0, 0, 0, .5);
+  }
+  .gate-card .mark { margin-bottom: 14px; }
+  .gate-card h1 { margin: 0 0 6px; font-size: 18px; }
+  .gate-card p { margin: 0 0 16px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+  .gate-card label { display: block; color: var(--faint); font-size: 11px; }
+  .gate-card input {
+    display: block; width: 100%; height: 38px; margin-top: 6px; padding: 0 10px;
+    border: 1px solid var(--line); border-radius: 8px; background: #0a1014; color: var(--text); outline: 0;
+  }
+  .gate-card input:focus { border-color: rgba(94, 234, 212, .48); }
+  .gate-card button {
+    width: 100%; height: 38px; margin-top: 12px; border-radius: 8px; border: 1px solid rgba(94, 234, 212, .4);
+    background: linear-gradient(145deg, var(--accent), #35c7b5); color: var(--accent-ink); font-weight: 700;
+  }
+  .gate-card .error { margin: 10px 0 0; color: var(--red); font-size: 12px; min-height: 1em; }
+
+  dialog {
+    width: min(860px, calc(100vw - 40px)); max-height: calc(100vh - 60px);
+    padding: 0; border: 1px solid var(--line); border-radius: 14px;
+    background: var(--panel); color: var(--text);
+    box-shadow: 0 40px 120px rgba(0, 0, 0, .6);
+  }
+  dialog::backdrop { background: rgba(5, 8, 10, .72); backdrop-filter: blur(4px); }
+  .dialog-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--line-soft); }
+  .dialog-head h2 { flex: 1; margin: 0; font-size: 14px; line-height: 1.5; }
+  .dialog-head button { border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; }
+  .dialog-body { padding: 16px 18px 20px; overflow: auto; max-height: calc(100vh - 180px); }
+  .dialog-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; color: var(--faint); font-size: 11px; }
+  .dialog-body pre {
+    margin: 0; padding: 13px; border-radius: 9px; border: 1px solid var(--line-soft);
+    background: #0a0f12; font: 12px/1.65 var(--mono); white-space: pre-wrap; word-break: break-word;
+  }
+
+  @media (max-width: 980px) {
+    .grid { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(240px, 44vh); }
+    .topbar-mid .session-label { display: none; }
+  }
+  @media (max-width: 620px) {
+    .grid { padding: 10px; gap: 10px; }
+    .topbar { padding: 0 12px; }
+    .topbar-actions .conn { display: none; }
+    .brand { min-width: 0; }
+    .brand div span { display: none; }
+    .hint { display: none; }
+    .messages { padding: 16px 14px 22px; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark">S</div>
+      <div><strong>Superagent</strong><span>Console</span></div>
+    </div>
+    <div class="topbar-mid">
+      <span id="modeBadge" class="badge"><span class="pulse"></span><span id="modeText">连接中</span></span>
+      <span id="sessionLabel" class="session-label mono" title="Host Session id">no session</span>
+    </div>
+    <div class="topbar-actions">
+      <span id="conn" class="conn"><i></i><span id="connText">连接中</span></span>
+      <button id="newChat" class="btn" type="button" disabled>新对话</button>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="panel" aria-label="对话">
+      <div class="chat-head">
+        <div>
+          <h1>对话</h1>
+          <p>真实 Host Session · <strong>这是对话会话，不是 run 指挥台</strong></p>
+        </div>
+        <div id="typing" class="typing" hidden><span></span><span></span><span></span><em id="typingText" style="font-style:normal;margin-left:3px">运行中</em></div>
+      </div>
+      <div id="messages" class="messages" aria-live="polite"></div>
+      <form id="composer" class="composer" autocomplete="off">
+        <div class="composer-box">
+          <textarea id="input" rows="1" placeholder="和 Superagent 说话，例如：先查清登录失败的根因，再把它拆成 run 修掉" disabled></textarea>
+          <div class="composer-bar">
+            <div class="segmented" role="group" aria-label="发送方式">
+              <button type="button" data-mode="queue" class="active">排队</button>
+              <button type="button" data-mode="steer">插话</button>
+            </div>
+            <span class="hint">Enter 发送 · Shift+Enter 换行</span>
+            <button id="send" class="send" type="submit" aria-label="发送" disabled>↑</button>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <aside class="panel" aria-label="派生的 runs">
+      <div class="runs-head">
+        <div><h2>派生的 runs</h2><p>这个对话启动的子任务</p></div>
+        <span id="runCount" class="count">0</span>
+      </div>
+      <details id="toolsPanel" class="tools-panel" open>
+        <summary><span>这个会话挂载的工具</span><span id="toolCount" class="count">—</span></summary>
+        <p id="toolNote" class="tools-note">加载中…</p>
+        <div id="toolList" class="tool-list"></div>
+      </details>
+      <div id="runs" class="run-list"></div>
+    </aside>
+  </main>
+</div>
+
+<div id="gate" class="gate" hidden>
+  <form id="gateForm" class="gate-card">
+    <div class="mark">S</div>
+    <h1>连接 Superagent Console</h1>
+    <p>从宿主状态目录的 <code>console.json</code> 读取一次性 token。控制台只监听 127.0.0.1，token 每次启动都会重新生成。</p>
+    <label for="tokenInput">访问令牌</label>
+    <input id="tokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 token">
+    <button type="submit">连接</button>
+    <p id="gateError" class="error"></p>
+  </form>
+</div>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<dialog id="reportDialog">
+  <div class="dialog-head">
+    <h2 id="dialogTitle">报告</h2>
+    <button id="dialogClose" type="button" aria-label="关闭">×</button>
+  </div>
+  <div class="dialog-body">
+    <div id="dialogMeta" class="dialog-meta"></div>
+    <pre id="dialogReport"></pre>
+  </div>
+</dialog>
+
+<script>
+(() => {
+  'use strict'
+
+  const TOKEN_KEY = 'dsh-superagent-console-token'
+  const $ = id => document.getElementById(id)
+  const messagesEl = $('messages')
+  const runsEl = $('runs')
+  const inputEl = $('input')
+  const sendEl = $('send')
+  const composerEl = $('composer')
+  const typingEl = $('typing')
+  const typingTextEl = $('typingText')
+  const modeBadgeEl = $('modeBadge')
+  const modeTextEl = $('modeText')
+  const sessionLabelEl = $('sessionLabel')
+  const connEl = $('conn')
+  const connTextEl = $('connText')
+  const newChatEl = $('newChat')
+  const runCountEl = $('runCount')
+  const gateEl = $('gate')
+  const gateFormEl = $('gateForm')
+  const gateErrorEl = $('gateError')
+  const tokenInputEl = $('tokenInput')
+  const toastsEl = $('toasts')
+  const reportDialogEl = $('reportDialog')
+  const dialogTitleEl = $('dialogTitle')
+  const dialogMetaEl = $('dialogMeta')
+  const dialogReportEl = $('dialogReport')
+
+  const STATE = {
+    token: '',
+    mode: 'loading',
+    capabilities: null,
+    sessionId: null,
+    runs: [],
+    messages: [],
+    running: false,
+    pendingInput: [],
+    conn: 'connecting',
+    streamAbort: null,
+    reconnectTimer: null,
+    sending: false,
+    sendMode: 'queue',
+    messageSeq: 0,
+    currentAssistant: null,
+    toolCalls: new Map(),
+    drafts: new Map(),
+    busyAnswers: new Set(),
+    autoScroll: true,
+    booted: false,
+  }
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag)
+    if (className) node.className = className
+    if (text !== undefined && text !== null) node.textContent = text
+    return node
+  }
+
+  function messageOf(error) {
+    if (!error) return '未知错误'
+    return error.message || String(error)
+  }
+
+  function shortId(id) {
+    if (typeof id !== 'string') return ''
+    return id.length > 18 ? `${id.slice(0, 8)}…${id.slice(-6)}` : id
+  }
+
+  function timeLabel(value) {
+    const ms = typeof value === 'number' ? value : Date.parse(value)
+    if (!Number.isFinite(ms)) return ''
+    try {
+      return new Date(ms).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    } catch {
+      return ''
+    }
+  }
+
+  function formatTokens(value) {
+    const n = Number(value)
+    if (!Number.isFinite(n) || n <= 0) return '—'
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+    return String(Math.round(n))
+  }
+
+  function statusText(status) {
+    const map = {
+      queued: '排队中', planning: '规划中', running: '运行中', aggregating: '汇总中',
+      completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断',
+      blocked: '已阻塞',
+    }
+    return map[status] || status || '未知'
+  }
+
+  function statusClass(status) {
+    if (status === 'completed') return 'completed'
+    if (status === 'failed' || status === 'cancelled' || status === 'interrupted' || status === 'blocked') return 'failed'
+    if (status === 'queued') return 'queued'
+    return 'running'
+  }
+
+  function contentText(content) {
+    if (typeof content === 'string') return content
+    if (!Array.isArray(content)) return ''
+    return content
+      .filter(part => part && part.type === 'text' && typeof part.text === 'string')
+      .map(part => part.text)
+      .join('')
+  }
+
+  function pushToast(text, kind = '') {
+    const node = el('div', `toast ${kind}`.trim(), text)
+    toastsEl.append(node)
+    setTimeout(() => {
+      node.style.opacity = '0'
+      node.style.transition = 'opacity .18s'
+      setTimeout(() => node.remove(), 220)
+    }, 3600)
+  }
+
+  function setConn(state, text) {
+    STATE.conn = state
+    connEl.className = `conn ${state === 'live' ? 'live' : state === 'warn' ? 'warn' : ''}`.trim()
+    connTextEl.textContent = text
+  }
+
+  function setMode(mode, capabilities) {
+    STATE.mode = mode
+    STATE.capabilities = capabilities || STATE.capabilities
+    const chat = mode === 'chat'
+    modeBadgeEl.className = `badge ${chat ? 'chat' : 'off'}`
+    modeTextEl.textContent = chat ? '对话会话' : mode === 'loading' ? '连接中' : '未连接'
+    newChatEl.disabled = !chat
+    inputEl.disabled = !chat
+    updateSend()
+  }
+
+  function updateSend() {
+    const hasText = inputEl.value.trim().length > 0
+    sendEl.disabled = STATE.mode !== 'chat' || !hasText || STATE.sending
+  }
+
+  function setTyping(running, label) {
+    STATE.running = running
+    typingEl.hidden = !running
+    if (label) typingTextEl.textContent = label
+  }
+
+  function setSession(sessionId) {
+    STATE.sessionId = sessionId
+    sessionLabelEl.textContent = sessionId ? `session ${shortId(sessionId)}` : 'no session'
+    sessionLabelEl.title = sessionId || 'Host Session id'
+  }
+
+  function scrollToEnd() {
+    if (!STATE.autoScroll) return
+    messagesEl.scrollTop = messagesEl.scrollHeight
+  }
+
+  function renderText(container, text, streaming) {
+    container.textContent = ''
+    const value = typeof text === 'string' ? text : ''
+    const parts = value.split(/```/)
+    parts.forEach((part, index) => {
+      if (index % 2 === 1) {
+        const pre = el('pre')
+        const code = el('code')
+        code.textContent = part.replace(/^[a-zA-Z0-9_+-]*\n/, '')
+        pre.append(code)
+        container.append(pre)
+      } else if (part) {
+        const block = el('div', 'para')
+        block.textContent = part
+        container.append(block)
+      }
+    })
+    if (streaming) container.append(el('span', 'cursor'))
+  }
+
+  function messageElement(message) {
+    const article = el('article', `msg ${message.role}${message.pending ? ' pending' : ''}${message.failed ? ' failed' : ''}`)
+    article.dataset.id = message.id
+    const who = el('div', 'who', message.role === 'user' ? '你' : 'Superagent')
+    const bubble = el('div', 'bubble')
+    const text = el('div', 'text')
+    renderText(text, message.text, message.streaming)
+    bubble.append(text)
+
+    if (message.reasoning) {
+      const details = el('details', 'reasoning')
+      details.append(el('summary', '', '思考过程'))
+      const pre = el('pre', '', message.reasoning)
+      details.append(pre)
+      bubble.append(details)
+    }
+
+    // Always attach the container: tool calls usually arrive after the message
+    // element is built, and a detached container would swallow every chip.
+    const tools = el('div', 'tools')
+    if (Array.isArray(message.tools) && message.tools.length > 0) {
+      for (const tool of message.tools) {
+        tools.append(toolChip(tool))
+      }
+    }
+    bubble.append(tools)
+
+    const meta = el('div', 'meta')
+    const when = message.at ? timeLabel(message.at) : ''
+    meta.textContent = when
+    if (message.pending) meta.append(el('span', '', ' · 发送中'))
+    if (message.failed) meta.append(el('span', 'failed', ' · 发送失败'))
+    if (message.interrupted) meta.append(el('span', '', ' · 已中断'))
+
+    article.append(who, bubble, meta)
+    message.el = article
+    message.textEl = text
+    message.bubbleEl = bubble
+    message.toolsEl = tools
+    message.metaEl = meta
+    return article
+  }
+
+  function summarizeArgs(value) {
+    if (value === undefined || value === null) return ''
+    let text
+    if (typeof value === 'string') text = value
+    else {
+      try { text = JSON.stringify(value) } catch { text = String(value) }
+    }
+    return text.replace(/\s+/g, ' ').trim().slice(0, 110)
+  }
+
+  function toolChip(tool) {
+    const chip = el('span', `tool ${tool.status || 'running'}`.trim())
+    chip.dataset.callId = tool.callId || ''
+    chip.append(el('span', 'tdot'))
+    chip.append(el('span', '', tool.name || 'tool'))
+    const args = summarizeArgs(tool.arguments)
+    if (args) {
+      const code = el('code', 'targs', args)
+      code.title = typeof tool.arguments === 'string' ? tool.arguments.slice(0, 2000) : args
+      chip.append(code)
+    }
+    const failed = tool.status === 'err'
+    if (tool.done) {
+      const details = el('details')
+      details.append(el('summary', failed ? 'err-mark' : '', failed ? '失败原因' : '结果'))
+      details.append(el('pre', '', tool.result || (failed ? '工具没有返回错误文本。' : '')))
+      chip.append(details)
+    }
+    return chip
+  }
+
+  function refreshMessage(message) {
+    if (!message || !message.el) return
+    message.el.classList.toggle('pending', Boolean(message.pending))
+    message.el.classList.toggle('failed', Boolean(message.failed))
+    renderText(message.textEl, message.text, message.streaming)
+    if (message.metaEl) {
+      message.metaEl.textContent = message.at ? timeLabel(message.at) : ''
+      if (message.pending) message.metaEl.append(el('span', '', ' · 发送中'))
+      if (message.failed) message.metaEl.append(el('span', 'failed', ' · 发送失败'))
+      if (message.interrupted) message.metaEl.append(el('span', '', ' · 已中断'))
+    }
+  }
+
+  function addMessage(role, text, options = {}) {
+    const message = {
+      id: options.id || `m${++STATE.messageSeq}`,
+      role,
+      text: text || '',
+      reasoning: options.reasoning || '',
+      streaming: options.streaming === true,
+      pending: options.pending === true,
+      failed: false,
+      interrupted: false,
+      at: options.at || Date.now(),
+      tools: [],
+    }
+    STATE.messages.push(message)
+    messagesEl.append(messageElement(message))
+    if (role === 'assistant') STATE.currentAssistant = message
+    scrollToEnd()
+    return message
+  }
+
+  function clearMessages() {
+    STATE.messages = []
+    STATE.currentAssistant = null
+    STATE.toolCalls.clear()
+    messagesEl.textContent = ''
+  }
+
+  function renderEmpty() {
+    if (STATE.messages.length > 0) return
+    const wrap = el('div', 'empty')
+    wrap.id = 'empty'
+    if (STATE.mode !== 'chat') {
+      wrap.classList.add('unavailable')
+      wrap.append(el('div', 'orb', '!'))
+      wrap.append(el('h1', '', '对话不可用'))
+      wrap.append(el('p', '', '这个宿主没有提供可对话的 Session。控制台不会画一个假聊天框。'))
+      if (STATE.capabilities?.reason) wrap.append(el('div', 'reason', STATE.capabilities.reason))
+      messagesEl.append(wrap)
+      return
+    }
+    wrap.append(el('div', 'orb', 'S'))
+    wrap.append(el('h1', '', '今天想推进什么？'))
+    wrap.append(el('p', '', '这是一个真实的 Host Session，可以直接说话、追问。让它把工作拆成 run 后，右侧会实时出现子任务、成本和需要你决定的问题。'))
+    const examples = el('div', 'examples')
+    const samples = [
+      '先查清登录失败的根因，再拆成 run 修掉',
+      '把这次重构拆成并行子任务，最后汇总',
+      '跑一个 run 检查最近的改动有没有回归',
+    ]
+    for (const sample of samples) {
+      const button = el('button', '', sample)
+      button.type = 'button'
+      button.addEventListener('click', () => {
+        inputEl.value = sample
+        autoGrow()
+        updateSend()
+        inputEl.focus()
+      })
+      examples.append(button)
+    }
+    wrap.append(examples)
+    messagesEl.append(wrap)
+  }
+
+  function removeEmpty() {
+    const node = $('empty')
+    if (node) node.remove()
+  }
+
+  function autoGrow() {
+    inputEl.style.height = 'auto'
+    inputEl.style.height = `${Math.min(180, Math.max(46, inputEl.scrollHeight))}px`
+  }
+
+  // ---------- rendering runs ----------
+
+  function draftKey(runId, attentionId) {
+    return `${runId}::${attentionId || 'single'}`
+  }
+
+  function renderRuns() {
+    const active = document.activeElement
+    const activeKey = active && active.dataset ? active.dataset.draftKey : null
+    const activeValue = activeKey ? active.value : null
+    const activeStart = activeKey && typeof active.selectionStart === 'number' ? active.selectionStart : null
+
+    runsEl.textContent = ''
+    runCountEl.textContent = String(STATE.runs.length)
+    if (STATE.runs.length === 0) {
+      const empty = el('div', 'run-empty')
+      empty.append(el('div', '', '还没有 run。'))
+      empty.append(el('span', 'line'))
+      empty.append(el('div', '', '让它把工作拆出去，例如：帮我把登录失败的根因查清楚并修复。'))
+      runsEl.append(empty)
+      return
+    }
+
+    for (const run of STATE.runs) {
+      runsEl.append(runElement(run))
+    }
+
+    if (activeKey) {
+      const next = runsEl.querySelector(`[data-draft-key="${cssEscape(activeKey)}"]`)
+      if (next) {
+        next.focus()
+        if (activeValue !== null) next.value = activeValue
+        if (activeStart !== null) {
+          try { next.setSelectionRange(activeStart, activeStart) } catch {}
+        }
+      }
+    }
+  }
+
+  function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value)
+    return String(value).replace(/["\\]/g, '\\$&')
+  }
+
+  function runElement(run) {
+    const card = el('article', `run ${statusClass(run.status)}`)
+    card.dataset.runId = run.id
+
+    const top = el('div', 'run-top')
+    const title = el('div', 'run-title')
+    title.append(el('h3', '', run.goal || '(no goal)'))
+    title.append(el('p', '', `${shortId(run.id)} · ${timeLabel(run.createdAt)}`))
+    top.append(title)
+    top.append(el('span', `status-pill ${statusClass(run.status)}`, statusText(run.status)))
+    card.append(top)
+
+    const meta = el('div', 'run-meta')
+    if (run.cost) {
+      const cost = el('span')
+      cost.append(el('b', '', run.cost.text || '—'))
+      cost.append(document.createTextNode(` 成本${run.cost.complete ? '' : '（部分未定价）'}`))
+      meta.append(cost)
+    }
+    if (run.usage) {
+      const usage = el('span')
+      usage.append(el('b', '', formatTokens(run.usage.totalTokens)))
+      usage.append(document.createTextNode(' tokens'))
+      meta.append(usage)
+    }
+    const total = Array.isArray(run.subtasks) ? run.subtasks.length : 0
+    const done = Array.isArray(run.subtasks) ? run.subtasks.filter(s => s.status === 'completed').length : 0
+    if (total > 0) {
+      const progress = el('span')
+      progress.append(el('b', '', `${done}/${total}`))
+      progress.append(document.createTextNode(' 子任务'))
+      meta.append(progress)
+    }
+    card.append(meta)
+
+    if (total > 0) {
+      const bar = el('div', 'progress')
+      const fill = el('i')
+      fill.style.width = `${Math.round((done / total) * 100)}%`
+      bar.append(fill)
+      card.append(bar)
+
+      const subtasks = el('div', 'subtasks')
+      for (const subtask of run.subtasks.slice(0, 8)) {
+        const chip = el('span', `subtask ${subtask.status || ''}`.trim(), subtask.title || `subtask ${subtask.index ?? ''}`)
+        chip.title = `${subtask.status || 'unknown'}${subtask.childId ? ` · ${subtask.childId}` : ''}`
+        subtasks.append(chip)
+      }
+      if (total > 8) subtasks.append(el('span', 'subtask', `+${total - 8}`))
+      card.append(subtasks)
+    }
+
+    if (Array.isArray(run.attention) && run.attention.length > 0) {
+      for (const item of run.attention) {
+        card.append(attentionElement(run, item))
+      }
+    }
+
+    if (run.report) {
+      const details = el('details', 'report')
+      details.append(el('summary', '', `报告 · ${run.reportTruncated ? '前段预览' : '完整'}`))
+      details.append(el('pre', '', run.report))
+      card.append(details)
+    }
+
+    const actions = el('div', 'run-actions')
+    const reportButton = el('button', '', '查看完整报告')
+    reportButton.type = 'button'
+    reportButton.addEventListener('click', () => openReport(run.id))
+    actions.append(reportButton)
+    card.append(actions)
+
+    return card
+  }
+
+  function attentionElement(run, item) {
+    const card = el('div', 'attention-card')
+    card.append(el('div', 'kicker', `需要你决定${item.id ? ` · ${item.id}` : ''}`))
+    card.append(el('p', '', item.question || '运行中的任务在等一个决定'))
+    if (item.reason) card.append(el('p', 'reason', item.reason))
+
+    const key = draftKey(run.id, item.id)
+    const busy = STATE.busyAnswers.has(key)
+    const options = el('div', 'options')
+    if (Array.isArray(item.options)) {
+      for (const option of item.options) {
+        const button = el('button', '', option)
+        button.type = 'button'
+        button.disabled = busy
+        button.addEventListener('click', () => submitAnswer(run.id, item.id, option, key))
+        options.append(button)
+      }
+    }
+    if (options.childElementCount > 0) card.append(options)
+
+    const free = el('div', 'free')
+    const field = el('input')
+    field.type = 'text'
+    field.placeholder = '或输入自己的决定'
+    field.dataset.draftKey = key
+    field.value = STATE.drafts.get(key) || ''
+    field.disabled = busy
+    field.addEventListener('input', () => {
+      STATE.drafts.set(key, field.value)
+    })
+    field.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.isComposing) {
+        event.preventDefault()
+        const value = field.value.trim()
+        if (value) submitAnswer(run.id, item.id, value, key)
+      }
+    })
+    const submit = el('button', '', busy ? '提交中' : '提交')
+    submit.type = 'button'
+    submit.disabled = busy
+    submit.addEventListener('click', () => {
+      const value = field.value.trim()
+      if (value) submitAnswer(run.id, item.id, value, key)
+    })
+    free.append(field, submit)
+    card.append(free)
+    return card
+  }
+
+  async function submitAnswer(runId, attentionId, answer, key) {
+    if (STATE.busyAnswers.has(key)) return
+    STATE.busyAnswers.add(key)
+    renderRuns()
+    try {
+      await api('/api/console/answer', {
+        method: 'POST',
+        body: { sessionId: STATE.sessionId, runId, attentionId, answer },
+      })
+      STATE.drafts.delete(key)
+      pushToast('决定已提交，run 会在下一个边界应用。', 'ok')
+    } catch (error) {
+      pushToast(`提交失败：${messageOf(error)}`, 'err')
+    } finally {
+      STATE.busyAnswers.delete(key)
+      renderRuns()
+    }
+  }
+
+  async function openReport(runId) {
+    try {
+      const data = await api(`/api/console/runs/${encodeURIComponent(runId)}`)
+      dialogTitleEl.textContent = data.goal || '报告'
+      dialogMetaEl.textContent = ''
+      const meta = [
+        `状态 ${statusText(data.status)}`,
+        data.cost?.text ? `成本 ${data.cost.text}` : null,
+        data.usage ? `${formatTokens(data.usage.totalTokens)} tokens` : null,
+        data.finishedAt ? `结束 ${timeLabel(data.finishedAt)}` : null,
+      ].filter(Boolean)
+      for (const value of meta) dialogMetaEl.append(el('span', '', value))
+      dialogReportEl.textContent = data.report || '(这个 run 还没有报告)'
+      reportDialogEl.showModal()
+    } catch (error) {
+      pushToast(`读取报告失败：${messageOf(error)}`, 'err')
+    }
+  }
+
+  // ---------- SSE ----------
+
+  function handleFrame(frame) {
+    if (!frame || typeof frame !== 'object') return
+    switch (frame.type) {
+      case 'hello':
+        setSession(frame.sessionId)
+        setMode(frame.mode === 'chat' ? 'chat' : 'unavailable', frame.capabilities)
+        setConn('live', '已连接')
+        break
+      case 'session':
+        if (frame.sessionId && frame.sessionId !== STATE.sessionId) {
+          setSession(frame.sessionId)
+          clearMessages()
+          renderEmpty()
+        }
+        break
+      case 'stream.snapshot':
+        clearMessages()
+        if (frame.header && frame.header.id) setSession(frame.header.id)
+        for (const record of Array.isArray(frame.records) ? frame.records : []) {
+          if (record && record.type === 'event' && record.event) handleSessionEvent(record.event)
+        }
+        removeEmpty()
+        if (STATE.messages.length === 0) renderEmpty()
+        scrollToEnd()
+        break
+      case 'session.event':
+        handleSessionEvent(frame.event)
+        break
+      case 'assistant.frame':
+        handleAssistantFrame(frame.frame)
+        break
+      case 'session.state':
+        applySessionState(frame.state)
+        break
+      case 'accepted':
+        for (let i = STATE.messages.length - 1; i >= 0; i -= 1) {
+          const message = STATE.messages[i]
+          if (message.role === 'user' && message.pending && message.text === frame.text) {
+            message.pending = false
+            message.at = Date.now()
+            refreshMessage(message)
+            break
+          }
+        }
+        break
+      case 'runs':
+        STATE.runs = Array.isArray(frame.runs) ? frame.runs : []
+        renderRuns()
+        break
+      case 'answered':
+        pushToast(`已提交 ${frame.attentionId || '决定'}。`, 'ok')
+        break
+      case 'error':
+        if (frame.code === 'follow-failed' || frame.code === 'state-failed') {
+          setConn('warn', '流中断')
+        }
+        pushToast(frame.message || '控制台流发生错误', 'err')
+        break
+      case 'truncated':
+        pushToast('有一段历史过大，已截断显示。', 'err')
+        break
+      case 'closed':
+        setConn('warn', '已关闭')
+        break
+      default:
+        break
+    }
+  }
+
+  function handleSessionEvent(event) {
+    if (!event || typeof event !== 'object') return
+    const data = event.data && typeof event.data === 'object' ? event.data : {}
+    switch (event.type) {
+      case 'turn/start':
+        setTyping(true, '运行中')
+        break
+      case 'turn/end':
+        setTyping(false)
+        if (STATE.currentAssistant) {
+          STATE.currentAssistant.streaming = false
+          refreshMessage(STATE.currentAssistant)
+          STATE.currentAssistant = null
+        }
+        break
+      case 'user/message': {
+        if (data.source && data.source.kind && data.source.kind !== 'user') break
+        const text = contentText(data.content).trim()
+        if (!text) break
+        removeEmpty()
+        let matched = null
+        for (let i = STATE.messages.length - 1; i >= 0; i -= 1) {
+          const message = STATE.messages[i]
+          if (message.role === 'user' && message.pending && message.text.trim() === text) {
+            matched = message
+            break
+          }
+        }
+        if (matched) {
+          matched.pending = false
+          matched.at = event.time || Date.now()
+          refreshMessage(matched)
+        } else {
+          addMessage('user', text, { at: event.time || Date.now() })
+        }
+        setTyping(true, '运行中')
+        break
+      }
+      case 'assistant/message': {
+        const finalText = contentText(data.message?.content)
+        const reasoning = contentText((data.message?.content || []).filter(part => part && part.type === 'reasoning'))
+        removeEmpty()
+        let target = STATE.currentAssistant
+        if (!target || (!target.streaming && target.text)) {
+          target = addMessage('assistant', finalText, { at: event.time || Date.now(), reasoning })
+        } else {
+          if (finalText) target.text = finalText
+          if (reasoning) target.reasoning = reasoning
+          target.streaming = false
+          target.at = event.time || target.at
+          refreshMessage(target)
+        }
+        if (data.interrupted === true) {
+          target.interrupted = true
+          refreshMessage(target)
+        }
+        const calls = Array.isArray(data.message?.content)
+          ? data.message.content.filter(part => part && part.type === 'tool-call')
+          : []
+        for (const call of calls) {
+          upsertTool(target, {
+            callId: call.id || call.callId,
+            name: call.name || 'tool',
+            status: 'ok',
+            arguments: call.arguments,
+          })
+        }
+        STATE.currentAssistant = null
+        break
+      }
+      case 'tool/call':
+        removeEmpty()
+        if (!STATE.currentAssistant) addMessage('assistant', '', { at: event.time || Date.now(), streaming: true })
+        upsertTool(STATE.currentAssistant, {
+          callId: data.callId,
+          name: data.name || 'tool',
+          status: 'running',
+          arguments: data.arguments,
+        })
+        break
+      case 'tool/result': {
+        const call = STATE.toolCalls.get(data.callId)
+        if (!call) break
+        call.status = data.message?.isError ? 'err' : 'ok'
+        call.done = true
+        call.result = contentText(data.message?.content).slice(0, 4000)
+        const message = call.message
+        if (message && message.toolsEl) {
+          const chip = message.toolsEl.querySelector(`[data-call-id="${cssEscape(data.callId || '')}"]`)
+          if (chip) chip.replaceWith(toolChip(call))
+        }
+        break
+      }
+      case 'step/start':
+        setTyping(true, '运行中')
+        break
+      case 'step/end':
+        break
+      default:
+        break
+    }
+  }
+
+  function upsertTool(message, tool) {
+    if (!message) return
+    tool.message = message
+    tool.done = tool.done === true
+    const existing = STATE.toolCalls.get(tool.callId)
+    if (existing) {
+      Object.assign(existing, tool)
+    } else {
+      STATE.toolCalls.set(tool.callId, tool)
+      message.tools = message.tools || []
+      message.tools.push(tool)
+    }
+    if (message.toolsEl) {
+      const key = tool.callId || ''
+      const current = message.toolsEl.querySelector(`[data-call-id="${cssEscape(key)}"]`)
+      const chip = toolChip(existing || tool)
+      if (current) current.replaceWith(chip)
+      else message.toolsEl.append(chip)
+    }
+    scrollToEnd()
+  }
+
+  function handleAssistantFrame(frame) {
+    if (!frame || typeof frame !== 'object') return
+    if (frame.type === 'start') {
+      removeEmpty()
+      const message = addMessage('assistant', '', { streaming: true, at: Date.now() })
+      STATE.currentAssistant = message
+      setTyping(true, '生成中')
+      return
+    }
+    if (frame.type === 'chunk' && frame.chunk) {
+      const chunk = frame.chunk
+      if (chunk.type === 'text-delta') {
+        if (!STATE.currentAssistant) addMessage('assistant', '', { streaming: true, at: Date.now() })
+        STATE.currentAssistant.text += chunk.text || ''
+        refreshMessage(STATE.currentAssistant)
+        scrollToEnd()
+      } else if (chunk.type === 'reasoning-delta') {
+        if (!STATE.currentAssistant) addMessage('assistant', '', { streaming: true, at: Date.now() })
+        STATE.currentAssistant.reasoning = (STATE.currentAssistant.reasoning || '') + (chunk.text || '')
+        refreshMessage(STATE.currentAssistant)
+      } else if (chunk.type === 'tool-call-delta') {
+        if (!STATE.currentAssistant) addMessage('assistant', '', { streaming: true, at: Date.now() })
+        upsertTool(STATE.currentAssistant, {
+          callId: chunk.id,
+          name: chunk.name || 'tool',
+          status: 'running',
+          arguments: chunk.argumentsDelta || '',
+        })
+      }
+      return
+    }
+    if (frame.type === 'end') {
+      if (STATE.currentAssistant) {
+        STATE.currentAssistant.streaming = false
+        refreshMessage(STATE.currentAssistant)
+      }
+      setTyping(false)
+    }
+  }
+
+  function applySessionState(state) {
+    if (!state || typeof state !== 'object') return
+    STATE.pendingInput = Array.isArray(state.pendingInput) ? state.pendingInput : []
+    if (STATE.pendingInput.includes('approval')) setTyping(true, '等待审批')
+    else if (STATE.pendingInput.includes('question')) setTyping(true, '等待回答')
+    else setTyping(state.running === true, state.queue && state.queue.length ? `运行中 · 队列 ${state.queue.length}` : '运行中')
+  }
+
+  // ---------- API ----------
+
+  async function api(path, options = {}) {
+    const headers = { authorization: `Bearer ${STATE.token}` }
+    if (options.body !== undefined) headers['content-type'] = 'application/json'
+    const response = await fetch(path, {
+      method: options.method || 'GET',
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: options.signal,
+    })
+    let payload = null
+    try {
+      payload = await response.json()
+    } catch {
+      payload = null
+    }
+    if (!response.ok) {
+      const error = new Error(payload?.error?.summary || payload?.error?.detail || `HTTP ${response.status}`)
+      error.status = response.status
+      error.code = payload?.error?.id
+      error.hint = payload?.error?.hint
+      throw error
+    }
+    return payload?.data
+  }
+
+  function applyBootstrap(data) {
+    STATE.booted = true
+    setMode(data.mode === 'chat' ? 'chat' : 'unavailable', data.capabilities)
+    if (data.sessionId) setSession(data.sessionId)
+    STATE.runs = Array.isArray(data.runs) ? data.runs : []
+    renderRuns()
+    if (STATE.messages.length === 0) renderEmpty()
+    loadTools()
+  }
+
+  const toolCountEl = $('toolCount')
+  const toolNoteEl = $('toolNote')
+  const toolListEl = $('toolList')
+
+  /** Group a tool by the capability it would give the conversation. */
+  function toolGroup(name) {
+    if (name.startsWith('browser_')) return 'browser'
+    if (name.startsWith('desktop_')) return 'desktop'
+    if (/3d|blender|mesh|gltf|glb|fbx|stl|obj|step|cad/i.test(name)) return '3d'
+    return 'other'
+  }
+
+  function renderTools(data) {
+    toolListEl.textContent = ''
+    toolCountEl.textContent = '—'
+    const tools = Array.isArray(data?.tools) ? data.tools : null
+    if (!tools) {
+      if (data == null) toolNoteEl.textContent = '加载中…'
+      else if (data.reason === 'no-session') toolNoteEl.textContent = '还没有会话。'
+      else toolNoteEl.textContent = `读不到工具清单：${data.reason || '宿主未返回'}`
+      return
+    }
+    toolCountEl.textContent = String(tools.length)
+    const counts = { browser: 0, desktop: 0, '3d': 0 }
+    for (const tool of tools) {
+      const group = toolGroup(tool.name)
+      if (group in counts) counts[group] += 1
+      const chip = el('span', `tool-name${group === 'browser' || group === 'desktop' ? ' on' : ''}`, tool.name)
+      if (tool.description) chip.title = tool.description
+      toolListEl.append(chip)
+    }
+    toolNoteEl.textContent = [
+      `浏览器控制：${counts.browser ? `${counts.browser} 个 browser_* 工具` : '未挂载'}`,
+      `桌面控制：${counts.desktop ? `${counts.desktop} 个 desktop_* 工具` : '未挂载'}`,
+      `3D 建模：${counts['3d']
+        ? `${counts['3d']} 个相关工具`
+        : `未发现专用工具${tools.some(tool => tool.name === 'bash' || tool.name === 'pwsh')
+          ? '（可经 shell 调 headless Blender）'
+          : ''}`}`,
+    ].join(' · ')
+  }
+
+  async function loadTools() {
+    if (!STATE.sessionId || STATE.mode !== 'chat') return
+    try {
+      renderTools(await api(`/api/console/tools?sessionId=${encodeURIComponent(STATE.sessionId)}`))
+    } catch (error) {
+      renderTools({ reason: messageOf(error) })
+    }
+  }
+
+  async function bootstrap() {
+    try {
+      const data = await api('/api/console/bootstrap', { method: 'POST' })
+      applyBootstrap(data)
+      if (data.mode === 'chat' && data.sessionId) connectEvents()
+      else setConn('warn', '未连接')
+    } catch (error) {
+      if (error.status === 401) {
+        showGate('令牌无效或已轮换，请重新读取 console.json。')
+        return
+      }
+      setMode('unavailable', { chat: false, reason: `${messageOf(error)}${error.hint ? `\n${error.hint}` : ''}` })
+      setConn('warn', '连接失败')
+      renderEmpty()
+      pushToast(`无法启动对话：${messageOf(error)}`, 'err')
+    }
+  }
+
+  async function connectEvents() {
+    if (!STATE.sessionId) return
+    if (STATE.streamAbort) STATE.streamAbort.abort()
+    const controller = new AbortController()
+    STATE.streamAbort = controller
+    setConn('warn', '连接流中')
+    try {
+      const response = await fetch(`/api/console/events?sessionId=${encodeURIComponent(STATE.sessionId)}`, {
+        headers: { authorization: `Bearer ${STATE.token}` },
+        signal: controller.signal,
+      })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null)
+        const error = new Error(payload?.error?.summary || `HTTP ${response.status}`)
+        error.status = response.status
+        throw error
+      }
+      setConn('live', '已连接')
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let cut = buffer.indexOf('\n\n')
+        while (cut >= 0) {
+          const block = buffer.slice(0, cut)
+          buffer = buffer.slice(cut + 2)
+          for (const line of block.split('\n')) {
+            if (!line.startsWith('data:')) continue
+            const raw = line.slice(5).trimStart()
+            if (!raw) continue
+            try {
+              handleFrame(JSON.parse(raw))
+            } catch {
+              // A malformed frame is ignored; the next one may be valid.
+            }
+          }
+          cut = buffer.indexOf('\n\n')
+        }
+      }
+      if (!controller.signal.aborted) {
+        setConn('warn', '重连中')
+        scheduleReconnect()
+      }
+    } catch (error) {
+      if (controller.signal.aborted) return
+      if (error.status === 401) {
+        showGate('令牌无效或已轮换，请重新读取 console.json。')
+        return
+      }
+      setConn('warn', '重连中')
+      scheduleReconnect()
+    }
+  }
+
+  function scheduleReconnect() {
+    if (STATE.reconnectTimer) return
+    STATE.reconnectTimer = setTimeout(() => {
+      STATE.reconnectTimer = null
+      if (STATE.mode === 'chat' && STATE.sessionId) connectEvents()
+    }, 1200)
+  }
+
+  // ---------- composer ----------
+
+  async function sendMessage() {
+    const text = inputEl.value.trim()
+    if (!text || STATE.sending || STATE.mode !== 'chat') return
+    STATE.sending = true
+    updateSend()
+    inputEl.value = ''
+    autoGrow()
+    removeEmpty()
+    const optimistic = addMessage('user', text, { pending: true, at: Date.now() })
+    try {
+      await api('/api/console/message', {
+        method: 'POST',
+        body: { sessionId: STATE.sessionId, text, mode: STATE.sendMode },
+      })
+      optimistic.pending = false
+      refreshMessage(optimistic)
+    } catch (error) {
+      optimistic.pending = false
+      optimistic.failed = true
+      refreshMessage(optimistic)
+      pushToast(`发送失败：${messageOf(error)}`, 'err')
+    } finally {
+      STATE.sending = false
+      updateSend()
+      inputEl.focus()
+    }
+  }
+
+  async function newConversation() {
+    if (STATE.mode !== 'chat') return
+    newChatEl.disabled = true
+    try {
+      const data = await api('/api/console/session', { method: 'POST' })
+      if (STATE.streamAbort) STATE.streamAbort.abort()
+      setSession(data.sessionId)
+      clearMessages()
+      STATE.runs = []
+      renderRuns()
+      renderEmpty()
+      renderTools(null)
+      loadTools()
+      pushToast('已开始新对话。', 'ok')
+      connectEvents()
+    } catch (error) {
+      pushToast(`无法新建对话：${messageOf(error)}`, 'err')
+    } finally {
+      newChatEl.disabled = STATE.mode !== 'chat'
+    }
+  }
+
+  // ---------- gate ----------
+
+  function showGate(errorText) {
+    gateEl.hidden = false
+    gateErrorEl.textContent = errorText || ''
+    setTimeout(() => tokenInputEl.focus(), 30)
+  }
+
+  function hideGate() {
+    gateEl.hidden = true
+  }
+
+  function readTokenFromUrl() {
+    const url = new URL(window.location.href)
+    const queryToken = url.searchParams.get('token')
+    if (queryToken) {
+      STATE.token = queryToken
+      try { sessionStorage.setItem(TOKEN_KEY, queryToken) } catch {}
+      url.searchParams.delete('token')
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash)
+      return true
+    }
+    return false
+  }
+
+  function loadStoredToken() {
+    try {
+      return sessionStorage.getItem(TOKEN_KEY) || ''
+    } catch {
+      return ''
+    }
+  }
+
+  // ---------- wiring ----------
+
+  messagesEl.addEventListener('scroll', () => {
+    const distance = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight
+    STATE.autoScroll = distance < 80
+  })
+
+  inputEl.addEventListener('input', () => {
+    autoGrow()
+    updateSend()
+  })
+
+  inputEl.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      event.preventDefault()
+      sendMessage()
+    }
+  })
+
+  composerEl.addEventListener('submit', event => {
+    event.preventDefault()
+    sendMessage()
+  })
+
+  for (const button of document.querySelectorAll('.segmented button')) {
+    button.addEventListener('click', () => {
+      STATE.sendMode = button.dataset.mode === 'steer' ? 'steer' : 'queue'
+      for (const peer of document.querySelectorAll('.segmented button')) {
+        peer.classList.toggle('active', peer === button)
+      }
+    })
+  }
+
+  newChatEl.addEventListener('click', newConversation)
+  $('dialogClose').addEventListener('click', () => reportDialogEl.close())
+  reportDialogEl.addEventListener('click', event => {
+    if (event.target === reportDialogEl) reportDialogEl.close()
+  })
+
+  gateFormEl.addEventListener('submit', event => {
+    event.preventDefault()
+    const token = tokenInputEl.value.trim()
+    if (!token) return
+    STATE.token = token
+    try { sessionStorage.setItem(TOKEN_KEY, token) } catch {}
+    tokenInputEl.value = ''
+    hideGate()
+    bootstrap()
+  })
+
+  // A token pasted as the page URL is consumed once and removed from the address
+  // bar; it never goes into a log or a referrer.
+  if (readTokenFromUrl()) {
+    hideGate()
+    bootstrap()
+  } else {
+    const stored = loadStoredToken()
+    if (stored) {
+      STATE.token = stored
+      hideGate()
+      bootstrap()
+    } else {
+      setMode('loading', null)
+      setConn('warn', '需要 token')
+      showGate('')
+    }
+  }
+
+  setInterval(() => {
+    if (STATE.mode === 'chat' && !STATE.sessionId) bootstrap()
+  }, 15_000)
+})()
+</script>
+</body>
+</html>
