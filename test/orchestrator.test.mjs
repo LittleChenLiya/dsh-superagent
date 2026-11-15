@@ -2500,3 +2500,52 @@ test('an unknown tool inventory skips preflight instead of guessing', async () =
   assert.equal(finished.preflight.status, 'unavailable')
   assert.equal(finished.subtasks[0].status, 'completed')
 })
+
+test('a scheduled plan refuses a second active run and a resume beside it', async () => {
+  const hold = gate()
+  let holdWorkers = false
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    }
+    if (holdWorkers) await hold.opened
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner: { spawnChild },
+    config: { maxActiveRuns: 4 },
+  })
+  const origin = { kind: 'scheduled', scheduleId: 'sch-one', scheduleName: 'nightly' }
+
+  // A first run of the plan finishes, which is the "failed run" a person can
+  // resume later.
+  const first = await orchestrator.start({
+    goal: 'first window', parentSessionId: parent.id, parent, origin, allowDuplicate: true,
+  })
+  const finishedFirst = await orchestrator.status(first.id, 10)
+  assert.equal(finishedFirst.status, 'completed')
+
+  holdWorkers = true
+  const second = await orchestrator.start({
+    goal: 'catch-up window', parentSessionId: parent.id, parent, origin, allowDuplicate: true,
+  })
+  assert.equal(ACTIVE_STATUSES.has((await orchestrator.status(second.id, 0)).status), true)
+
+  // The timer's start is refused: the run record is the lock, not a plan field.
+  await assert.rejects(
+    orchestrator.start({
+      goal: 'another window', parentSessionId: parent.id, parent, origin, allowDuplicate: true,
+    }),
+    error => error.code === 'schedule-busy' && error.runId === second.id,
+  )
+  // So is a resume that would revive the finished first run beside it.
+  await assert.rejects(
+    orchestrator.resume(first.id, parent, null, { reopen: true }),
+    /already has an active run/,
+  )
+
+  hold.open()
+  await orchestrator.idle()
+  assert.equal((await orchestrator.status(second.id, 10)).status, 'completed')
+})
+

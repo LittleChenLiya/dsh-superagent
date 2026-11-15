@@ -35,6 +35,11 @@ function fakeOrchestrator() {
     async status(id) {
       return runs.has(id) ? structuredClone(runs.get(id)) : null
     },
+    async list() {
+      return [...runs.values()]
+        .map(run => structuredClone(run))
+        .sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')))
+    },
   }
 }
 
@@ -332,6 +337,67 @@ test('a window is skipped while the previous run of the same plan is still activ
     assert.equal(after.skippedRuns, 1)
     assert.match(after.history.at(-1).reason, /skipped: previous run still active/)
     assert.equal(after.nextRunAt, '2026-11-15T00:03:00.000Z')
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('a run resumed after a failure blocks the catch-up after a restart', async () => {
+  const h = await harness({ now: '2026-11-15T08:00:00Z' })
+  try {
+    await h.scheduler.create(planInput({ everyMinutes: 1, ownerRecovery: 'resume' }))
+    h.clock.value = Date.parse('2026-11-15T08:01:00Z')
+    await h.scheduler.tick()
+    assert.equal(h.orchestrator.calls.length, 1)
+
+    // The run fails and the plan records it; the next window is not due yet, so
+    // no second run starts.
+    const first = h.orchestrator.runs.get('run-1')
+    first.status = 'failed'
+    first.error = 'the worker crashed'
+    await h.scheduler.tick()
+    const [failed] = await h.scheduler.list()
+    assert.equal(failed.activeRunId, null)
+    assert.equal(failed.lastOutcome, 'failed')
+    assert.equal(failed.totalRuns, 1)
+
+    // A person resumes that failed run, and the host restarts with 08:02 and
+    // 08:03 missed while 08:04 is the due window.
+    h.scheduler.stop()
+    first.status = 'running'
+    h.clock.value = Date.parse('2026-11-15T08:04:10Z')
+    const restarted = createScheduler({
+      stateFile: h.stateFile,
+      orchestrator: h.orchestrator,
+      resolveOwner: () => ({ id: OWNER }),
+      now: () => h.clock.value,
+      setInterval: h.timers.setInterval,
+      clearInterval: h.timers.clearInterval,
+      maxActiveRuns: 2,
+    })
+    await restarted.init()
+    const [afterRestart] = await restarted.list()
+
+    assert.equal(h.orchestrator.calls.length, 1, 'the resumed run is the only run this plan has started')
+    assert.equal(afterRestart.activeRunId, 'run-1', 'the plan tracks the run it did not start itself')
+    assert.equal(afterRestart.totalRuns, 1)
+    assert.equal(afterRestart.catchUpRuns, 0, 'a catch-up must not start beside the resumed run')
+    assert.equal(afterRestart.missedRuns, 2, 'the windows crossed while the host was down are still counted')
+    assert.equal(afterRestart.skippedRuns, 1, 'the due window is skipped once, not started')
+    assert.equal(afterRestart.nextRunAt, '2026-11-15T08:05:00.000Z')
+    assert.ok(afterRestart.history.some(entry => entry.event === 'active-run-recovered'))
+    assert.ok(afterRestart.history.some(entry => entry.event === 'skipped'))
+
+    // The run finishes; the next window starts normally instead of skipping.
+    first.status = 'completed'
+    h.clock.value = Date.parse('2026-11-15T08:05:10Z')
+    const outcomes = await restarted.tick()
+    assert.equal(outcomes[0].event, 'started')
+    assert.equal(h.orchestrator.calls.length, 2)
+    const [afterNext] = await restarted.list()
+    assert.equal(afterNext.activeRunId, 'run-2')
+    assert.equal(afterNext.skippedRuns, 1, 'no further skips once the resumed run is gone')
+    restarted.stop()
   } finally {
     await h.cleanup()
   }
