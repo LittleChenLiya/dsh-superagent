@@ -1,0 +1,331 @@
+import assert from 'node:assert/strict'
+import fsp from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import test from 'node:test'
+
+import { apply } from '../lib/index.js'
+import { createGuard } from '../lib/guard.js'
+
+const BASE = {
+  cwd: 'C:\\work\\proj',
+  homedir: 'C:\\Users\\tester',
+  tmpdir: 'C:\\Temp',
+  platform: 'win32',
+  env: {
+    SystemRoot: 'C:\\Windows',
+    ProgramFiles: 'C:\\Program Files',
+    ProgramData: 'C:\\ProgramData',
+    USERPROFILE: 'C:\\Users\\tester',
+  },
+}
+
+function harness(config) {
+  const guard = createGuard({ ...BASE, config })
+  guard.bindChild('child-1', { runId: 'run-1', label: 'superagent-1' })
+  const call = (name, args, agent = { id: 'child-1' }) => guard.checkToolCall({ name, arguments: args, agent })
+  return { guard, call }
+}
+
+test('a worker may write inside its workspace and the OS temp directory', () => {
+  const { call, guard } = harness()
+  assert.equal(call('write', { file_path: 'C:\\work\\proj\\src\\index.js' }).blocked, false)
+  assert.equal(call('write', { file_path: 'C:\\work\\proj\\dist\\out.js' }).blocked, false)
+  assert.equal(call('write', { file_path: 'C:\\Temp\\scratch.txt' }).blocked, false)
+  assert.equal(call('edit', { file_path: 'src\\index.js', old_string: 'a', new_string: 'b' }).blocked, false)
+  assert.equal(guard.snapshot('run-1'), null, 'normal calls are not recorded as guard events')
+})
+
+test('writing outside the workspace is refused and names the allowlist rule', () => {
+  const { call } = harness()
+  const write = call('write', { file_path: 'C:\\work\\other\\index.js' })
+  assert.equal(write.blocked, true)
+  assert.equal(write.rule, 'path/outside-allowlist')
+  assert.match(write.reason, /outside every allowed write root/)
+  assert.match(write.reasonText, /rule path\/outside-allowlist/)
+  assert.match(write.reasonText, /did not run/)
+})
+
+test('system directories are writable by nobody', () => {
+  const { call } = harness()
+  const write = call('write', { file_path: 'C:\\Windows\\System32\\drivers\\etc\\hosts' })
+  assert.equal(write.blocked, true)
+  assert.equal(write.rule, 'path/system-directory')
+  const programFiles = call('write', { file_path: 'C:\\Program Files\\app\\config.ini' })
+  assert.equal(programFiles.rule, 'path/system-directory')
+})
+
+test('credential stores are refused for reading and writing', () => {
+  const { call } = harness()
+  for (const file of [
+    'C:\\Users\\tester\\.ssh\\authorized_keys',
+    'C:\\Users\\tester\\.aws\\credentials',
+    'C:\\Users\\tester\\.npmrc',
+    'C:\\Users\\tester\\.git-credentials',
+    'C:\\work\\proj\\.git\\config',
+  ]) {
+    const read = call('read', { file_path: file })
+    assert.equal(read.blocked, true, file)
+    assert.match(read.rule, /^path\/(credentials|git-control)$/, file)
+  }
+  assert.equal(call('write', { file_path: 'C:\\Users\\tester\\.ssh\\known_hosts' }).rule, 'path/credentials')
+})
+
+test('reading a system file stays legal; reading a credential does not', () => {
+  const { call } = harness()
+  assert.equal(call('read', { file_path: 'C:\\Windows\\win.ini' }).blocked, false)
+  assert.equal(call('read', { file_path: 'C:\\Users\\tester\\.ssh\\id_rsa' }).rule, 'path/credentials')
+})
+
+test('an apply_patch touching the system directory is refused', () => {
+  const { call } = harness()
+  const patch = [
+    '*** Begin Patch',
+    '*** Add File: C:\\Windows\\System32\\evil.dll',
+    '+binary',
+    '*** End Patch',
+  ].join('\n')
+  const verdict = call('apply_patch', { input: patch })
+  assert.equal(verdict.blocked, true)
+  assert.equal(verdict.rule, 'path/system-directory')
+
+  const local = '*** Begin Patch\n*** Update File: src\\index.js\n@@\n-a\n+b\n*** End Patch'
+  assert.equal(call('apply_patch', { input: local }).blocked, false)
+})
+
+test('recursive forced deletes are judged by their target', () => {
+  const { call } = harness()
+  for (const command of ['rm -rf /', 'rm -rf ~', 'rm -rf .', 'rm -rf ..', 'rm -rf *', 'Remove-Item -Recurse -Force C:\\Windows']) {
+    const verdict = call('bash', { command })
+    assert.equal(verdict.blocked, true, command)
+    assert.match(verdict.rule, /^(cmd\/recursive-force-delete|path\/system-directory)$/, command)
+  }
+  for (const command of ['rm -rf build', 'rm -rf node_modules', 'rm -rf C:\\work\\proj\\dist']) {
+    assert.equal(call('bash', { command }).blocked, false, command)
+  }
+})
+
+test('the default command rules block disk, scheduler, registry, and system writes', () => {
+  const { call } = harness()
+  const blocked = {
+    'format C: /q': 'cmd/disk-format',
+    'mkfs.ext4 /dev/sda1': 'cmd/disk-format',
+    'diskpart /s script.txt': 'cmd/disk-format',
+    'schtasks /create /tn evil /tr calc.exe': 'cmd/system-scheduler',
+    'reg add HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v evil /d calc.exe': 'cmd/system-registry',
+    'echo pwn > C:\\Windows\\System32\\evil.bat': 'path/system-directory',
+    'echo pwn > /etc/hosts': /^(cmd\/system-write|path\/system-directory|path\/outside-allowlist)$/,
+    'cat ~/.ssh/id_rsa': 'cmd/credential-access',
+    'chmod -R 777 /': 'cmd/permission-nuke',
+  }
+  for (const [command, rule] of Object.entries(blocked)) {
+    const verdict = call('bash', { command })
+    assert.equal(verdict.blocked, true, command)
+    if (rule instanceof RegExp) assert.match(verdict.rule, rule, command)
+    else assert.equal(verdict.rule, rule, command)
+  }
+})
+
+test('alternate file and terminal tools use the same policy', () => {
+  const { call } = harness()
+  assert.equal(call('str_replace_editor', { command: 'create', path: 'C:\\Windows\\x.txt', file_text: 'x' }).blocked, true)
+  assert.equal(call('str_replace_editor', { command: 'view', path: 'C:\\Users\\tester\\.ssh\\id_rsa' }).rule, 'path/credentials')
+  assert.equal(call('str_replace_editor', { command: 'str_replace', path: 'src\\index.js' }).blocked, false)
+  assert.equal(call('terminal_send', { sessionId: 't1', text: 'rm -rf /' }).blocked, true)
+  assert.equal(call('terminal_send', { sessionId: 't1', text: 'npm test' }).blocked, false)
+})
+
+test('normal development commands are not blocked', () => {
+  const { call, guard } = harness()
+  for (const command of [
+    'npm test',
+    'git status',
+    'git diff --stat',
+    'mkdir -p src/components',
+    'node scripts/build.js',
+    'echo hello > notes.txt',
+    'cp README.md docs\\README.md',
+    'rm -rf node_modules',
+    'eslint .',
+  ]) {
+    assert.equal(call('bash', { command }).blocked, false, command)
+  }
+  assert.equal(guard.snapshot('run-1'), null)
+})
+
+test('an explicit allow is recorded and overrides the matching denial', () => {
+  const { guard, call } = harness({
+    allowCommands: [
+      { id: 'clean-build', pattern: '^rm -rf build$', reason: 'clean build output' },
+      { id: 'root-reset', pattern: '^rm -rf /$', reason: 'lab machine reset' },
+    ],
+  })
+  const normal = call('bash', { command: 'rm -rf build' })
+  assert.equal(normal.blocked, false)
+  assert.equal(normal.explicitAllow, true)
+  assert.equal(normal.rule, 'allow/clean-build')
+
+  const override = call('bash', { command: 'rm -rf /' })
+  assert.equal(override.blocked, false)
+  assert.equal(override.rule, 'allow/root-reset')
+  assert.equal(override.overridden, 'cmd/recursive-force-delete')
+
+  const snapshot = guard.snapshot('run-1')
+  assert.equal(snapshot.blocked, 0)
+  assert.equal(snapshot.allowed, 2)
+  assert.equal(snapshot.byRule['allow/clean-build'], 1)
+  assert.equal(snapshot.byRule['allow/root-reset'], 1)
+  assert.equal(snapshot.events[1].overridden, 'cmd/recursive-force-delete')
+  assert.match(guard.reportSection('run-1'), /2 explicit allow\(s\) recorded/)
+})
+
+test('blocked events are counted, attributed, and capped', () => {
+  const { guard, call } = harness({ maxEvents: 2 })
+  call('write', { file_path: 'C:\\Windows\\a' })
+  call('bash', { command: 'rm -rf /' })
+  call('read', { file_path: 'C:\\Users\\tester\\.ssh\\id_rsa' })
+  const snapshot = guard.snapshot('run-1')
+  assert.equal(snapshot.blocked, 3)
+  assert.equal(snapshot.events.length, 2)
+  assert.equal(snapshot.omitted, 1)
+  assert.equal(snapshot.byRule['path/system-directory'], 1)
+  assert.equal(snapshot.byRule['cmd/recursive-force-delete'], 1)
+  assert.equal(snapshot.events[0].label, 'superagent-1')
+  assert.match(guard.reportSection('run-1'), /further event\(s\) were counted/)
+})
+
+test('the OS temp directory stays writable even under a system path', () => {
+  const guard = createGuard({
+    ...BASE,
+    tmpdir: 'C:\\Windows\\TEMP',
+    config: {},
+  })
+  guard.bindChild('child-1', { runId: 'run-1' })
+  const call = (name, args) => guard.checkToolCall({ name, arguments: args, agent: { id: 'child-1' } })
+  assert.equal(call('write', { file_path: 'C:\\Windows\\TEMP\\scratch.txt' }).blocked, false)
+  assert.equal(call('bash', { command: 'rm -rf C:\\Windows\\TEMP\\build' }).blocked, false)
+  assert.equal(call('write', { file_path: 'C:\\Windows\\TEMP2\\scratch.txt' }).blocked, true)
+})
+
+test('an unrelated session and a disabled guard are never policed', () => {
+  const { call, guard } = harness()
+  assert.equal(call('write', { file_path: 'C:\\Windows\\x' }, { id: 'parent-session' }).blocked, false)
+  assert.equal(guard.snapshot('run-1'), null)
+
+  const disabled = harness({ enabled: false })
+  assert.equal(disabled.call('bash', { command: 'rm -rf /' }).blocked, false)
+  assert.equal(disabled.guard.enabled, false)
+})
+
+test('an invalid custom pattern is ignored instead of breaking the guard', () => {
+  const warnings = []
+  const guard = createGuard({ ...BASE, warn: message => warnings.push(message), config: { denyCommands: [{ id: 'bad', pattern: '(' }] } })
+  guard.bindChild('child-1', { runId: 'run-1' })
+  const verdict = guard.checkToolCall({ name: 'bash', arguments: { command: 'npm test' }, agent: { id: 'child-1' } })
+  assert.equal(verdict.blocked, false)
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /invalid cmd\/custom pattern/)
+})
+
+/**
+ * Mount the plugin with a fake host that has a `tools.guard` hook, then fire a
+ * worker command through that hook while the run is live.
+ */
+test('a blocked worker call reaches status and the final report', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-guard-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  const tools = new Map()
+  const hooks = []
+  const workerUp = gate()
+  const workerDone = gate()
+  const ctx = {
+    tools: {
+      register: tool => tools.set(tool.name, tool),
+      guard: fn => {
+        hooks.push(fn)
+        return () => {}
+      },
+    },
+    subagents: {
+      async startActivation(spec) {
+        if (spec.label === 'superagent-plan') {
+          return {
+            childId: 'child-plan',
+            result: Promise.resolve({
+              output: [{ type: 'text', text: JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }) }],
+              stopReason: 'completed',
+            }),
+            dispose: async () => {},
+          }
+        }
+        workerUp.open()
+        return {
+          childId: 'child-worker',
+          result: (async () => {
+            await workerDone.opened
+            return { output: [{ type: 'text', text: 'the answer' }], stopReason: 'completed' }
+          })(),
+          dispose: async () => {},
+        }
+      },
+    },
+    get: () => undefined,
+    effect: callback => callback(),
+  }
+
+  try {
+    apply(ctx, { stateDir, notifyOnComplete: false })
+    assert.equal(hooks.length, 1, 'the plugin mounts one tool guard')
+
+    const started = tools.get('superagent_start').execute(
+      { goal: 'guard integration', wait_seconds: 10 },
+      { agent: { id: 'session-1' } },
+    )
+    await workerUp.opened
+    // The plugin binds the child to its run right after `startActivation`
+    // resolves; let that continuation run before firing the host hook.
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    const denied = hooks[0]({
+      name: 'bash',
+      arguments: { command: 'rm -rf /' },
+      agent: { id: 'child-worker', session: { header: { cwd: stateDir } } },
+    })
+    assert.match(denied, /rule cmd\/recursive-force-delete/)
+    assert.match(denied, /did not run/)
+    workerDone.open()
+
+    const rendered = await started
+    assert.match(rendered, /guard: 1 tool call\(s\) blocked/)
+    assert.match(rendered, /cmd\/recursive-force-delete/)
+    const runId = /run (\S+) —/.exec(rendered)?.[1]
+    assert.ok(runId, 'the started result carries the run id')
+
+    const status = await tools.get('superagent_status').execute({ run_id: runId })
+    assert.match(status, /guard: 1 tool call\(s\) blocked/)
+    assert.match(status, /blocked bash/) 
+    assert.match(status, /## Safety guard/)
+    assert.match(status, /1 tool call\(s\) blocked/)
+
+    const run = JSON.parse(await fsp.readFile(path.join(stateDir, 'runs', `${runId}.json`), 'utf8'))
+    assert.equal(run.guard.blocked, 1)
+    assert.equal(run.guard.byRule['cmd/recursive-force-delete'], 1)
+    assert.match(run.report, /## Safety guard/)
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await fsp.rm(stateDir, { recursive: true, force: true })
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+function gate() {
+  let open
+  const opened = new Promise(resolve => {
+    open = resolve
+  })
+  return { opened, open: () => open() }
+}

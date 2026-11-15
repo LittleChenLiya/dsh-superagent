@@ -227,6 +227,7 @@ Row config in `<profile>/cordis.patch.yml`:
 | `memoryDigestEntries` | `12` | Notes injected into a prompt. |
 | `memoryDigestChars` | `1600` | Character budget for the note part of that prompt. |
 | `keepRuns` | `0` | Delete terminal runs older than this many days at mount; `0` keeps everything. |
+| `guard` | on | Worker path and command policy. See [Worker safety guard](#worker-safety-guard) for every default and the reason behind it. |
 | `controlPort` | off | Loopback port for the embedding surface; `0` picks a free one. See [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md). |
 | `workspaceIsolation` | `false` | Give every worker its own git worktree so parallel workers cannot overwrite each other. See [Per-worker workspace isolation](#per-worker-workspace-isolation). |
 | `workspaceRoot` | host cwd | Repository the workers are isolated in when `workspaceIsolation` is on. Must be a git working tree with at least one commit. |
@@ -343,6 +344,66 @@ prompt contract plus a real branch: a worker that ignores the prompt can still
 edit the main checkout, but that shows up in `git status` before any merge and
 cannot damage a sibling's branch. With isolation off, behaviour is exactly what
 it was before this option existed.
+
+### Worker safety guard
+
+Workers inherit the session's filesystem and credentials, so every tool call a
+superagent child makes passes through a guard mounted on the host's
+`tools/pre-execute` path (`ctx.tools.guard` when available). The guard only
+policies children this plugin spawned; the parent session is untouched.
+
+```yaml
+- id: superagent
+  config:
+    guard:
+      enabled: true
+      allowWriteRoots: []        # extra writable roots, absolute or ~-relative
+      denyPaths: []              # extra read+write denials
+      denyCommands: []           # [{ id, pattern, reason }] extra regex denials
+      allowCommands:             # explicit overrides; every use is recorded
+        - id: clean-build
+          pattern: '^rm -rf build$'
+          reason: clean build output
+      maxEvents: 50
+```
+
+Defaults, and why they are set that way:
+
+| Rule | Default | Why |
+| --- | --- | --- |
+| Write roots | The child session's working directory plus the OS temp directory | A worker needs its own workspace and a scratch area. Everything else is outside the job, so it is refused. The state directory is deliberately **not** writable: a worker must not rewrite run records or reports. |
+| Always denied (read and write) | `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.npmrc`, `~/.yarnrc`, `~/.pypirc`, `~/.git-credentials`, `~/.docker/config.json`, `~/.kube/config`, `~/.config/gcloud`, `~/.config/gh/hosts.yml`, `~/.azure`, any `.git/config` and `.git/hooks` | These are credentials or code-execution vectors. A broader workspace never opens them. |
+| System directories | Writable by nobody (`C:\Windows`, `C:\Program Files`, `C:\ProgramData`, `/etc`, `/usr`, `/bin`, `/boot`, `/dev`, `/System`, `/Library`, …), except the OS temp directory | Reading them is normal (`win.ini`, `/etc/hosts`); writing them is not a development task. The temp exception exists because `%TEMP%` can live under `C:\Windows\TEMP` for service accounts, and workers must still be able to write scratch files there. |
+| `cmd/recursive-force-delete` | Denied when the target is `/`, a drive root, `~`, `.`, `..`, `*`, outside the write roots, or contains one | `rm -rf build` and `rm -rf node_modules` are normal; `rm -rf /` and `rm -rf .` are not. Blanket-blocking every `rm -rf` would make ordinary cleanup impossible, so the target decides. |
+| `cmd/disk-format` | `mkfs`, `diskpart`, `wipefs`, `format X:`, `dd of=/dev/sd*` | Never a development action. |
+| `cmd/system-scheduler` | `schtasks /create`, `Register-ScheduledTask`, `crontab -r`, `systemctl enable\|disable\|mask`, `launchctl load` | Persistence outside the workspace. |
+| `cmd/system-registry` | `reg add/delete` on `HKLM`/`HKCR`, and any `\Run` key | Machine-wide or auto-start changes. |
+| `cmd/system-write` | A redirection or write cmdlet whose target is a system directory, including `%SystemRoot%`/`$env:SystemRoot` | Catches writes that hide behind a variable. |
+| `cmd/permission-nuke` | `chmod -R 777 /`, recursive `chown` of `/`, `icacls … /grant Everyone /t` | Destroys the access model of the machine. |
+| `cmd/credential-access` | A shell command that names one of the credential locations above, `id_rsa`, `id_ed25519`, … | A worker reading a key is as harmful as writing one. |
+
+A denial is a real tool error, not a silent failure: the worker receives
+`[guard] blocked <tool>: rule <id> — <reason>. The call did not run.`, and the
+event is added to the run. `superagent_status` prints
+`guard: N tool call(s) blocked; M explicit allow(s) recorded (rule ×count)`
+plus up to three blocked commands, and the finished report gains a
+`## Safety guard` section listing every kept event. Counters cover all events
+even when `maxEvents` stops the list.
+
+`allowCommands` is the only override. It wins over a denial, but every match is
+recorded as `decision: allowed` with the rule it overrode, so an override is
+never invisible. Credential, `.git` control, and system-directory denials are
+not overridable; to permit a legitimate build directory outside the workspace,
+add it to `allowWriteRoots`. The guard is lexical and realpath based, so a
+symlink inside the workspace that points at a denied path is still caught.
+
+The guard is a policy layer over tool arguments, not an OS sandbox. A command
+that delegates the write to a program (`node build.js`, a compiler) can still
+write wherever that program runs; blocking that requires a host-level sandbox,
+which `dsh@0.2.2-rc.1` does not expose. The guard stops direct `write`/`edit`/
+`apply_patch` targets, shell redirections, and the destructive command classes
+above, which covers the accidental `rm` and "write into `C:\Windows`" cases a
+wandering worker actually produces.
 
 ### Spending limits and prices
 
