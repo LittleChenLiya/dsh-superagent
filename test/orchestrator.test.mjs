@@ -731,6 +731,137 @@ test('a real text deliverable is verified and the subtask completes', async () =
   assert.equal(finished.subtasks[0].deliverables[0].status, 'verified')
 })
 
+test('a deliverable is found however its path is written', async () => {
+  const cwd = await workspaceDir()
+  await fsp.mkdir(path.join(cwd, 'docs'), { recursive: true })
+  const target = path.join(cwd, 'docs', 'SMOKE.md')
+  await fsp.writeFile(target, '# Smoke\n\nThe file is there.\n')
+  const variants = [
+    path.join('docs', 'SMOKE.md'),
+    'docs/SMOKE.md',
+    target,
+  ]
+  if (process.platform === 'win32') {
+    // Both spellings are the same file on Windows: separator and case.
+    variants.push('docs\\SMOKE.md', target.toUpperCase())
+  }
+
+  for (const declared of variants) {
+    const { spawnChild } = makeSpawner(async spec => {
+      if (spec.label === 'superagent-plan') {
+        return completed(planWith({ path: declared, kind: 'text' }))
+      }
+      return completed('Wrote the smoke note.')
+    })
+    const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, cwd })
+
+    const run = await orchestrator.start({ goal: 'write a smoke note', parentSessionId: parent.id, parent })
+    const finished = await orchestrator.status(run.id, 10)
+
+    assert.equal(finished.status, 'completed', `declared as ${declared}`)
+    assert.equal(finished.subtasks[0].deliverables[0].status, 'verified', `declared as ${declared}`)
+  }
+})
+
+test('a deliverable that lands during the grace window is verified, not missing', async () => {
+  const cwd = await workspaceDir()
+  const target = path.join(cwd, 'late.md')
+  const delays = []
+  let landed = false
+  // The stat runs first and fails; the write lands on the re-check sleep, the
+  // shape of a worker whose file was not yet visible to this process.
+  const sleep = async ms => {
+    delays.push(ms)
+    if (ms <= 200 && !landed) {
+      landed = true
+      await fsp.writeFile(target, '# Late\n\nVisible a moment later.\n')
+      return
+    }
+    // Real timers keep other waits yielding, so an injected sleep cannot starve
+    // the run's own file I/O.
+    await new Promise(resolve => setTimeout(resolve, Math.min(ms, 5)))
+  }
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(planWith({ path: 'late.md', kind: 'text' }))
+    }
+    return completed('Wrote late.md.')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, cwd, sleep })
+
+  const run = await orchestrator.start({ goal: 'write a note', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.ok(delays.some(ms => ms <= 200), 'the check must re-read before calling the file missing')
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.subtasks[0].deliverables[0].status, 'verified')
+})
+
+test('a deliverable that never appears is still missing after the grace window', async () => {
+  const cwd = await workspaceDir()
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(planWith({ path: 'absent.md', kind: 'text' }))
+    }
+    return completed('I wrote absent.md.')
+  })
+  // A real but tiny timer keeps the window short; a synchronous no-op would
+  // starve the run's own I/O instead of exercising the re-checks.
+  const { orchestrator } = orchestratorWith({
+    spawner: { spawnChild },
+    cwd,
+    sleep: async ms => {
+      await new Promise(resolve => setTimeout(resolve, Math.min(ms, 2)))
+    },
+  })
+
+  const run = await orchestrator.start({ goal: 'write a note', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.subtasks[0].status, 'failed')
+  assert.equal(finished.subtasks[0].deliverableCheck.failed, 1)
+  assert.equal(finished.subtasks[0].deliverables[0].code, 'missing')
+  assert.match(finished.subtasks[0].error ?? '', /is missing/)
+})
+
+test('a goal-mode deliverable is checked in the goal directory, not the host directory', async () => {
+  const hostCwd = await workspaceDir()
+  const goalCwd = await workspaceDir()
+  await fsp.mkdir(path.join(goalCwd, 'docs'), { recursive: true })
+  await fsp.writeFile(path.join(goalCwd, 'docs', 'SMOKE-LONGGOAL.md'), '# Smoke\n\n18 bytes-ish.\n')
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(planWith({ path: 'docs/SMOKE-LONGGOAL.md', kind: 'text' }))
+    }
+    return completed('Wrote the smoke note.')
+  })
+  // The host directory and the goal workspace differ, which is the shape the
+  // long-goal phase hit: the worker wrote into the goal workspace while the
+  // check read the host's launch directory.
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, cwd: hostCwd })
+
+  const run = await orchestrator.start({
+    goal: 'write the smoke note',
+    parentSessionId: parent.id,
+    parent,
+    goalMode: {
+      cwd: goalCwd,
+      maxRounds: 1,
+      acceptance: [{ text: 'the smoke note exists', check: { type: 'file', path: 'docs/SMOKE-LONGGOAL.md' } }],
+    },
+  })
+  const finished = await orchestrator.status(run.id, 15)
+
+  // Nothing was written under the host directory, so "verified" can only come
+  // from resolving the declaration against the goal workspace.
+  await assert.rejects(fsp.stat(path.join(hostCwd, 'docs', 'SMOKE-LONGGOAL.md')))
+  assert.equal(finished.subtasks[0].deliverables[0].status, 'verified')
+  assert.equal(finished.subtasks[0].deliverableCheck.verified, 1)
+  assert.equal(finished.status, 'completed')
+})
+
+
 test('a subtask that declares no deliverable still completes without writing files', async () => {
   const cwd = await workspaceDir()
   const { spawnChild } = makeSpawner(async spec => {
