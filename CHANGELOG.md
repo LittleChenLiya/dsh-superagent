@@ -8,6 +8,23 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## Unreleased
+
+### Added
+
+- **Worker safety guard.** Child tool calls are now checked on the host's
+  `tools/pre-execute` / `ctx.tools.guard` pipeline. Writes are limited to the
+  child's workspace and the OS temp directory; credential stores and
+  `.git/config` / `.git/hooks` are refused for reading and writing; system
+  directories are refused for writing. Default command rules block disk
+  formatting, system scheduler and registry changes, writes into system
+  directories, destructive recursive deletes whose target is `/`, `~`, `.`,
+  `..`, a wildcard, or outside the workspace, permission nukes, and commands
+  that name a credential store. `guard.allowCommands` is an explicit,
+  audited override. Blocked calls surface in `superagent_status` and in a
+  `## Safety guard` report section. See “Worker safety guard” in the README
+  for the full defaults and their rationale.
+
 ## 0.10.0 — 2026-11-15
 
 The dispatch, progress, delivery, and memory layer. No runtime dependencies were
