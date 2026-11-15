@@ -210,6 +210,12 @@ test('notes written by one run reach the next plan and can be corrected', async 
     const notes = await tools.get('superagent_memory').execute({ action: 'list' }, owner)
     assert.match(notes, /deploy-target/)
 
+    const found = await tools.get('superagent_memory').execute({ action: 'search', query: 'release gate' }, owner)
+    assert.match(found, /1 of 1 note\(s\)/)
+    assert.match(found, /deploy-target \[decision\] score \d\.\d\d/)
+    const nothing = await tools.get('superagent_memory').execute({ action: 'search', query: 'css grid' }, owner)
+    assert.match(nothing, /no note .* matches/)
+
     const second = await tools.get('superagent_start').execute({ goal: 'second goal', wait_seconds: 10 }, owner)
     assert.match(second, /— completed/)
     const plans = prompts.filter(item => item.label === 'superagent-plan')
