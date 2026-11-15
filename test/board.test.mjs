@@ -406,6 +406,28 @@ test('cancel, rerun, review, resume and template start all go through the host',
   assert.equal(start.json.data.runId, 'run-4')
 })
 
+test('rerunning a subtask while the run is still working answers 409 with a sentence', async t => {
+  const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-board-'))
+  const host = {
+    capabilities: () => ({ start: true, answer: true, reason: null }),
+    templates: async () => templateList(),
+    listRuns: async () => [activeRun()],
+    readRun: async id => (id === 'run-2' ? activeRun() : null),
+    rerunSubtask: async () => {
+      throw new Error('run run-2 is still active; wait for it to finish or stop the subtask first')
+    },
+    auditFor: async () => [],
+  }
+  const panel = createBoard({ port: 0, stateRoot: base, host, version: 'test', log: () => {} })
+  await panel.start()
+  t.after(() => panel.stop())
+
+  const rerun = await request(panel, 'POST', '/api/board/runs/run-2/subtasks/w2/rerun', { body: {} })
+  assert.equal(rerun.status, 409)
+  assert.equal(rerun.json.error.id, 'run-active')
+  assert.match(rerun.json.error.summary, /还在进行/)
+})
+
 test('extra inbox items are shown with a Chinese why and impact', async t => {
   const extras = [
     {
@@ -459,6 +481,19 @@ test('the event stream opens with a full snapshot, so a reconnect restores the b
   assert.ok(frames[0].seq > 0)
 })
 
+test('the event stream accepts the token in the query string, since EventSource cannot send headers', async t => {
+  const { panel } = await startBoard()
+  t.after(() => panel.stop())
+  const ok = await fetch(`${panel.url}/api/board/events?token=${encodeURIComponent(panel.token)}`)
+  assert.equal(ok.status, 200)
+  const frames = await collectFrames(ok, { count: 1 })
+  assert.equal(frames[0].type, 'snapshot')
+  const wrong = await fetch(`${panel.url}/api/board/events?token=nope`)
+  assert.equal(wrong.status, 401)
+  const stateWithoutQuery = await fetch(`${panel.url}/api/board/state?token=${encodeURIComponent(panel.token)}`)
+  assert.equal(stateWithoutQuery.status, 401, '只有事件流允许把口令放在地址里')
+})
+
 test('every known failure has a plain Chinese title and an action', () => {
   const cases = [
     ['missing capability', { status: 'blocked', missingCapabilities: ['browser'] }, 'capability-missing'],
@@ -467,8 +502,10 @@ test('every known failure has a plain Chinese title and an action', () => {
     ['write denied', { status: 'failed', error: 'sandbox: EACCES write denied' }, 'sandbox-write'],
     ['spawn EPERM', { status: 'failed', error: 'spawn EPERM' }, 'spawn-eperm'],
     ['endpoint down', { status: 'failed', error: 'ECONNREFUSED 127.0.0.1:8080' }, 'model-unavailable'],
+    ['child stopped without a result', { status: 'failed', error: 'child stopped with reason "error"' }, 'model-unavailable'],
     ['budget', { status: 'failed', error: 'deadline reached: 60 minutes' }, 'budget-or-timeout'],
     ['owner gone', { status: 'failed', error: 'the owning session s1 is not live' }, 'schedule-owner-gone'],
+    ['host stopped mid-run', { status: 'interrupted', error: 'host process stopped while the run was active' }, 'interrupted'],
   ]
   for (const [label, subtask, code] of cases) {
     const explanation = explainFailure({ id: 'r1' }, { key: 'w1', title: label, ...subtask })
