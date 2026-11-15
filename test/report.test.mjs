@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { applyCost } from '../lib/cost.js'
 import { assignLanes, buildReport, escapeHtml, phasesOf, prepare, retryChainsOf, workerShares } from '../lib/report.js'
 
 function run(overrides = {}) {
@@ -136,6 +137,55 @@ test('lanes are the peak concurrency: overlapping runs never share one', () => {
   const third = items.find(item => item.id === '20261114T080100-cccc')
   assert.notEqual(first.lane, second.lane)
   assert.equal(first.lane, third.lane, 'a lane is reused once the earlier run has ended')
+})
+
+test('subtask spend is shown per subtask, and an unpriced one is named', () => {
+  const withSubtasks = run({
+    usage: {
+      modelCalls: 2,
+      totalTokens: 1_010_000,
+      inputTokens: 1_000_000,
+      outputTokens: 10_000,
+      models: {
+        'dashscope/qwen-flash': { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, calls: 1 },
+        'mystery/model': { inputTokens: 0, outputTokens: 10_000, cacheReadTokens: 0, calls: 1 },
+      },
+    },
+    subtasks: [
+      {
+        index: 1,
+        title: 'worker A',
+        status: 'completed',
+        startedAt: '2026-11-14T08:00:08.000Z',
+        finishedAt: '2026-11-14T08:00:20.000Z',
+        usage: {
+          modelCalls: 1,
+          models: { 'dashscope/qwen-flash': { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, calls: 1 } },
+        },
+      },
+      {
+        index: 2,
+        title: 'worker B',
+        status: 'completed',
+        startedAt: '2026-11-14T08:00:10.000Z',
+        finishedAt: '2026-11-14T08:00:26.000Z',
+        usage: {
+          modelCalls: 1,
+          models: { 'mystery/model': { inputTokens: 0, outputTokens: 10_000, cacheReadTokens: 0, calls: 1 } },
+        },
+      },
+    ],
+  })
+  applyCost(withSubtasks, {
+    'dashscope/qwen-flash': { input: 0.15, output: 1.5, cacheRead: 0.03, currency: 'CNY' },
+  })
+  const html = buildReport([withSubtasks], { now: NOW, generatedAt: NOW })
+
+  assert.match(html, /id="subtasks"/)
+  assert.match(html, /worker A/)
+  assert.match(html, /worker B/)
+  assert.match(html, /¥0\.1500/, 'the priced worker shows its own amount')
+  assert.match(html, /unpriced/, 'the unpriced worker is named, not shown as zero')
 })
 
 test('an empty store still produces a valid, readable page', () => {
