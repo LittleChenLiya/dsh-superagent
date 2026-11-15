@@ -8,6 +8,34 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## Unreleased
+
+### Added
+
+- **Task board.** `boardPort` serves one Chinese page where a run is a column
+  of subtask cards (status, steps, elapsed time, tokens, cost, dependencies,
+  and the dependency that skipped it). Cards can be cancelled or rerun one at a
+  time: `cancelSubtask` aborts only that child and the rest of the run
+  continues; `rerunSubtask` resets that subtask and any dependents skipped only
+  because of it, then resumes without touching completed siblings. A run whose
+  remaining work was all cancelled now ends as `cancelled`.
+- **Human inbox.** Planner `needsInput`, deliverable reviews, missing
+  capabilities, policy confirmations, browser checks that need a person, and
+  interrupted runs are collected in one list with what happened, why a person
+  is needed, the options, and the effect of answering. Answers use the same
+  `orchestrator.answer` path as `superagent_answer`, with the run owner as the
+  actor and an audit line naming the answer. An empty inbox says so.
+- **Plain-language failures.** `lib/board-messages.js` maps capability blocks,
+  unusable plans, missing deliverables, sandbox writes, `spawn EPERM`,
+  unavailable models, budget/deadline exhaustion, and a dead scheduler owner to
+  one Chinese sentence plus one action; the raw error is folded away.
+- **Template forms.** The four built-in templates show their purpose,
+  parameters, and expected subtask count; submitting starts a run from the
+  board's own persisted Host Session and jumps to its board.
+- **Reconnect-safe stream.** `/api/board/events` opens with a full snapshot and
+  polls durable run records, so a refresh or a dropped connection restores the
+  board instead of leaving it blank.
+
 ## 0.14.0 — 2026-11-15
 
 ### Added
