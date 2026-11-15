@@ -442,6 +442,63 @@ test('a planner that never returns is stopped instead of burning the run budget'
   assert.ok(disposed >= 1)
 })
 
+test('a planner that spends its call budget is stopped and reported as unplannable', async () => {
+  let disposed = 0
+  let reads = 0
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') return new Promise(() => {})
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner: {
+      spawnChild: async spec => {
+        const handle = await spawnChild(spec)
+        return { ...handle, dispose: async () => { disposed++; await handle.dispose() } }
+      },
+    },
+    readUsage: async () => {
+      reads++
+      return { inputTokens: 30, outputTokens: 10, totalTokens: 40, modelCalls: 5 + reads }
+    },
+    config: { plannerMaxModelCalls: 4 },
+  })
+
+  const run = await orchestrator.start({ goal: 'loop forever', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 30)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.plan.mode, 'invalid')
+  assert.match(finished.plan.invalidReason ?? '', /model-call budget/)
+  assert.match(finished.error ?? '', /model-call budget/)
+  assert.equal(finished.subtasks.length, 0)
+  // The first attempt exhausts the shared budget, so no repair round is started.
+  assert.equal(finished.steps.planner.attempts.length, 1)
+  assert.equal(finished.steps.planner.attempts[0].outcome, 'planner-budget')
+  assert.ok(disposed >= 1)
+})
+
+test('each planner attempt records its elapsed time, calls, and tokens', async () => {
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    }
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild } })
+
+  const run = await orchestrator.start({ goal: 'record planner cost', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  const [attempt] = finished.steps.planner.attempts
+  assert.equal(attempt.attempt, 1)
+  assert.equal(attempt.outcome, 'planned')
+  assert.equal(attempt.modelCalls, 1)
+  assert.equal(attempt.tokens, 12)
+  assert.equal(typeof attempt.ms, 'number')
+  assert.ok(attempt.ms >= 0)
+})
+
 test('a plan wrapped in an envelope is not mistaken for an unusable reply', async () => {
   const { spawnChild, calls } = makeSpawner(async spec => {
     if (spec.label === 'superagent-plan') {
