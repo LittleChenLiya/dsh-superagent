@@ -206,6 +206,11 @@ Row config in `<profile>/cordis.patch.yml`:
 | `childProvider` | parent's | Optional provider route override for child agents. |
 | `childModel` | parent's | Optional model override for child agents. |
 | `childPreset` | none | Agent preset for child agents. A preset owns the child's tool set; this host has no per-run tool filter. |
+| `plannerPreset` | none | Agent preset for the planner child only. Use a tool-less preset: a planner only reads its prompt and returns JSON, and inherited tools invite a tool loop instead of a plan. Requires the host to compose an `agentPresets` registry. |
+| `plannerProvider` | parent's | Optional provider route override for the planner child. |
+| `plannerModel` | parent's | Optional model override for the planner child. Planning is a single JSON turn, so a stronger model here is usually cheaper than fixing plans after workers ran. |
+| `plannerTimeoutSeconds` | `120` | Wall-clock bound per planner attempt. On expiry the attempt is stopped and recorded; no fallback worker is started. |
+| `plannerMaxModelCalls` | `20` | Model calls the planning phase may spend across attempts; `0` disables. Once spent, the run fails as unplannable instead of draining the run budget. |
 | `maxSubagentDepth` | `1` | How deep children may delegate. `1` forbids grandchildren; `provider-managed` leaves it to the backend. |
 | `commandWorkerPermission` | `inherit` | Sandbox mode for workers whose plan entry declares a command capability (`shell`, `bash`, `pwsh`, …). `danger-full-access` lets those workers actually run commands on a `workspace-write` host; every other child keeps inheritance. See [Per-worker command permissions](#per-worker-command-permissions). |
 | `maxSubtasks` | `8` | Cap on planned subtasks. A tool argument can only lower it, never raise it; hard max 16. |
