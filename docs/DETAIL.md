@@ -1,3 +1,5 @@
+[中文](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/DETAIL.zh.md) | English
+
 # Superagent
 
 Long-horizon autonomous runs: give it one goal and it plans parallel subtasks, runs them in workers, and merges the outcome into one report. A restart does not throw the work away.

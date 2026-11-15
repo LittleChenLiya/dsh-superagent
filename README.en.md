@@ -27,7 +27,7 @@ filesystem; this is not a sandbox.
 in the environment:
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.1
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.2
 ```
 
 Then ask the session for a run — a real call, not a sketch:
@@ -80,7 +80,7 @@ your `PATH`, use `npx @deepseek-ai/dsh@0.2.2-rc.1` instead.
 
 ```bash
 # 1. install the plugin into a profile (web, headless, ... whatever you run)
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.1
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.2
 
 # 2. confirm the bundle row exists in the merged config
 dsh --profile web --dump-config
@@ -101,8 +101,8 @@ The desktop app's **Add plugin** dialog accepts the same three forms:
 
 | Dialog input | Value | What it does |
 | --- | --- | --- |
-| Package name | `@xiangyixie/dsh-superagent@0.14.1` | Installs from npm. Name the version (see below). |
-| GitHub repository | `https://github.com/LittleChenLiya/dsh-superagent` | Installs from the repository. Add `#v0.14.1` if you need a fixed release. |
+| Package name | `@xiangyixie/dsh-superagent@0.14.2` | Installs from npm. Name the version (see below). |
+| GitHub repository | `https://github.com/LittleChenLiya/dsh-superagent` | Installs from the repository. Add `#v0.14.2` if you need a fixed release. |
 | Local directory | `file:/absolute/path/to/dsh-superagent` | Copies the checkout. Re-add after changing the source. |
 
 Upgrading is remove-then-add, not in-place: remove the old copy
@@ -1683,7 +1683,7 @@ appears to "hang" until the ignored-abort child returns.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.1` and read the host log for `[dsh-superagent]` lines. |
+| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.2` and read the host log for `[dsh-superagent]` lines. |
 | `Cannot find module .../lib/control.js` (or `watch.js` / `report.js`) and the plugin never activates | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. The published package is not the cause: every version ships all thirty `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |

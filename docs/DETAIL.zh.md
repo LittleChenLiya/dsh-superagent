@@ -1,3 +1,5 @@
+中文 | [English](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/DETAIL.md)
+
 # 超级智能体
 
 长周期自主执行插件：给出一个目标，它把目标拆成可并行的子任务，交给 worker 执行，最后合并成一份报告。进程重启后仍能从断点继续，不必从头再来。

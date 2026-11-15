@@ -8,6 +8,15 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.14.2 — 2026-11-15
+
+### Fixed
+
+- **The detail page carries the language switch.** `docs/DETAIL.zh.md` and
+  `docs/DETAIL.md` now open with `中文 | English`, pointing at the other
+  document on GitHub. The plugin detail page previously rendered a Chinese body
+  with no way to reach the English one, even though both READMEs had the switch.
+
 ## 0.14.1 — 2026-11-15
 
 ### Added
