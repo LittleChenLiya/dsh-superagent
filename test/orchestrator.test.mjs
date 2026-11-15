@@ -11,6 +11,7 @@ import {
   dedupeKeyOf,
   extractAttentionBlock,
   extractPlan,
+  linkSubtasks,
   normalizeGoal,
 } from '../lib/orchestrator.js'
 import { createMemory } from '../lib/memory.js'
@@ -171,6 +172,195 @@ test('plan is decomposed and subtasks run in parallel within the limit', async (
   assert.equal(finished.report, 'result for superagent-aggregate')
   assert.equal((await store.read(run.id)).status, 'completed')
 })
+
+test('a subtask waits for the subtask it depends on', async () => {
+  const events = []
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [
+          { id: 'w1', title: 'collect', prompt: 'collect the data' },
+          { id: 'w2', title: 'analyse', prompt: 'analyse the data', dependsOn: ['w1'] },
+        ],
+      }))
+    }
+    events.push(`${spec.label}:start`)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    events.push(`${spec.label}:end`)
+    return completed(`report from ${spec.label}`)
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild } })
+
+  const run = await orchestrator.start({ goal: 'serial pair', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.ok(events.indexOf('superagent-1:end') < events.indexOf('superagent-2:start'), events.join(' '))
+  assert.deepEqual(finished.subtasks.map(subtask => subtask.key), ['w1', 'w2'])
+  assert.deepEqual(finished.subtasks[1].dependsOn, ['w1'])
+  // The dependent worker gets the finished report it was told to build on.
+  const second = calls.find(call => call.label === 'superagent-2')
+  assert.match(second.prompt, /report from superagent-1/)
+})
+
+test('a diamond dependency waits for every predecessor and still parallelises the middle', async () => {
+  const events = []
+  let middleRunning = 0
+  let middlePeak = 0
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [
+          { id: 'w1', title: 'root', prompt: 'root work' },
+          { id: 'w2', title: 'left', prompt: 'left work', dependsOn: ['w1'] },
+          { id: 'w3', title: 'right', prompt: 'right work', dependsOn: ['w1'] },
+          { id: 'w4', title: 'join', prompt: 'join work', dependsOn: ['w2', 'w3'] },
+        ],
+      }))
+    }
+    events.push(`${spec.label}:start`)
+    if (spec.label === 'superagent-2' || spec.label === 'superagent-3') {
+      middleRunning++
+      middlePeak = Math.max(middlePeak, middleRunning)
+    }
+    await new Promise(resolve => setTimeout(resolve, 20))
+    if (spec.label === 'superagent-2' || spec.label === 'superagent-3') middleRunning--
+    events.push(`${spec.label}:end`)
+    return completed(`report from ${spec.label}`)
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, config: { maxParallel: 3 } })
+
+  const run = await orchestrator.start({ goal: 'diamond', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(middlePeak, 2, 'the two middle subtasks must overlap')
+  assert.ok(events.indexOf('superagent-1:end') < events.indexOf('superagent-2:start'), events.join(' '))
+  assert.ok(events.indexOf('superagent-1:end') < events.indexOf('superagent-3:start'), events.join(' '))
+  assert.ok(events.indexOf('superagent-2:end') < events.indexOf('superagent-4:start'), events.join(' '))
+  assert.ok(events.indexOf('superagent-3:end') < events.indexOf('superagent-4:start'), events.join(' '))
+})
+
+test('a dependency cycle rejects the plan and names the tasks involved', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [
+          { id: 'w1', title: 'A', prompt: 'do A', dependsOn: ['w2'] },
+          { id: 'w2', title: 'B', prompt: 'do B', dependsOn: ['w1'] },
+        ],
+      }))
+    }
+    return completed('should never run')
+  })
+  const { orchestrator, store } = orchestratorWith({ spawner: { spawnChild } })
+
+  const run = await orchestrator.start({ goal: 'cyclic plan', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.match(finished.error, /dependency cycle/)
+  assert.match(finished.error, /w1/)
+  assert.match(finished.error, /w2/)
+  assert.equal(calls.filter(call => call.label !== 'superagent-plan' && call.label !== 'superagent-aggregate').length, 0)
+  assert.equal((await store.read(run.id)).status, 'failed')
+})
+
+test('a subtask whose dependency failed is skipped, not reported as done', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [
+          { id: 'w1', title: 'first', prompt: 'do first' },
+          { id: 'w2', title: 'broken', prompt: 'do broken', dependsOn: ['w1'] },
+          { id: 'w3', title: 'after broken', prompt: 'do after', dependsOn: ['w2'] },
+          { id: 'w4', title: 'independent', prompt: 'do independent work' },
+        ],
+      }))
+    }
+    if (spec.label === 'superagent-2') return failed('refusal')
+    return completed(`ok ${spec.label}`)
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, config: { maxParallel: 2 } })
+
+  const run = await orchestrator.start({ goal: 'propagate failure', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'partial')
+  assert.equal(finished.subtasks[1].status, 'failed')
+  assert.equal(finished.subtasks[2].status, 'skipped')
+  assert.match(finished.subtasks[2].skippedReason, /w2/)
+  assert.equal(finished.subtasks[3].status, 'completed')
+  assert.equal(calls.filter(call => call.label === 'superagent-3').length, 0)
+  assert.equal(calls.filter(call => call.label === 'superagent-4').length, 1)
+  // The aggregator must be told what never arrived, so the report can say so.
+  const aggregate = calls.find(call => call.label === 'superagent-aggregate')
+  assert.match(aggregate.prompt, /Subtasks that delivered no report/)
+  assert.match(aggregate.prompt, /after broken: skipped/)
+})
+
+test('a dependency on a subtask the plan never declared is skipped with the reason', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [
+          { id: 'w1', title: 'A', prompt: 'do A', dependsOn: ['w9'] },
+          { id: 'w2', title: 'B', prompt: 'do B' },
+        ],
+      }))
+    }
+    return completed(`ok ${spec.label}`)
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild } })
+
+  const run = await orchestrator.start({ goal: 'missing dependency', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.subtasks[0].status, 'skipped')
+  assert.match(finished.subtasks[0].skippedReason, /unknown subtask "w9"/)
+  assert.equal(finished.subtasks[1].status, 'completed')
+  assert.equal(calls.filter(call => call.label === 'superagent-1').length, 0)
+  assert.equal(finished.status, 'partial')
+})
+
+test('a subtask held back by a dependency is reported as waiting, not running', async () => {
+  const started = gate()
+  const release = gate()
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [
+          { id: 'w1', title: 'slow', prompt: 'do slow work' },
+          { id: 'w2', title: 'after', prompt: 'do later work', dependsOn: ['w1'] },
+        ],
+      }))
+    }
+    if (spec.label === 'superagent-1') {
+      started.open()
+      await release.opened
+      return completed('slow done')
+    }
+    return completed('later done')
+  })
+  const { orchestrator, store } = orchestratorWith({ spawner: { spawnChild } })
+
+  const run = await orchestrator.start({ goal: 'observe waiting', parentSessionId: parent.id, parent })
+  await started.opened
+  let live = await store.read(run.id)
+  for (let attempt = 0; attempt < 40 && live?.subtasks?.[1]?.status !== 'waiting'; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+    live = await store.read(run.id)
+  }
+
+  assert.equal(live.subtasks[0].status, 'running')
+  assert.equal(live.subtasks[1].status, 'waiting')
+  assert.deepEqual(live.subtasks[1].waitingOn, ['w1'])
+
+  release.open()
+  const finished = await orchestrator.status(run.id, 10)
+  assert.equal(finished.status, 'completed')
+})
+
 
 test('a subtask that keeps failing produces a partial run after retries', async () => {
   const { spawnChild, calls } = makeSpawner(async spec => {
@@ -610,6 +800,36 @@ test('planner JSON extraction tolerates fences and prose', () => {
   assert.deepEqual(plan, [{ title: 'T', prompt: 'P' }])
   assert.deepEqual(extractPlan('no json here'), [])
   assert.deepEqual(extractPlan('{"subtasks":[]}'), [])
+})
+
+test('planner JSON extraction keeps declared ids and dependencies', () => {
+  const plan = extractPlan(JSON.stringify({
+    subtasks: [
+      { id: 'w1', title: 'T', prompt: 'P' },
+      { id: 'w2', title: 'U', prompt: 'Q', dependsOn: ['w1', 'w1'] },
+    ],
+  }))
+  assert.deepEqual(plan, [
+    { title: 'T', prompt: 'P', id: 'w1' },
+    { title: 'U', prompt: 'Q', id: 'w2', dependsOn: ['w1'] },
+  ])
+})
+
+test('linkSubtasks resolves dependencies by id or title and reports cycles', () => {
+  const entries = [
+    { key: 'w1', title: 'Collect', dependsOn: [] },
+    { key: 'w2', title: 'Write', dependsOn: ['w1', 'Collect', 'w9'] },
+  ]
+  const linked = linkSubtasks(entries)
+  assert.deepEqual(linked.edges.get('w2'), ['w1'])
+  assert.deepEqual(linked.unknown.get('w2'), ['w9'])
+  assert.equal(linked.cycle, null)
+
+  const cyclic = linkSubtasks([
+    { key: 'w1', title: 'A', dependsOn: ['w2'] },
+    { key: 'w2', title: 'B', dependsOn: ['w1'] },
+  ])
+  assert.deepEqual(cyclic.cycle, ['w1', 'w2', 'w1'])
 })
 
 test('capText trims to a byte budget and says so', () => {
