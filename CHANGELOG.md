@@ -75,15 +75,17 @@ added, and the package still ships one file per module from `lib/`.
 
 ### Changed
 
-- **Resume is session-scoped and counts against the concurrency quota.** A
-  `superagent_resume` may only be issued by the session named in the run's
-  `parentSessionId`. It counts against `maxActiveRuns` like a start, so a loop of
-  resumes cannot walk past the cap; a person can still override the quota
-  explicitly with `force: true` (`force` or `override_quota` on the HTTP body).
-  This replaces the earlier idea of an unconditional human bypass.
+- **A resume is never refused by the concurrency quota.** A `superagent_resume`
+  only finishes work that already exists, so it is not counted against
+  `maxActiveRuns` and works even when the cap is full; only `superagent_start`
+  creates new spend and is subject to the cap. The resume is still
+  session-scoped: it may only be issued by the session named in the run's
+  `parentSessionId`. `force` (`force` or `override_quota` over HTTP) is still
+  accepted so an existing caller keeps working, but it no longer changes
+  anything.
 - `superagent_status` gained the milestone line, the attention line, and the
   report file path; `superagent_start` gained `allow_duplicate`; the control
-  `start` body gained `allow_duplicate`, and `resume` gained `force`.
+  `start` body gained `allow_duplicate`, and `resume` still accepts `force`.
 
 ### Fixed
 

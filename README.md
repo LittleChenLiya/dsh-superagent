@@ -204,7 +204,7 @@ Row config in `<profile>/cordis.patch.yml`:
 | `maxSubagentDepth` | `1` | How deep children may delegate. `1` forbids grandchildren; `provider-managed` leaves it to the backend. |
 | `maxSubtasks` | `8` | Cap on planned subtasks. A tool argument can only lower it, never raise it; hard max 16. |
 | `maxParallel` | `3` | Subtasks executing at once. A tool argument can only lower it; hard max 8. |
-| `maxActiveRuns` | `2` | Active runs per state directory, across profiles and hosts that share it; further `superagent_start` calls are rejected. `superagent_resume` counts the same way and is refused when the cap is full; pass `force: true` (or `override_quota: true` over HTTP) to override it explicitly. |
+| `maxActiveRuns` | `2` | Active runs per state directory, across profiles and hosts that share it; further `superagent_start` calls are rejected. `superagent_resume` is not counted and works when the cap is full, because it only finishes work that already exists. |
 | `attempts` | `2` | Attempts per subtask before it is marked failed. A failure that looks transient (quota, rate limit, timeout, 5xx) waits 2s, then 4s, then 8s before the next attempt. |
 | `deadlineMinutes` | `120` | Wall-clock budget; on expiry the run ends `partial` or `failed`. |
 | `maxModelCallsPerRun` | `80` | Hard cap on child model calls per run; `0` disables. |
@@ -335,8 +335,9 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
 - `superagent_resume(run_id, wait_seconds?, force?)` continues an `interrupted`,
   `failed`, `partial`, or `cancelled` run; completed subtasks are kept. Workers
   are told what failed and to check what the earlier attempt already did. Only
-  the session that started the run may resume it. It counts against
-  `maxActiveRuns`; `force: true` overrides a full quota explicitly.
+  the session that started the run may resume it. A resume is not counted
+  against `maxActiveRuns`, so it works when the cap is full; `force` is still
+  accepted but no longer needed.
 - `superagent_memory(action, key?, kind?, text?, scope?, limit?)` lists, adds,
   corrects, or forgets notebook notes. `set` with an existing key supersedes it;
   `forget` retracts it. `scope` addresses `rules` (project rules), `profile`
@@ -532,9 +533,10 @@ run would make the surviving child keep spending while the file says
 Resuming is exclusive for the same reason. `superagent_resume` takes the same
 serial gate as `superagent_start`, claims `<runId>.lock` (created atomically),
 refuses a run that still has a live owner, and refuses a caller that is not the
-session in `parentSessionId`. It counts against `maxActiveRuns`; pass
-`force: true` (tool) or `force` / `override_quota` (HTTP) when the cap is full
-and you deliberately want the run to proceed.
+session in `parentSessionId`. It does not count against `maxActiveRuns`: a
+resume finishes work that already exists, so a full cap never blocks it. `force`
+(tool) or `force` / `override_quota` (HTTP) is still accepted for compatibility
+and changes nothing.
 
 Three side files live next to the run:
 

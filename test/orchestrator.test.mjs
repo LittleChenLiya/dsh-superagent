@@ -469,7 +469,7 @@ test('a run still owned by another live process cannot be resumed here', async (
   release.forEach(resolve => resolve())
 })
 
-test('resume counts against the active-run quota unless force is explicit', async () => {
+test('resume is let through even when the active-run quota is full', async () => {
   const store = memoryStore()
   await store.write(interruptedRun())
   const release = []
@@ -483,13 +483,10 @@ test('resume counts against the active-run quota unless force is explicit', asyn
   const { orchestrator } = orchestratorWith({ store, spawner: { spawnChild }, config: { maxActiveRuns: 1 } })
 
   const active = await orchestrator.start({ goal: 'occupy the quota', parentSessionId: parent.id, parent })
-  // maxActiveRuns is 1 and already used. A resume is not a free pass: a script
-  // or an HTTP loop could otherwise start runs without bound.
-  await assert.rejects(
-    () => orchestrator.resume('20260101T000000-res1', parent),
-    /quota exceeded.*force: true/s,
-  )
-  const resumed = await orchestrator.resume('20260101T000000-res1', parent, null, { force: true })
+  // maxActiveRuns is 1 and already used. A resume only finishes work that
+  // already exists, so a person's resume is never refused; `force` is still
+  // accepted but does not change the outcome either way.
+  const resumed = await orchestrator.resume('20260101T000000-res1', parent, null, { force: false })
   assert.equal(resumed.id, '20260101T000000-res1')
   assert.equal(ACTIVE_STATUSES.has(resumed.status), true)
   await orchestrator.cancel(active.id)
