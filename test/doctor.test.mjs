@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict'
+﻿import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -154,7 +154,7 @@ test('a complete copy passes every blocking check', async t => {
     assert.equal(checkOf(result, id).status, 'pass', `${id}: ${checkOf(result, id).detail.join(' | ')}`)
   }
   assert.equal(result.ok, true)
-  assert.equal(checkOf(result, 'tools').detail[0], '11/11 expected tools are registered')
+  assert.equal(checkOf(result, 'tools').detail[0], '12/12 expected tools are registered')
 })
 
 test('a files whitelist that drops an imported module is caught, with the entry to add', async t => {
@@ -221,9 +221,9 @@ test('a lost tool registration is counted against the expected set', async t => 
   const result = await runDoctor({ packageRoot: root, profile: null, online: false })
   const tools = checkOf(result, 'tools')
   assert.equal(tools.status, 'fail')
-  assert.match(tools.detail[0], /registered 4 of 11 expected tools/)
+  assert.match(tools.detail[0], /registered 4 of 12 expected tools/)
   assert.match(tools.detail.join('\n'), /superagent_resume/)
-  assert.equal(readRegisteredTools(indexSource({ imported: [], tools: TOOL_NAMES })).length, 11)
+  assert.equal(readRegisteredTools(indexSource({ imported: [], tools: TOOL_NAMES })).length, 12)
 })
 
 test('node engine ranges accept the documented cases and reject older ones', () => {

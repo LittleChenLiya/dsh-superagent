@@ -37,10 +37,13 @@ The reply ends `completed` with the merged report, or with
 covers the path from an empty machine, including the reason not to install npm's
 unrelated `dsh` package by name.
 
-It adds no in-host UI (the opt-in workspace panel is a loopback page) and patches
-no host code: the eleven `superagent_*` tools are the surface, plus six optional
-operator utilities (a terminal panel, an HTML report, an install doctor, a run
-archive, git sync, and the workspace panel) that read the same run files.
+It adds no in-host UI (the workspace panel and the conversation console are
+loopback pages) and patches no host code: the twelve `superagent_*` tools are the
+surface, plus six optional operator utilities (a terminal panel, an HTML report,
+an install doctor, a run archive, git sync, and the workspace panel) that read the
+same run files. Browser and desktop control is a separate layer: with
+`runtime.enabled` set, fourteen more tools are registered, and with the default
+`false` none of them exist.
 
 Personal project, not affiliated with DeepSeek or the harness maintainers. MIT
 licensed, © 2026 Admire (LittleChenLiya); details in [License](#license).
@@ -228,6 +231,7 @@ Row config in `<profile>/cordis.patch.yml`:
 | `memoryMaxAgeDays` | `30` | Notes older than this are ignored, then compacted away. |
 | `memoryDigestEntries` | `12` | Notes injected into a prompt. |
 | `memoryDigestChars` | `1600` | Character budget for the note part of that prompt. |
+| `memoryUserProfile` | `false` | Cross-task user profile (facts, preferences, decisions) under `<stateDir>/user-memory`. Off means nothing is constructed and no directory is created. See [User profile](#user-profile). |
 | `keepRuns` | `0` | Delete terminal runs older than this many days at mount; `0` keeps everything. |
 | `guard` | on | Worker path and command policy. See [Worker safety guard](#worker-safety-guard) for every default and the reason behind it. |
 | `audit` | `true` | Append-only audit trail. It only observes; turning it off removes the trail, never the run behaviour. |
@@ -589,7 +593,8 @@ and captures the window.
   independent subtasks still run in parallel. A dependency cycle rejects the
   plan before any work starts, and a dependency on a task the plan never
   declared is skipped with the reason. Both modes produce the same run record,
-  quota, deadline, cancel, and usage accounting.
+  quota, deadline, cancel, and usage accounting. `goal_mode: true` adds an
+  acceptance step and re-plans a failed round; see [Goal mode](#goal-mode).
   `queue: true` makes a start wait for a free slot when `maxActiveRuns` is in use
   instead of failing: it returns `status: "queued"` with `queue.position` /
   `queue.of`, starts automatically when an active run finishes, and fails after
@@ -663,7 +668,7 @@ and captures the window.
   (project rules), `profile` (user preferences), or the run scope. `search`
   ranks notes against `query` (the current goal works well) and/or exact `tags`,
   so a relevant old note is found instead of only the newest ones; notes can
-  carry `tags` when set. The tool is additive: the ten other tools keep their
+  carry `tags` when set. The tool is additive: the eleven other tools keep their
   arguments and output.
 - `superagent_template(action, id?, params?, template?, limit?)` lists, shows,
   expands, saves, or deletes a workflow template: a fixed goal skeleton with
@@ -689,11 +694,49 @@ and captures the window.
   a 4 s step, i.e. the bound tracks the step, not the plugin. With a host that
   exposes no live channel, the tool degrades to the followup queue and says so
   in the reply; it never calls that live.
+- `superagent_schedule(action, id?, name?, goal?, template_id?, params?, cron?,
+  every_minutes?, timezone?, miss_policy?, goal_mode?, acceptance?, max_rounds?,
+  max_wall_clock_minutes?, no_progress_rounds?, budget?, human_priority?)` creates,
+  lists, pauses, resumes, deletes, or runs a scheduled plan now. A plan stores a
+  goal (or an expanded template), a clock, and its own limits; it survives a host
+  restart and starts runs nobody asked for. Nothing is armed until a plan exists.
+  See [Scheduled runs](#scheduled-runs).
 - `superagent_audit(run_id?, subtask_id?, kind?, decision?, result?, target?,
   since?, until?, limit?, order?, format?, out_path?)` reads the audit trail, or
   exports the matching events as one JSONL or CSV file. See
   [Permissions and audit](#permissions-and-audit).
 
+
+## Goal mode
+
+A normal run finishes when its subtasks finish. That is not the same as the goal
+being met, and a plan can report success over a broken build. Goal mode is an
+opt-in (`goal_mode: true` on `superagent_start` or `superagent_schedule`) that
+adds an independent acceptance step and keeps the run going until every
+condition passes or a hard stop says a person has to decide.
+
+- **Acceptance conditions.** `acceptance` is required and is a list of
+  `{id?, text, check?}`. A `check` of `{"type":"command","command":"npm test"}`
+  or `{"type":"file","path":"dist/app.js"}` is run by the plugin itself, so that
+  verdict rests on a real exit code or a real file, never on a model's claim. A
+  condition without a check is judged by a separate acceptance model, and
+  `superagent_status` names the source of every verdict. At most 12 conditions
+  are accepted; a longer list is a badly framed goal, not a checklist.
+- **Rounds.** A failed round does not repeat the same work: the next round's
+  plan receives what failed and why. `max_rounds` (default 5, max 20),
+  `max_wall_clock_minutes` (default 60), and `no_progress_rounds` (default 2)
+  bound it. When the acceptance has a machine check, a round that changed no
+  file stops immediately instead of paying for another one.
+- **Hard stops.** The loop stops with a reason instead of looping forever: the
+  round cap, the wall clock, the run deadline, a budget stop, an open attention
+  item, two identical failing rounds, or a round that cannot make progress.
+  The stop report lists every condition with its last result and what was tried.
+- **Notifications.** One notification when the goal is met or the loop stops —
+  none between rounds. The run record, status line, and report all carry the
+  round count and each condition's verdict.
+
+Goal mode is off by default, adds no tool of its own, and changes nothing about
+a run that does not pass `goal_mode: true`.
 
 ## Scheduled runs
 
@@ -793,6 +836,21 @@ with no plans behaves exactly as it did before this tool existed.
 
 ## Progress, decisions, and artifacts
 
+- **Plan honesty.** Before a worker starts, the planner names what it cannot map
+  to a concrete object: an ambiguous phrase goes into `ambiguities`, and a
+  question only the user can answer goes into `needsInput`, so the run stops and
+  asks instead of inventing a name that looks plausible. Each assumption the
+  planner does make is recorded on that subtask (`assumptions`) and printed in
+  status and in the report, so a guess is visible instead of silent. A plan
+  whose questions arrive together is one decision point, not a drip of prompts.
+- **Capability preflight.** A subtask may declare `requires` (`shell`,
+  `net.http`, `browser`, `gui`, `desktop`, `git`, `gh`). The host compares that
+  list with the tools this session actually has before any worker is spawned.
+  A subtask whose capability is missing is `blocked`, with the capability and
+  what would enable it named; it never starts and is never counted as success,
+  and everything downstream of it is skipped for that reason. When the host
+  cannot list its tools, preflight records `unavailable` and blocks nothing
+  rather than guessing an inventory.
 - **Milestones.** Every run records `plan_ready`, `running`, `aggregating`, and
   `settled` with a timestamp, shown in `superagent_status`. They never produce a
   proactive message; progress stays visible without becoming noisy.
@@ -980,6 +1038,36 @@ itself. A `stateDir` inside the installed package disables memory rather than
 risk shipping it. If you point `stateDir` at a repository, the nested
 `.gitignore` still keeps the files out of a default `git add`.
 
+### User profile
+
+The notebook above answers "what did the last run learn about this task". A
+second, optional store answers a different question — "who is this person, what
+do they want, and why did we choose that before" — and it has to outlive
+unrelated tasks, so it is kept apart and read apart. It is off by default
+(`memoryUserProfile: false`): nothing is constructed, no directory is created,
+and the run notebook behaves exactly as before.
+
+- **Three categories, three files.** `fact` (durable technical context such as
+  the stack or the environment), `preference` (how the user wants work done),
+  and `decision` (the choice, what was rejected, why, and how to undo it).
+  A search opens one category file, so a fact can never come back as a
+  preference just because the words match.
+- **A decision needs its reason.** A decision without a rationale teaches the
+  next run nothing, so the reason is part of the record and part of every digest
+  line; a bare "chose X" is refused.
+- **Reading and writing.** `superagent_memory` with `layer: "user"` and a
+  `category` lists, searches, adds, corrects, or forgets profile records. The
+  planner prompt gets a short digest of the matching records, labelled by
+  category, under the same character budget as the notebook.
+- **Forgetting is deletion.** The matching lines are removed under a lock and the
+  file is replaced, with no tombstone that a later search could leak the value
+  back through. A forget must name a key, a run id, or a time range, so a bare
+  "forget everything" cannot wipe the profile by accident.
+- **Privacy.** Every record is redacted before it is written: credentials,
+  emails, phone numbers, and usernames inside home paths. The profile lives
+  under `<stateDir>/user-memory` with the same nested `.gitignore` as the
+  notebook, and is never in the package `files` whitelist.
+
 ## Watch and report
 
 ![Run report preview](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/report-preview.jpg?raw=true)
@@ -1038,7 +1126,7 @@ records the command plus a zero-external-reference audit.
 does. It reads only: no install, no mount, no edit to the profile. One block per
 check — imported files against the `files` whitelist, declared files against
 what is on disk, the installed copy against the published tarball for its
-version, the profile's bundle registration, and the eleven registered tools — each
+version, the profile's bundle registration, and the twelve registered tools — each
 failure followed by the command that fixes it.
 
 ```bash
@@ -1455,7 +1543,7 @@ appears to "hang" until the ignored-abort child returns.
 | What you see | What it means | What to do |
 | --- | --- | --- |
 | `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.13.0` and read the host log for `[dsh-superagent]` lines. |
-| `Cannot find module .../lib/control.js` (or `watch.js` / `report.js`) and the plugin never activates | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. The published package is not the cause: every version ships all twenty-two `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
+| `Cannot find module .../lib/control.js` (or `watch.js` / `report.js`) and the plugin never activates | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. The published package is not the cause: every version ships all thirty `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |
 | `[error] the subagent service is unavailable` | The profile has no `subagents` service, so the plugin has nothing to spawn. | Use a profile built on the base bundle (`web` or `headless` from the stock image), or add the subagent plugin to the profile. |

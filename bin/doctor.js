@@ -15,7 +15,7 @@ Check that this copy of dsh-superagent can actually run:
   - every file the code imports is shipped by package.json "files" and exists
   - the installed copy matches the version package.json claims
   - the installed files match the published tarball (skipped when offline)
-  - the DSH profile mounts the bundle patch and the eleven tools are registered
+  - the DSH profile mounts the bundle patch and the twelve tools are registered
   - the running Node satisfies "engines"
 
 Nothing is installed or modified; the only network access is one public

@@ -12,6 +12,53 @@ README is updated to the version being released.
 
 ### Added
 
+- **Goal mode.** `superagent_start` accepts `goal_mode: true` with an
+  `acceptance` list, and the run no longer ends when its subtasks do. Each
+  condition is `{id?, text, check?}`; a `command` or `file` check is executed by
+  the plugin, so that verdict rests on a real exit code or a real file, and only
+  an unchecked condition goes to an independent acceptance model. A failed round
+  starts another with what is still missing, bounded by `max_rounds` (5),
+  `max_wall_clock_minutes` (60), and `no_progress_rounds` (2), and stops with a
+  written reason on the round cap, the wall clock, the deadline, a budget stop,
+  an open attention item, or two identical failing rounds. One notification when
+  the loop ends, none between rounds. `lib/goal.js`; off unless asked for, and it
+  adds no tool.
+- **Scheduled runs.** New `superagent_schedule` tool (`create`, `list`, `pause`,
+  `resume`, `delete`, `run-now`) stores a plan — goal or expanded template, cron
+  or fixed interval, time zone, its own budget and concurrency policy — and
+  starts runs with nobody calling `superagent_start`. `lib/cron.js` is a
+  zero-dependency 5-field parser (`*`, `*/n`, ranges, lists, month and weekday
+  names, 0 or 7 for Sunday; seconds, `@`-macros, `L`, `W`, `#`, and `?` are
+  refused by field). Missed windows are not replayed: `latest` runs the newest
+  one and records the rest as missed, `none` skips them. A plan never overlaps
+  itself, one slot stays reserved for manual runs by default, and three
+  consecutive failures pause the plan and say so once. Plans survive a host
+  restart, and an install with no plans behaves exactly as before.
+- **Plan honesty and capability preflight.** The planner now returns
+  `ambiguities` (phrases it cannot map to a concrete object), `needsInput`
+  (questions only the user can answer), per-subtask `assumptions`, and
+  `requires` capability tags. A plan that only raises questions stops the run as
+  one decision point instead of guessing; assumptions are stored on the subtask
+  and printed in status and the report. `preflightCapabilities` compares
+  `requires` with the tools the session actually has before a worker starts: a
+  missing capability blocks that subtask with the capability and the fix named,
+  cascades `skipped` to everything downstream, and is never counted as success.
+  When the host cannot list its tools the preflight records `unavailable` and
+  blocks nothing.
+- **User profile.** Optional cross-task memory (`memoryUserProfile: true`) in
+  `lib/user-memory.js`: three categories (`fact`, `preference`, `decision`) in
+  three files, a decision stored only with its reason, `superagent_memory` with
+  `layer: "user"` reading and writing it, and forgetting as a real deletion
+  under a lock with no tombstone. Everything is redacted before it is written,
+  and nothing is constructed unless the operator turns it on.
+- **Conversation console.** `lib/console.js` and `public/console.html` serve a
+  loopback page (`consolePort`) that talks to a real Host Session through
+  `sessionController` — create, prompt, follow, observe state — so a conversation
+  can be started, followed up, watched while its derived run works, and have its
+  attention questions answered from the page. Server-sent events stream updates;
+  the one-time token is written to `<stateDir>/console.json`. Without
+  `sessionController` the page says it is unavailable instead of drawing a
+  fake conversation.
 - **Runtime control: a real browser and, on Windows, the real desktop.** New
   opt-in layer (`lib/browser.js`, `lib/desktop.js`, `lib/runtime-control.js`)
   that registers `browser_*` and `desktop_*` tools only when
@@ -39,6 +86,16 @@ README is updated to the version being released.
   `scripts/runtime-desktop-demo.mjs` assert against the target's own state (a
   DOM counter, a window's click counter and received characters) rather than
   against the tool's own report.
+
+### Changed
+
+- The default tool set is twelve: `superagent_schedule` joins the existing
+  eleven. `bin/doctor.js` and its test expect twelve, and a profile that never
+  enables runtime control still sees exactly these twelve.
+- `README.md` gained "Goal mode", "Scheduled runs", "Conversation console",
+  "User profile", and the plan-honesty and preflight entries under
+  "Progress, decisions, and artifacts", and its tool table matches the twelve
+  registered tools.
 
 ### Notes
 
