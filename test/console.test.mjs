@@ -432,6 +432,123 @@ test('the event stream keeps the host order: user message, assistant start/chunk
   }
 })
 
+test('a large streamed frame does not close the connection', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    const sessionId = 'session-backpressure'
+    const bigText = 'x'.repeat(200_000)
+    const fake = fakeHost({
+      sessionId,
+      onPrompt: () => [
+        {
+          type: 'session.event',
+          event: {
+            type: 'assistant/message',
+            seq: 2,
+            data: { message: { content: [{ type: 'text', text: bigText }] } },
+          },
+        },
+        { type: 'assistant.frame', frame: { type: 'chunk', chunk: { type: 'text-delta', text: 'after-1' } } },
+        { type: 'assistant.frame', frame: { type: 'chunk', chunk: { type: 'text-delta', text: 'after-2' } } },
+        { type: 'assistant.frame', frame: { type: 'chunk', chunk: { type: 'text-delta', text: 'after-3' } } },
+        { type: 'assistant.frame', frame: { type: 'end' } },
+      ],
+    })
+    panel = await startConsole(state, fake.host)
+    await request(panel, 'POST', '/api/console/session', {})
+    const response = await fetch(`${panel.url}/api/console/events?sessionId=${encodeURIComponent(sessionId)}`, {
+      headers: { authorization: `Bearer ${panel.token}` },
+    })
+    assert.equal(response.status, 200)
+    const collected = collectFrames(response, { count: 6, timeoutMs: 2500 })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal((await request(panel, 'POST', '/api/console/message', { text: 'stream a lot' })).status, 200)
+    const frames = await collected
+
+    // A write that exceeds the socket high-water mark is ordinary backpressure:
+    // the tab must keep receiving the deltas that follow the big frame.
+    const big = frames.find(frame => frame.type === 'session.event')
+    assert.ok(big, `expected the big event, got ${frames.map(frame => frame.type).join(',')}`)
+    assert.equal(big.event.data.message.content[0].text.length, 200_000)
+    const tail = frames.filter(frame => frame.type === 'assistant.frame')
+    assert.equal(tail.length, 4, `the stream stopped after the big frame: ${frames.map(frame => frame.type).join(',')}`)
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('a reconnect after the last tab left reopens the follow stream with the full history', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    const sessionId = 'session-reconnect'
+    const history = {
+      type: 'stream.snapshot',
+      header: { id: sessionId },
+      cursor: 9,
+      records: [{
+        type: 'event',
+        event: {
+          type: 'user/message',
+          seq: 9,
+          time: Date.now(),
+          data: { content: [{ type: 'text', text: 'earlier turn' }], source: { kind: 'user' } },
+        },
+      }],
+    }
+    let subscribes = 0
+    let subscriber = null
+    const host = {
+      capabilities: () => ({ chat: true, reason: null }),
+      createSession: async () => ({ sessionId }),
+      prompt: async () => ({ accepted: true }),
+      listRuns: async () => [],
+      answer: async args => args,
+      subscribe: (_id, listener) => {
+        subscribes += 1
+        subscriber = listener
+        // The real host's later openings can come back with just the session's
+        // setup records; the console must not let that erase the history.
+        listener(subscribes === 1
+          ? history
+          : { type: 'stream.snapshot', header: { id: sessionId }, cursor: 2, records: [], hasMore: false })
+        return () => {
+          subscriber = null
+        }
+      },
+    }
+    panel = await startConsole(state, host)
+    await request(panel, 'POST', '/api/console/session', {})
+
+    const first = await fetch(`${panel.url}/api/console/events?sessionId=${encodeURIComponent(sessionId)}`, {
+      headers: { authorization: `Bearer ${panel.token}` },
+    })
+    const firstFrames = await collectFrames(first, { count: 2, timeoutMs: 1500 })
+    assert.ok(firstFrames.some(frame => frame.type === 'stream.snapshot'))
+    assert.equal(subscribes, 1)
+
+    // Everyone left: the follow loop is released together with its cached window.
+    await first.body.cancel().catch(() => {})
+    await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal(subscriber, null, 'the follow loop must stop once no tab is watching')
+
+    const reopened = await fetch(`${panel.url}/api/console/events?sessionId=${encodeURIComponent(sessionId)}`, {
+      headers: { authorization: `Bearer ${panel.token}` },
+    })
+    const frames = await collectFrames(reopened, { count: 2, timeoutMs: 1500 })
+    assert.equal(frames[0]?.type, 'hello')
+    const snapshot = frames.find(frame => frame.type === 'stream.snapshot')
+    assert.ok(snapshot, `a reconnect must replay history, got ${frames.map(frame => frame.type).join(',')}`)
+    assert.equal(snapshot.records.length, 1)
+    assert.equal(subscribes, 2, 'the reconnect must reopen the follow stream, not replay a stale cache')
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
 test('a second tab receives the cached snapshot instead of an empty conversation', async () => {
   const { base, state } = await fixture()
   let panel = null
@@ -440,20 +557,23 @@ test('a second tab receives the cached snapshot instead of an empty conversation
     const sessionId = 'session-console'
     const fake = fakeHost({
       sessionId,
-      onPrompt: text => [{
-        type: 'stream.snapshot',
-        header: { id: sessionId },
-        cursor: 1,
-        records: [{
-          type: 'event',
-          event: {
-            type: 'user/message',
-            seq: 1,
-            time: Date.now(),
-            data: { content: [{ type: 'text', text }], source: { kind: 'user' } },
-          },
-        }],
-      }],
+      onPrompt: text => [
+        {
+          type: 'stream.snapshot',
+          header: { id: sessionId },
+          cursor: 1,
+          records: [{
+            type: 'event',
+            event: {
+              type: 'user/message',
+              seq: 1,
+              time: Date.now(),
+              data: { content: [{ type: 'text', text }], source: { kind: 'user' } },
+            },
+          }],
+        },
+        { type: 'assistant.frame', frame: { type: 'chunk', chunk: { type: 'text-delta', text: 'partial' } } },
+      ],
     })
     panel = await startConsole(state, fake.host)
     await request(panel, 'POST', '/api/console/session', {})
@@ -470,13 +590,23 @@ test('a second tab receives the cached snapshot instead of an empty conversation
       headers: { authorization: `Bearer ${panel.token}` },
     })
     assert.equal(second.status, 200)
-    const frames = await collectFrames(second, { count: 3, timeoutMs: 1200 })
+    const collected = collectFrames(second, { count: 4, timeoutMs: 1500 })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    // What happens after the second tab is watching must reach it live.
+    fake.emit({
+      type: 'session.event',
+      event: { type: 'tool/call', seq: 2, time: Date.now(), data: { callId: 'call-1', name: 'pwsh', arguments: '{}' } },
+    })
+    const frames = await collected
     assert.equal(frames[0]?.type, 'hello')
-    const replay = frames.find(frame => frame.type === 'stream.snapshot')
-    assert.ok(replay, `the second tab must replay the cached snapshot, got ${JSON.stringify(frames)}`)
-    assert.equal(replay.records.length, 1)
+    const history = frames.find(frame => frame.type === 'stream.snapshot')
+    assert.ok(history, `the second tab must receive the conversation history, got ${JSON.stringify(frames)}`)
+    assert.equal(history.records.length, 1)
+    assert.equal(history.records[0].event.type, 'user/message')
+    const live = frames.find(frame => frame.type === 'session.event')
+    assert.equal(live?.event?.type, 'tool/call')
     for (let index = 1; index < frames.length; index += 1) {
-      assert.ok(frames[index].seq > frames[index - 1].seq, 'replayed frames must keep increasing sequence numbers')
+      assert.ok(frames[index].seq > frames[index - 1].seq, 'frames must keep increasing sequence numbers')
     }
     assert.ok(fake.hasSubscriber(), 'the second tab must not restart the follow loop')
   } finally {

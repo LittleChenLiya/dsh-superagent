@@ -1191,14 +1191,16 @@
         })
         break
       case 'tool/result': {
-        const call = STATE.toolCalls.get(data.callId)
+        // The host carries the call id on the tool message, not on the event.
+        const callId = data.callId || data.message?.toolCallId || data.message?.source?.callId
+        const call = STATE.toolCalls.get(callId)
         if (!call) break
         call.status = data.message?.isError ? 'err' : 'ok'
         call.done = true
         call.result = contentText(data.message?.content).slice(0, 4000)
         const message = call.message
         if (message && message.toolsEl) {
-          const chip = message.toolsEl.querySelector(`[data-call-id="${cssEscape(data.callId || '')}"]`)
+          const chip = message.toolsEl.querySelector(`[data-call-id="${cssEscape(callId || '')}"]`)
           if (chip) chip.replaceWith(toolChip(call))
         }
         break
