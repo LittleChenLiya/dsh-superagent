@@ -1011,3 +1011,179 @@ test('a policy file beside the state refuses a start and leaves a blocked event'
     await fsp.rm(home, { recursive: true, force: true })
   }
 })
+
+/** Read the audit trail until `done(events)` accepts it, or time runs out. */
+async function readAudit(stateDir, done, timeoutMs = 3000) {
+  const file = path.join(stateDir, 'audit', 'audit.jsonl')
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    try {
+      const text = await fsp.readFile(file, 'utf8')
+      const events = text.split('\n').filter(Boolean).map(line => JSON.parse(line))
+      if (done(events)) return events
+    } catch {
+      // The auditor creates the file on its first append.
+    }
+    if (Date.now() > deadline) return []
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+}
+
+/**
+ * A host whose parent session carries one explicit sandbox override, which is
+ * the state the real `startActivation` captures at delegation. `seen` records
+ * the mode visible from inside each synchronous `startActivation` call.
+ */
+function escalationHost({ requires, failWorker = false }) {
+  const events = []
+  const seen = []
+  const session = {
+    append(type, data) {
+      if (type === 'sandbox/mode') events.push({ type, data: { ...data } })
+    },
+  }
+  // The pre-existing explicit override the escalation must restore.
+  session.append('sandbox/mode', { mode: 'workspace-write' })
+  const currentMode = () => events[events.length - 1]?.data.mode
+  const sandboxPolicy = {
+    defaultMode: 'read-only',
+    overrideOf() {
+      return currentMode()
+    },
+  }
+  const answer = text => ({ output: [{ type: 'text', text }], stopReason: 'completed' })
+  const subagents = {
+    startActivation(spec) {
+      seen.push({ label: spec.label, mode: currentMode() })
+      // A synchronous throw is the harshest rollback case: no promise exists yet.
+      if (failWorker && spec.label !== 'superagent-plan') throw new Error('activation refused')
+      const text = spec.label === 'superagent-plan'
+        ? JSON.stringify({
+          subtasks: [{
+            id: 'w1',
+            title: 'Run the tests',
+            prompt: 'run npm test',
+            ...(requires.length > 0 ? { requires } : {}),
+          }],
+        })
+        : 'the answer'
+      return Promise.resolve({
+        childId: `child-${seen.length}`,
+        result: Promise.resolve(answer(text)),
+        dispose: async () => {},
+      })
+    },
+  }
+  const tools = new Map()
+  const ctx = {
+    tools: { register: tool => tools.set(tool.name, tool) },
+    subagents,
+    get(name) {
+      if (name === 'sandboxPolicy') return sandboxPolicy
+      return undefined
+    },
+  }
+  return { ctx, tools, parent: { id: 'session-1', session, ctx }, events, seen }
+}
+
+async function runEscalationCase({ config, requires, failWorker = false }) {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  const host = escalationHost({ requires, failWorker })
+  try {
+    apply(host.ctx, { stateDir, notifyOnComplete: false, attempts: 1, ...config })
+    const started = await host.tools.get('superagent_start').execute(
+      { goal: 'run the test suite', wait_seconds: 10 },
+      { agent: host.parent },
+    )
+    return { stateDir, host, started }
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await fsp.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+}
+
+test('an opt-in command worker gets full access for exactly its activation call', async () => {
+  const { stateDir, host, started } = await runEscalationCase({
+    config: { commandWorkerPermission: 'danger-full-access' },
+    requires: ['shell'],
+  })
+  try {
+    assert.match(started, /— completed/)
+    // Planner and aggregator are not command workers.
+    assert.deepEqual(host.seen.find(item => item.label === 'superagent-plan')?.mode, 'workspace-write')
+    // The child is created with full access visible to the host's capture.
+    assert.deepEqual(host.seen.find(item => item.label === 'superagent-1')?.mode, 'danger-full-access')
+    // Escalate, then restore the parent's own override, in that order.
+    assert.deepEqual(host.events.map(event => event.data.mode), [
+      'workspace-write', 'danger-full-access', 'workspace-write',
+    ])
+
+    const audit = await readAudit(stateDir, events => events.filter(event => event.kind === 'worker.restore').length > 0)
+    const escalate = audit.find(event => event.kind === 'worker.escalate')
+    const restore = audit.find(event => event.kind === 'worker.restore')
+    assert.ok(escalate, 'an escalation is audited')
+    assert.ok(restore, 'the rollback is audited')
+    assert.equal(escalate.runId, restore.runId)
+    assert.equal(escalate.subtaskId, 'subtask-1')
+    assert.equal(restore.subtaskId, 'subtask-1')
+    assert.match(escalate.meta.reason, /shell/)
+    assert.equal(escalate.meta.from, 'workspace-write')
+    assert.equal(escalate.meta.to, 'danger-full-access')
+    assert.equal(restore.meta.to, 'workspace-write')
+  } finally {
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+test('the default permission leaves every child on the host inheritance path', async () => {
+  const { stateDir, host, started } = await runEscalationCase({ config: {}, requires: ['shell'] })
+  try {
+    assert.match(started, /— completed/)
+    assert.deepEqual(host.events.map(event => event.data.mode), ['workspace-write'])
+    assert.deepEqual(host.seen.map(item => item.mode), ['workspace-write', 'workspace-write'])
+    const audit = await readAudit(stateDir, () => true, 300)
+    assert.equal(audit.filter(event => event.kind.startsWith('worker.')).length, 0)
+  } finally {
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+test('a non-command worker stays inherited even when escalation is enabled', async () => {
+  const { stateDir, host, started } = await runEscalationCase({
+    config: { commandWorkerPermission: 'danger-full-access' },
+    requires: ['net.http'],
+  })
+  try {
+    assert.match(started, /— completed/)
+    assert.deepEqual(host.events.map(event => event.data.mode), ['workspace-write'])
+    assert.deepEqual(host.seen.map(item => item.mode), ['workspace-write', 'workspace-write'])
+  } finally {
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+test('a refused activation still restores the parent sandbox mode', async () => {
+  const { stateDir, host, started } = await runEscalationCase({
+    config: { commandWorkerPermission: 'danger-full-access' },
+    requires: ['bash'],
+    failWorker: true,
+  })
+  try {
+    assert.match(started, /— failed/)
+    assert.deepEqual(host.events.map(event => event.data.mode), [
+      'workspace-write', 'danger-full-access', 'workspace-write',
+    ])
+    const audit = await readAudit(stateDir, events => events.filter(event => event.kind === 'worker.restore').length > 0)
+    assert.deepEqual(
+      audit.filter(event => event.kind.startsWith('worker.')).map(event => event.kind),
+      ['worker.escalate', 'worker.restore'],
+    )
+  } finally {
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+

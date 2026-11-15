@@ -207,6 +207,7 @@ Row config in `<profile>/cordis.patch.yml`:
 | `childModel` | parent's | Optional model override for child agents. |
 | `childPreset` | none | Agent preset for child agents. A preset owns the child's tool set; this host has no per-run tool filter. |
 | `maxSubagentDepth` | `1` | How deep children may delegate. `1` forbids grandchildren; `provider-managed` leaves it to the backend. |
+| `commandWorkerPermission` | `inherit` | Sandbox mode for workers whose plan entry declares a command capability (`shell`, `bash`, `pwsh`, …). `danger-full-access` lets those workers actually run commands on a `workspace-write` host; every other child keeps inheritance. See [Per-worker command permissions](#per-worker-command-permissions). |
 | `maxSubtasks` | `8` | Cap on planned subtasks. A tool argument can only lower it, never raise it; hard max 16. |
 | `maxParallel` | `3` | Subtasks executing at once. A tool argument can only lower it; hard max 8. |
 | `maxActiveRuns` | `2` | Active runs per state directory, across profiles and hosts that share it. A further `superagent_start` is rejected unless it passes `queue: true`, in which case it waits for a slot instead. `superagent_resume` is not counted and works when the cap is full, because it only finishes work that already exists. |
@@ -288,6 +289,54 @@ inherit the session's tools. The `superagent_*` tools still exist in their tool
 list, but the run tools (`superagent_start`, `superagent_resume`, `superagent_cancel`,
 `superagent_followup`, `superagent_inject`, `superagent_answer`) refuse to run from a worker session;
 only the top-level agent manages runs.
+
+### Per-worker command permissions
+
+A `workspace-write` host sandbox refuses a child process spawned with piped
+stdio (`EPERM`). A worker that needs to run `npm test` therefore cannot do so
+under the inherited policy, and this plugin will not turn the sandbox off for
+the whole machine. `commandWorkerPermission` raises it only for the workers that
+declare it:
+
+```yaml
+- id: superagent
+  config:
+    commandWorkerPermission: danger-full-access
+```
+
+With that setting, a worker whose plan entry has `requires` containing a command
+capability (`shell`, `bash`, `sh`, `zsh`, `fish`, `terminal`, `pwsh`,
+`powershell`, `cmd`, `run_command`, `exec_command`) gets full access. Planner,
+aggregator, acceptance judges, and workers without such a capability keep the
+inherited mode.
+
+How it works, and why it is a delegation trick rather than a host feature:
+
+- The host has no per-subagent permission field. What it does have is
+  inheritance: `subagents.startActivation` captures the parent session's last
+  `sandbox/mode` event **synchronously, before its first `await`**, and seeds
+  that mode into the child.
+- For one qualifying worker, the plugin appends `sandbox/mode:
+  danger-full-access` to the parent session, calls `startActivation`, and
+  appends the previous mode back in a `finally` — all in the same synchronous
+  tick, with no `await` between those steps. A concurrent call can therefore
+  never observe the temporary override, and the child still captures it.
+- Both steps append one `sandbox/mode` event; the plugin never uses
+  `permissionPresets.set()`, whose `custom` state cannot be restored by name.
+- The approval policy is pinned to `never` for that child by the host's own
+  delegation capture, not by this plugin.
+- Each step is written to the audit trail as `worker.escalate` and
+  `worker.restore` with `runId`, `subtaskId`, and the reason (the declared
+  capability). When `audit` is off, no audit line is written; the escalation
+  still behaves the same.
+
+Limits: this only applies to in-process providers whose child is created from
+the parent session in the same host process (`provider: spawn`). An upstream
+change to when the override is captured — or to delegation inheritance itself —
+makes this silently fall back to inheritance rather than fail the run. The
+temporary event also pins the previous mode in the parent log when the parent
+had no explicit override: it records the deployment default, which is
+behaviourally identical until that default changes.
 
 ### Per-worker workspace isolation
 
