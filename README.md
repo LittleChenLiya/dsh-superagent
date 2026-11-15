@@ -238,6 +238,9 @@ Row config in `<profile>/cordis.patch.yml`:
 | `workspaceRoot` | host cwd | Repository the workers are isolated in when `workspaceIsolation` is on. Must be a git working tree with at least one commit. |
 | `workbenchPort` | off | Loopback port for the local workspace panel; `0` picks a free one. The panel reads and edits files itself, without a host API. |
 | `workbenchRoot` | `process.cwd()` | Directory the panel may browse and edit. Every path outside it is refused. |
+| `schedulerTickSeconds` | `30` | How often a live plan is checked for a due window, in seconds (1–3600). Nothing is armed until a plan exists, so this has no effect on an install with no schedules. |
+| `schedulerHumanPriority` | `true` | Default for a plan's `human_priority`: a scheduled run may not take the last free concurrency slot. |
+| `schedulerMaxConsecutiveFailures` | `3` | Consecutive failed executions before a plan pauses itself and says so once (1–20). |
 
 ### Switching models
 
@@ -578,6 +581,102 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
   exports the matching events as one JSONL or CSV file. See
   [Permissions and audit](#permissions-and-audit).
 
+
+## Scheduled runs
+
+`superagent_schedule` stores a plan — a goal plus a clock — and starts it
+without anyone calling `superagent_start`. A scheduled run is an ordinary run:
+same planner, same quota, same budgets, cancel, usage accounting, report, and
+status. The scheduler is only a timer-shaped caller of the orchestrator, not a
+second run engine.
+
+```text
+superagent_schedule(action: "create", name: "nightly audit",
+  goal: "Audit yesterday's error logs and list anything new",
+  cron: "0 3 * * *", timezone: "Asia/Shanghai",
+  budget: { max_total_runs: 30, max_total_tokens: 5000000 })
+```
+
+Actions are `create`, `list`, `pause`, `resume`, `delete`, and `run-now`.
+`run-now` starts one execution immediately without moving the next planned
+window. A plan may name a `template_id` and `params` instead of a literal
+`goal`; the template is expanded at create time, so editing the template later
+does not silently change an existing plan.
+
+A plan stores its clock (`cron` or `every_minutes`, plus `timezone`), the goal,
+an optional `mode` / `goal_mode` with acceptance, its own `budget`, and its
+`human_priority`. Plans persist to `schedules.json` in the state directory and
+are reloaded at mount, so a host restart keeps them. The timer starts only when
+at least one plan exists; the state file is not created by `init()` on an empty
+state directory.
+
+### Missed windows
+
+A window that comes due while the host is down is **not** replayed in full. The
+default policy, `miss_policy: "latest"`, runs only the newest missed window and
+records every other due window as `missed` with its scheduled time and the
+reason (the host was not running at that time); the plan then advances to its
+next window on the normal grid. `miss_policy: "none"` skips all due windows
+while the host was down, records the count, and resumes at the next scheduled
+window. Catch-up work is bounded, so a laptop that was off for a month does not
+queue thousands of runs.
+
+A plan also never overlaps itself: if the previous execution is still active
+when a new window comes due, that window is not started and is recorded as
+`skipped: previous run still active`. The next window is evaluated normally.
+
+### Quota and manual priority
+
+Scheduled runs share `maxActiveRuns` with manual runs. With
+`human_priority: true` (the default, also configurable with
+`schedulerHumanPriority`), a scheduled run may not occupy the last free slot:
+when only one slot is free it waits for the next tick instead of blocking a
+`superagent_start`. A scheduled run also never enters the queue, so a person's
+`superagent_start(..., queue: true)` is never pushed back by a timer. When the
+cap is reached, the due window stays due and is retried on a later tick,
+without spending anything.
+
+### Budget and failures
+
+`budget.max_model_calls` / `max_tokens` cap one execution;
+`budget.max_total_model_calls` / `max_total_tokens` / `max_total_runs` cap the
+plan across executions. Reaching a plan total pauses the plan and records the
+reason on the plan and in its run report; reaching a per-run cap ends that
+execution the same way a manual run ends.
+
+A failed execution does not notify on every retry. The first failure is
+reported once, and `schedulerMaxConsecutiveFailures` (default 3) consecutive
+failures pause the plan and report that once. A success resets the counter.
+Notifications are otherwise limited to: the goal was achieved, the budget was
+reached, or a run needs a decision. Milestones and ordinary progress stay in
+`list` / `status` and never wake the session.
+
+### Cron support
+
+Cron parsing is built in and has no dependency. Supported: the standard five
+fields (minute hour day-of-month month day-of-week), `*`, `*/n`, ranges
+(`1-5`), lists (`1,15,30`), month and weekday names (`JAN`, `MON-FRI`), and `0`
+or `7` for Sunday. Day-of-month and day-of-week together are OR-ed, as in
+classic cron.
+
+Not supported, and refused at create time with the offending field number:
+seconds, a year field, `@daily`-style macros, and the `L`, `W`, `#`, and `?`
+extensions. An expression with six fields is rejected as “field 1 is not a
+minute” rather than being reinterpreted. Time zones use IANA names and are
+evaluated in the zone the expression was written in, never the host's zone; a
+time that does not exist at the spring DST jump is skipped, and an ambiguous
+autumn time uses the earlier offset.
+
+### What a plan needs from the host
+
+Each plan is owned by the session that created it (or an explicit
+`session_id`). That session must be live when a window fires, because the run
+is started for it; a window with no live owner is recorded as failed with that
+reason instead of being silently dropped. If the owning session is gone for
+good, delete the plan or recreate it from a live session.
+
+Nothing runs and nothing is written until the first `create`. An installation
+with no plans behaves exactly as it did before this tool existed.
 
 ## Progress, decisions, and artifacts
 
