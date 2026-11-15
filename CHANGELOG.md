@@ -8,10 +8,12 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
-## Unreleased
+## 0.10.0 — 2026-11-15
 
-Cross-run memory and a quiet-by-default notification policy. No version is
-published for this yet.
+The dispatch, progress, delivery, and memory layer. No runtime dependencies were
+added, and the package still ships one file per module from `lib/`.
+
+### Added
 
 - **Cross-run memory.** `<stateDir>/memory/<scope>.jsonl` keeps short notes the
   aggregator writes (`decision`, `pitfall`, `next`, `dispatch`, `note`) plus the
@@ -23,40 +25,16 @@ published for this yet.
   directory carries its own `.gitignore` and is never in the package.
 - Added `superagent_memory` (`list`, `set`, `forget`). Existing tools keep their
   arguments and output; this is the sixth tool.
-- **Quiet by default.** Only a delivered, failed, or partially finished run may
-  wake the session; a cancelled run never does, and progress is never pushed.
-  `maxNotificationsPerHour` (default 3) buffers extra runs into one summary.
-- **Self-heal before reporting.** A subtask failure that looks transient
-  (quota, rate limit, timeout, 5xx) gets `autoResumeRounds` (default 1) more
-  rounds, optionally on `childModelFallback`. The failure message now says what
-  was tried, and `self-heal:` appears in `superagent_status`.
-- New config: `memory`, `memoryScope`, `memoryMaxEntries`, `memoryMaxAgeDays`,
-  `memoryDigestEntries`, `memoryDigestChars`, `maxNotificationsPerHour`,
-  `autoResumeRounds`, `childModelFallback`.
+- **Layered memory.** `rules` and `profile` scopes are read into planning and
+  aggregation ahead of the run scope; `superagent_memory` takes `scope`. A run
+  only writes its own scope, so a model cannot overwrite a project rule.
 - **Duplicate dispatch is collapsed.** The same active goal (case and whitespace
   ignored) returns the existing run id with `deduped: true`, under a per-goal
-  claim so two processes sharing a state directory cannot both start it.
-  The match is scoped to the owning session, so two sessions that ask for the
-  same generic goal still get their own runs.
-  `allow_duplicate: true` on `superagent_start` (or `allow_duplicate` on the
-  control `start` body) opts out. A `wait_seconds` call keeps the `deduped`
-  marker in its result.
-- **Attention text is bounded.** Question, options, and reason are collapsed to
-  one line and capped at 500 / 200 / 300 characters, so neither status nor a
-  notification can be given forged extra lines. An invalid attention block is
-  no longer stripped silently: its raw text stays in the report and status
-  prints `attention: <reason>`.
-- **Resume is quotad and session-scoped.** `superagent_resume` counts against
-  `maxActiveRuns` and is refused when the cap is full unless `force: true`
-  (`force` or `override_quota` on HTTP) is passed. It may only be called by the
-  session named in the run's `parentSessionId`.
-- **Buffered notifications survive a failed send.** The folded batch is put back
-  into `pending` when the wake-up fails, so a later message still carries those
-  runs; it is dropped only after three failed deliveries.
-- **`memoryMaxEntries` is a compaction trigger.** Exceeding it, 400 lines, or
-  128 KB compacts the notebook on the next write.
-- **Prune removes report artifacts.** `keepRuns` now deletes
-  `reports/<runId>.md` together with the run record.
+  claim so two processes sharing a state directory cannot both start it. The
+  match is scoped to the owning session, so two sessions that ask for the same
+  generic goal still get their own runs. `allow_duplicate: true` on
+  `superagent_start` (or `allow_duplicate` on the control `start` body) opts
+  out. A `wait_seconds` call keeps the `deduped` marker in its result.
 - **Transient backoff.** A rate-limit, quota, timeout, or 5xx failure now waits
   2s, then 4s, then 8s before the next attempt instead of retrying immediately.
 - **Recovery note.** A resumed run tells each worker what failed and instructs it
@@ -65,19 +43,55 @@ published for this yet.
 - **Structured attention.** A worker or the aggregator may append one fenced
   `attention` block. It is stripped from the report, stored as `attention.items`,
   shown as `needs your decision:` in status, and leads the notification.
+- **Attention text is bounded.** Question, options, and reason are collapsed to
+  one line and capped at 500 / 200 / 300 characters, so neither status nor a
+  notification can be given forged extra lines. An invalid attention block is
+  not stripped silently: its raw text stays in the report and status prints
+  `attention: <reason>`.
 - **Milestones.** `plan_ready`, `running`, `aggregating`, and `settled` are
   recorded with timestamps and shown in `superagent_status`; nothing is pushed.
 - **Report file.** A terminal report is written atomically to
   `<stateDir>/reports/<runId>.md` (directory carries `.gitignore: *`), recorded
-  in `run.artifacts`, and shown in status.
-- **Human-priority quota.** `superagent_resume` is no longer refused by
-  `maxActiveRuns`; the quota now bounds unattended starts only.
-- **Layered memory.** `rules` and `profile` scopes are read into planning and
-  aggregation ahead of the run scope; `superagent_memory` takes `scope`.
+  in `run.artifacts`, and shown in status. `keepRuns` pruning removes it together
+  with the run record.
+- **Quiet by default.** Only a delivered, failed, or partially finished run may
+  wake the session; a cancelled run never does, and progress is never pushed.
+  `maxNotificationsPerHour` (default 3) buffers extra runs into one summary.
 - **Notification outbox.** A refused wake-up is retried with backoff
   (`notifyRetries`, `notifyRetryDelayMs`) and messages for one session stay in
-  order.
-- Test suite: 133 -> 151.
+  order. A buffered batch is put back into `pending` when the send fails, so a
+  later message still carries those runs; it is dropped only after three failed
+  deliveries.
+- **Self-heal before reporting.** A subtask failure that looks transient
+  (quota, rate limit, timeout, 5xx) gets `autoResumeRounds` (default 1) more
+  rounds, optionally on `childModelFallback`. The failure message now says what
+  was tried, and `self-heal:` appears in `superagent_status`.
+- **`memoryMaxEntries` is a compaction trigger.** Exceeding it, 400 lines, or
+  128 KB compacts the notebook on the next write.
+- New config: `memory`, `memoryScope`, `memoryMaxEntries`, `memoryMaxAgeDays`,
+  `memoryDigestEntries`, `memoryDigestChars`, `maxNotificationsPerHour`,
+  `notifyRetries`, `notifyRetryDelayMs`, `autoResumeRounds`,
+  `childModelFallback`.
+
+### Changed
+
+- **Resume is session-scoped and counts against the concurrency quota.** A
+  `superagent_resume` may only be issued by the session named in the run's
+  `parentSessionId`. It counts against `maxActiveRuns` like a start, so a loop of
+  resumes cannot walk past the cap; a person can still override the quota
+  explicitly with `force: true` (`force` or `override_quota` on the HTTP body).
+  This replaces the earlier idea of an unconditional human bypass.
+- `superagent_status` gained the milestone line, the attention line, and the
+  report file path; `superagent_start` gained `allow_duplicate`; the control
+  `start` body gained `allow_duplicate`, and `resume` gained `force`.
+
+### Fixed
+
+- Memory, notification, and report-artifact writes are fail-open or retried, so
+  a transient filesystem error cannot turn a finished run into a failed one; a
+  report that is already written stays on disk and is listed in status.
+- Test suite: 157 tests, 0 failures; `npm test` and `node --test` discovery
+  agree.
 
 ## 0.9.3 — 2026-11-14
 
