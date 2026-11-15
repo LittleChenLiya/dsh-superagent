@@ -8,7 +8,7 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
-## Unreleased
+## 0.12.0 — 2026-11-15
 
 ### Added
 
