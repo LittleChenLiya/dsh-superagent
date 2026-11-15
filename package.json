@@ -15,7 +15,8 @@
   "main": "lib/index.js",
   "bin": {
     "dsh-superagent-watch": "bin/watch.js",
-    "dsh-superagent-report": "bin/report.js"
+    "dsh-superagent-report": "bin/report.js",
+    "dsh-superagent-workbench": "bin/workbench.js"
   },
   "exports": {
     ".": "./lib/index.js",
@@ -41,6 +42,7 @@
     "lib/report.js",
     "bin/watch.js",
     "bin/report.js",
+    "bin/workbench.js",
     "public/workbench.html",
     "cordis.patch.yml",
     "CHANGELOG.md",

@@ -20,6 +20,8 @@ README is updated to the version being released.
   paths, traversal, symlinks out of the root, the state directory, binaries, and
   files above 512 KB are refused with a reason. Saving requires the hash and
   mtime the editor read, so an external edit is never overwritten.
+- `dsh-superagent-workbench` runs the same panel standalone, with `--root`,
+  `--port`, and `--state-dir`; no host is required.
 - Run records now carry `changes` (recorded when the panel is on), which is what
   the panel's run view reads and diffs against `git HEAD`.
 

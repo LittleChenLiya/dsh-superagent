@@ -17,8 +17,9 @@ prints the cost once you give it a price for the route.
 planner and an aggregator on top. It is also the wrong tool for work that must
 finish inside a single turn, for a step that needs human approval in the middle,
 for anything that needs nested delegation (child depth is capped at 1), and for
-anyone who wants an in-host panel — this adds no UI, only six tools. Children run
-with the host's credentials and filesystem; this is not a sandbox.
+anyone who wants an in-host panel — the optional workspace panel below is a
+loopback page, not host UI. Children run with the host's credentials and
+filesystem; this is not a sandbox.
 
 **Install and run.** Node `>= 24.9.0`, a tool-calling route, and that route's key
 in the environment:
@@ -36,9 +37,10 @@ The reply ends `completed` with the merged report, or with
 covers the path from an empty machine, including the reason not to install npm's
 unrelated `dsh` package by name.
 
-It adds no in-host UI and patches no host code: the six `superagent_*` tools are
-the surface, plus two optional operator utilities (a terminal panel and an HTML
-report) that read the same run files.
+It adds no in-host UI (the opt-in workspace panel is a loopback page) and patches
+no host code: the six `superagent_*` tools are the surface, plus optional
+operator utilities (a terminal panel, an HTML report, and the workspace panel)
+that read the same run files.
 
 Personal project, not affiliated with DeepSeek or the harness maintainers. MIT
 licensed, © 2026 Admire (LittleChenLiya); details in [License](#license).
@@ -519,12 +521,21 @@ only, and there is no remote or unauthenticated mode.
 own file tree, editor, diff preview, and run change view; nothing is proxied
 through the host.
 
-```yaml
+```bash
+npx dsh-superagent-workbench --root /path/to/project --port 8787
+```
+
+The same server can run inside the host, with its Runs view wired to the plugin
+state directory:
 - id: superagent
   config:
     workbenchPort: 0          # off by default; 0 = OS picks a free loopback port
     workbenchRoot: /path/to/project
 ```
+
+The standalone command serves the same page and defaults its run state to
+`<root>/.dsh-workbench`; pass `--state-dir <plugin state directory>` to read
+existing runs. Neither form opens a socket unless you ask for it.
 
 The bound URL and a fresh per-process token are written to
 `<stateDir>/workbench.json` (mode `0600`). Open `http://127.0.0.1:<port>/?token=<token>`
