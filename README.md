@@ -204,7 +204,10 @@ Row config in `<profile>/cordis.patch.yml`:
 | `maxSubagentDepth` | `1` | How deep children may delegate. `1` forbids grandchildren; `provider-managed` leaves it to the backend. |
 | `maxSubtasks` | `8` | Cap on planned subtasks. A tool argument can only lower it, never raise it; hard max 16. |
 | `maxParallel` | `3` | Subtasks executing at once. A tool argument can only lower it; hard max 8. |
-| `maxActiveRuns` | `2` | Active runs per state directory, across profiles and hosts that share it; further `superagent_start` calls are rejected. `superagent_resume` counts the same way and is refused when the cap is full; pass `force: true` (or `override_quota: true` over HTTP) to override it explicitly. |
+| `maxActiveRuns` | `2` | Active runs per state directory, across profiles and hosts that share it. A further `superagent_start` is rejected unless it passes `queue: true`, in which case it waits instead. `superagent_resume` counts the same way and is refused when the cap is full; pass `force: true` (or `override_quota: true` over HTTP) to override it explicitly. |
+| `maxQueuedRuns` | `5` | Runs allowed to wait for a free slot at once; hard max 32. `0` turns queueing off, so every start over `maxActiveRuns` is rejected again. |
+| `queueTimeoutMinutes` | `30` | How long a queued run waits before it fails without ever starting; nothing is spent. |
+| `queueOnFull` | `false` | Queue every start that exceeds `maxActiveRuns`, not only the ones that pass `queue: true`. |
 | `attempts` | `2` | Attempts per subtask before it is marked failed. A failure that looks transient (quota, rate limit, timeout, 5xx) waits 2s, then 4s, then 8s before the next attempt. |
 | `deadlineMinutes` | `120` | Wall-clock budget; on expiry the run ends `partial` or `failed`. |
 | `maxModelCallsPerRun` | `80` | Hard cap on child model calls per run; `0` disables. |
@@ -315,8 +318,20 @@ cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
 
 ## Tools
 
-- `superagent_start(goal, max_subtasks?, max_parallel?, deadline_minutes?, allow_duplicate?, wait_seconds?)`
-  starts a run and returns immediately with a run id. Starting a goal that an
+- `superagent_start(goal, mode?, queue?, max_subtasks?, max_parallel?, deadline_minutes?, allow_duplicate?, wait_seconds?)`
+  starts a run and returns immediately with a run id. `mode: "direct"` runs the
+  goal on one worker with no planner and no aggregator, and returns that worker's
+  reply as the report unchanged — right for one self-contained lookup, edit,
+  query, or short piece of writing, wrong for a goal with parts that can run in
+  parallel. The default, `mode: "planned"`, does the full planner → workers →
+  merged report pipeline. Both modes produce the same run record, quota,
+  deadline, cancel, and usage accounting.
+  `queue: true` makes a start wait for a free slot when `maxActiveRuns` is in use
+  instead of failing: it returns `status: "queued"` with `queue.position` /
+  `queue.of`, starts automatically when an active run finishes, and fails after
+  `queueTimeoutMinutes` if no slot frees. At most `maxQueuedRuns` waits; a queued
+  run does not count against `maxActiveRuns` while it waits, and cancelling it
+  removes it from the line cleanly. Starting a goal that an
   active run in the same session already covers returns that run id marked
   `deduped: true` instead of paying for a second plan: the goal is compared after
   trimming, collapsing runs of whitespace, and ignoring case, and the check runs
@@ -515,7 +530,9 @@ only, and there is no remote or unauthenticated mode.
 One file per run: `$DSH_HOME/state/superagent/runs/<runId>.json`, written with a
 temp file plus rename, so a kill during a save cannot leave a half-written run.
 Statuses: `queued`, `planning`, `running`, `aggregating`, `completed`,
-`partial`, `failed`, `cancelled`, `interrupted`.
+`partial`, `failed`, `cancelled`, `interrupted`. A run that is waiting for a free
+slot also has `queued` as its status but carries `queue.waiting: true` with its
+position in line; it is not active and does not count against `maxActiveRuns`.
 
 At mount the plugin marks a run as `interrupted` **only when it has no live
 owner** (see below) and resets its in-flight subtasks to `pending`.
@@ -664,7 +681,7 @@ appears to "hang" until the ignored-abort child returns.
 | `[error] the subagent service is unavailable` | The profile has no `subagents` service, so the plugin has nothing to spawn. | Use a profile built on the base bundle (`web` or `headless` from the stock image), or add the subagent plugin to the profile. |
 | `error: subagent provider "..." cannot enforce maxSubagentDepth` | The route's subagent backend cannot cap delegation. | Keep `provider: spawn`, or set `maxSubagentDepth: provider-managed` if you accept the backend's own limit. |
 | `error: the Windows file sandbox could not start a child process` | Host sandbox launcher failure (`windows-acl-run: ...`), not your goal or key. The subtask is retried once. | Retry the run; if it repeats, restart the host, or disable the Windows ACL sandbox in the profile, then run the `diagnose-windows-sandbox-acl` skill. |
-| `error: the run was not started because the active-run limit is already in use` | `maxActiveRuns` is full, including runs from another profile that shares the state directory. | Wait, cancel one, or raise `maxActiveRuns`. |
+| `error: the run was not started because the active-run limit is already in use` | `maxActiveRuns` is full, including runs from another profile that shares the state directory, and the start did not ask to queue (or the queue itself is full). | Retry with `queue: true`, wait, cancel one, or raise `maxActiveRuns` / `maxQueuedRuns`. |
 | `error: the run stopped because it reached its spending cap` | `maxModelCallsPerRun` or `maxTokensPerRun` was hit. | Read the partial report; raise the cap in the config, then `superagent_resume` continues with the new limits. |
 | `usage: not recorded` | The run finished and no child session log could be read (moved `sessions` directory, or a run created before accounting). | Nothing to fix on old runs; new runs record usage. While a run is still active the line says accounting is pending instead. |
 | `usage note: N child session log(s) could not be read` | Part of the usage was unreadable; the token figures are a lower bound. The call budget still counted those children. | Check that `$DSH_HOME/sessions` exists and is readable by the host process. |

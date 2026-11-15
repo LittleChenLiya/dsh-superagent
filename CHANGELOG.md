@@ -8,6 +8,26 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## Unreleased
+
+### Added
+
+- **Direct mode.** `superagent_start` takes `mode: "direct"`: one worker does the
+  whole goal, with no planner, no aggregation, and no self-heal round, and its
+  reply becomes the report verbatim. The run record, quota, deadline, cancel,
+  budget, milestones, and per-child usage accounting are identical to a planned
+  run. `mode: "planned"` is the default and unchanged.
+- **Queueing instead of a hard failure.** `superagent_start` takes
+  `queue: true`: when `maxActiveRuns` is in use the run returns
+  `status: "queued"` with `queue.position` / `queue.of`, and starts automatically
+  when an active run finishes. Waiting runs do not count against
+  `maxActiveRuns`, are persisted with an owner heartbeat, start oldest first, and
+  renumber when one is cancelled. `maxQueuedRuns` (default 5, 0 disables) caps the
+  line and `queueTimeoutMinutes` (default 30) fails a run that never got a slot,
+  without spending anything. `queueOnFull: true` makes queueing the default for
+  every start; without it a start that does not pass `queue: true` still gets the
+  speed quota error.
+
 ## 0.10.0 — 2026-11-15
 
 The dispatch, progress, delivery, and memory layer. No runtime dependencies were
