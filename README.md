@@ -225,6 +225,8 @@ Row config in `<profile>/cordis.patch.yml`:
 | `memoryDigestChars` | `1600` | Character budget for the note part of that prompt. |
 | `keepRuns` | `0` | Delete terminal runs older than this many days at mount; `0` keeps everything. |
 | `controlPort` | off | Loopback port for the embedding surface; `0` picks a free one. See [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md). |
+| `workspaceIsolation` | `false` | Give every worker its own git worktree so parallel workers cannot overwrite each other. See [Per-worker workspace isolation](#per-worker-workspace-isolation). |
+| `workspaceRoot` | host cwd | Repository the workers are isolated in when `workspaceIsolation` is on. Must be a git working tree with at least one commit. |
 
 ### Switching models
 
@@ -264,6 +266,79 @@ supported way to narrow a child's tools; without a dedicated preset, workers
 inherit the session's tools. The `superagent_*` tools still exist in their tool
 list, but `superagent_start`, `superagent_resume`, and `superagent_cancel`
 refuse to run from a worker session; only the top-level agent manages runs.
+
+### Per-worker workspace isolation
+
+Parallel workers are independent agents, but by default they share one working
+directory: two subtasks that edit the same file overwrite each other, and the
+last writer wins. `workspaceIsolation` fixes that by giving each worker its own
+checkout.
+
+```yaml
+- id: superagent
+  config:
+    workspaceIsolation: true
+    workspaceRoot: /home/me/projects/api      # or C:\work\api on Windows
+```
+
+**Why git worktrees rather than a directory copy.** The hard half of isolation
+is merging the results back. A worktree gives that for free: a real three-way
+merge with conflict detection, both sides preserved as refs, and one command the
+user can run to finish by hand. A recursive copy would either need a diff3
+engine (a dependency this package does not have) or overwrite the main checkout,
+which is the bug the feature exists to prevent. A worktree also shares the object
+database and ignore rules, so a worker sees the real repository without a full
+copy of it. Worktrees live under `<stateDir>/workspaces/<runId>/w<n>`; that
+directory carries its own `.gitignore`, so a state directory inside a repository
+does not leak worker checkouts into the user's next commit.
+
+**What happens during a run.** Each worker is given
+`superagent/<runId>-w<n>`, a branch created from the main checkout's `HEAD`. Its
+prompt names the absolute path and forbids touching anything else, switching
+branches, committing, merging, or pushing. When the worker finishes, the run
+commits whatever it left in the checkout (so a model that forgot to commit still
+loses nothing; git hooks are skipped so a pre-commit hook cannot block the merge)
+and then merges the branches into the main checkout **one at a time**, after all
+subtasks are done.
+
+**What you see when a merge conflicts.** The merge is aborted, so the main
+checkout is restored exactly as it was and no conflict markers are left in it.
+The outcome is recorded on the run and printed by `superagent_status`:
+
+```
+workspace conflict: [2] src/routes.js, src/index.js — branch superagent/20261115T101500-ab12-w2
+kept at <stateDir>/workspaces/20261115T101500-ab12/w2; the main checkout was restored, so nothing
+was lost. Resolve with: git -C "/home/me/projects/api" merge superagent/20261115T101500-ab12-w2
+```
+
+The wake-up message for the run says the same in one line, because a conflict is
+the one outcome that needs the user even when the run itself "completed". Nothing
+is discarded: the branch and its checkout are kept until you merge or delete
+them. Two more cases are reported the same way rather than silently dropped:
+
+- the main checkout has uncommitted changes when the merge is due — every
+  branch is left unmerged, since merging into a dirty tree would mix your edits
+  with the workers' and make an abort restore the wrong state;
+- the run was cancelled or hit its deadline before merging — the branches are
+  kept and a resume reuses the same worktrees.
+
+**When isolation is not possible.** If `workspaceRoot` is not a git working tree,
+git is not on `PATH`, or the repository has no commit yet, the run does not fail.
+It falls back to the shared directory (the previous behaviour) and both
+`superagent_status` and the notification say so:
+
+```
+workspace: isolation was requested but is unavailable — /tmp/notes is not a git working tree,
+so a per-worker worktree cannot be created; workers shared /tmp/notes, so their edits can
+overwrite each other
+```
+
+**Limits, stated plainly.** `dsh@0.2.2-rc.1` gives a child agent no `cwd` field,
+so the plugin cannot hand a worker a directory at spawn time. Isolation is a
+prompt contract plus a real branch: a worker that ignores the prompt can still
+edit the main checkout, but that shows up in `git status` before any merge and
+cannot damage a sibling's branch. With isolation off, behaviour is exactly what
+it was before this option existed.
 
 ### Spending limits and prices
 
@@ -545,6 +620,7 @@ Three side files live next to the run:
 | `<runId>.cancel` | A cancel was requested by some process. The owner polls it once per second and stops its children. Removed when the run ends. |
 | `<runId>.lock` | The process that is allowed to schedule this run. Created with `wx`, so exactly one process wins. A lock left by a dead local pid is broken immediately; a live local pid keeps it however long it has held it; a lock from another machine is broken once it is older than 10 minutes, since its pid cannot be checked. |
 | `<runId>.json.corrupt-<ts>` | The state file was not valid JSON and was moved aside, not deleted. The run is skipped by `superagent_list` and reported by id with this path. |
+| `workspaces/<runId>/w<n>/` | A worker's git worktree when `workspaceIsolation` is on. Removed once its branch is merged or it produced no change; kept when a conflict left it for the user to merge. |
 
 If a run's file is damaged, nothing else breaks: other runs list normally, and
 starting a new run works. Inspect the `.corrupt-` file, then delete it. A file

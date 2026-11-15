@@ -68,10 +68,19 @@ added, and the package still ships one file per module from `lib/`.
   was tried, and `self-heal:` appears in `superagent_status`.
 - **`memoryMaxEntries` is a compaction trigger.** Exceeding it, 400 lines, or
   128 KB compacts the notebook on the next write.
+- **Per-worker workspace isolation (opt-in).** `workspaceIsolation: true` gives
+  every worker its own git worktree of `workspaceRoot` on a
+  `superagent/<runId>-w<n>` branch, so parallel workers cannot overwrite each
+  other's files. Finished workers are committed and merged back one at a time;
+  a conflict aborts the merge, restores the main checkout, and appears in
+  `superagent_status` with the conflicting files and the branch to merge by
+  hand. A non-git target, a missing git binary, or an empty repository makes the
+  run fall back to the shared directory and say so. Off by default: the old
+  behaviour is byte-for-byte unchanged when it is off.
 - New config: `memory`, `memoryScope`, `memoryMaxEntries`, `memoryMaxAgeDays`,
   `memoryDigestEntries`, `memoryDigestChars`, `maxNotificationsPerHour`,
   `notifyRetries`, `notifyRetryDelayMs`, `autoResumeRounds`,
-  `childModelFallback`.
+  `childModelFallback`, `workspaceIsolation`, `workspaceRoot`.
 
 ### Changed
 
