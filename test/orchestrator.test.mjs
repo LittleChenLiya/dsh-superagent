@@ -93,7 +93,7 @@ function makeSpawner(handle) {
   const calls = []
   const spawnChild = async spec => {
     const childId = `child-${++seq}`
-    calls.push({ label: spec.label, prompt: spec.prompt, childId, model: spec.model ?? null })
+    calls.push({ label: spec.label, prompt: spec.prompt, childId, model: spec.model ?? null, cwd: spec.cwd ?? null })
     return {
       childId,
       result: Promise.resolve().then(() => handle(spec, childId)),
@@ -2179,8 +2179,109 @@ test('isolation on names each worker directory in its prompt and merges the bran
   assert.equal(finished.subtasks[0].workspace.dir, null)
 })
 
-test('a merge conflict is recorded on the run and its branch is kept', async () => {
-  const spawner = twoTaskSpawner()
+/** A workspace manager whose worktrees are real directories, for deliverable tests. */
+function diskWorkspace(base, dir) {
+  return {
+    root: path.dirname(dir),
+    baseDir: base,
+    async probe() {
+      return { ok: true, base, reason: null }
+    },
+    async prepare() {
+      return { ok: true, dir, branch: 'superagent/test-w1', base, reused: false, reason: null }
+    },
+    async harvest() {
+      return { status: 'committed', files: [], commit: 'abc1234', detail: null }
+    },
+    async mergeAll(workers) {
+      return workers.map(worker => ({
+        index: worker.index,
+        branch: worker.branch,
+        dir: null,
+        status: 'merged',
+        files: [],
+        detail: null,
+      }))
+    },
+    async release() {},
+  }
+}
+
+/** A one-subtask plan that declares out.txt; `write` decides where the worker puts it. */
+function deliverableSpawner(write) {
+  return makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{
+          title: 'write the report',
+          prompt: 'write out.txt',
+          deliverables: [{ path: 'out.txt', kind: 'text' }],
+        }],
+      }))
+    }
+    await write()
+    return completed('wrote the report')
+  })
+}
+
+async function tempDir() {
+  return fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-root-'))
+}
+
+async function runDeliverableCase(write) {
+  const base = await tempDir()
+  const dir = await tempDir()
+  const spawner = deliverableSpawner(() => write(base, dir))
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    workspace: diskWorkspace(base, dir),
+    config: { workspaceIsolation: true, attempts: 1 },
+  })
+  const run = await orchestrator.start({ goal: 'write a report', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+  return { finished, spawner, base, dir }
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+test('a deliverable in the isolated checkout verifies, and the child starts in that checkout', async () => {
+  const { finished, spawner, dir } = await runDeliverableCase(async (base, worktree) => {
+    await fsp.writeFile(path.join(worktree, 'out.txt'), 'the report\n')
+  })
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.subtasks[0].deliverables[0].status, 'verified')
+  assert.equal(finished.subtasks[0].deliverableCheck.verified, 1)
+  const worker = spawner.calls.find(call => call.label !== 'superagent-plan')
+  assert.equal(worker.cwd, dir)
+})
+
+test('a deliverable written only into the base checkout is misplaced, not missing', async () => {
+  const { finished, base, dir } = await runDeliverableCase(async (shared, worktree) => {
+    await fsp.writeFile(path.join(shared, 'out.txt'), 'the report\n')
+  })
+  assert.equal(finished.status, 'failed')
+  const item = finished.subtasks[0].deliverables[0]
+  assert.equal(item.status, 'failed')
+  assert.equal(item.code, 'misplaced')
+  assert.match(item.reason, /exists only in the shared checkout/)
+  assert.match(item.reason, new RegExp(escapeRegExp(base)))
+  assert.match(item.reason, new RegExp(escapeRegExp(dir)))
+  assert.equal(finished.subtasks[0].deliverableCheck.misplaced, 1)
+})
+
+test('a deliverable produced nowhere is missing', async () => {
+  const { finished } = await runDeliverableCase(async () => {})
+  assert.equal(finished.status, 'failed')
+  const item = finished.subtasks[0].deliverables[0]
+  assert.equal(item.status, 'failed')
+  assert.equal(item.code, 'missing')
+  assert.match(item.reason, /is missing/)
+  assert.equal(finished.subtasks[0].deliverableCheck.misplaced, 0)
+})
+
+test('a merge conflict is recorded on the run and its branch is kept', async () => {  const spawner = twoTaskSpawner()
   const workspace = fakeWorkspace({
     mergeOutcomes: worker => (worker.index === 2
       ? { index: 2, branch: worker.branch, dir: worker.dir, status: 'conflict', files: ['notes.txt'], detail: 'conflicts with work already in /repo' }
