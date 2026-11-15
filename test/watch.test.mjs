@@ -146,6 +146,45 @@ test('activities answer "is it stuck?" in one phrase per status', () => {
   assert.match(activityOf(run({ status: 'failed', error: 'boom\nstack line' })), /^boom$/)
 })
 
+test('the footer says unpriced instead of claiming a zero spend', () => {
+  const frame = renderFrame([run()], { now: T0 + 42_000, width: 110, color: false })
+  const footer = frame.split('\n').at(-1)
+  assert.match(footer, /cost unpriced/)
+  assert.doesNotMatch(footer, /0\.0000/)
+})
+
+test('the footer prints the configured currency and keeps its total additive', () => {
+  const priced = run({
+    status: 'completed',
+    finishedAt: '2026-11-14T08:00:40.000Z',
+    cost: {
+      totalMicros: 101_600,
+      total: 0.1016,
+      currency: 'CNY',
+      byModel: { 'dashscope/qwen-flash': 0.1016 },
+      unpriced: [],
+      complete: true,
+    },
+  })
+  const footer = renderFrame([priced], { now: T0 + 60_000, width: 110, color: false }).split('\n').at(-1)
+  assert.match(footer, /cost ¥0\.1016( |·)/)
+
+  const partial = run({
+    status: 'completed',
+    finishedAt: '2026-11-14T08:00:40.000Z',
+    cost: {
+      totalMicros: 101_600,
+      total: 0.1016,
+      currency: 'CNY',
+      byModel: { 'dashscope/qwen-flash': 0.1016 },
+      unpriced: ['other/model'],
+      complete: false,
+    },
+  })
+  const partialFooter = renderFrame([partial], { now: T0 + 60_000, width: 110, color: false }).split('\n').at(-1)
+  assert.match(partialFooter, /cost ¥0\.1016\+/)
+})
+
 test('watch --once prints one plain frame and never takes over the screen', async () => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-watch-'))
   const store = createStore(dir)
