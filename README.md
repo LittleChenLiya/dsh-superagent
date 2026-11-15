@@ -1008,8 +1008,10 @@ default.
 Browser and desktop control are not implemented here. They come from
 `feat/runtime-control`, which registers host-scope `browser_*` and `desktop_*`
 tools; those are visible to the console session like any other host tool. On a
-build without that branch the page reports them as "未挂载". 3D modelling has no
-tool in either branch.
+build without that branch the page reports them as "未挂载". Neither branch ships a 3D tool; when
+the preset includes `bash` or `pwsh`, a headless Blender can be driven through
+it (`blender --background --python`), which is the scriptable path the console
+can already reach.
 
 ## Workspace panel
 

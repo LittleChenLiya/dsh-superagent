@@ -1354,7 +1354,11 @@
     toolNoteEl.textContent = [
       `浏览器控制：${counts.browser ? `${counts.browser} 个 browser_* 工具` : '未挂载'}`,
       `桌面控制：${counts.desktop ? `${counts.desktop} 个 desktop_* 工具` : '未挂载'}`,
-      `3D 建模：${counts['3d'] ? `${counts['3d']} 个相关工具` : '未发现专用工具'}`,
+      `3D 建模：${counts['3d']
+        ? `${counts['3d']} 个相关工具`
+        : `未发现专用工具${tools.some(tool => tool.name === 'bash' || tool.name === 'pwsh')
+          ? '（可经 shell 调 headless Blender）'
+          : ''}`}`,
     ].join(' · ')
   }
 
