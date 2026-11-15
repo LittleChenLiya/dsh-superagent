@@ -225,6 +225,8 @@ Row config in `<profile>/cordis.patch.yml`:
 | `memoryDigestChars` | `1600` | Character budget for the note part of that prompt. |
 | `keepRuns` | `0` | Delete terminal runs older than this many days at mount; `0` keeps everything. |
 | `controlPort` | off | Loopback port for the embedding surface; `0` picks a free one. See [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md). |
+| `workbenchPort` | off | Loopback port for the local workspace panel; `0` picks a free one. The panel reads and edits files itself, without a host API. |
+| `workbenchRoot` | `process.cwd()` | Directory the panel may browse and edit. Every path outside it is refused. |
 
 ### Switching models
 
@@ -510,6 +512,35 @@ curl -s -H "Authorization: Bearer $TOKEN" "$URL/runs"
 The full contract — routes, error ids, security model, lifecycle, client
 examples — is [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md). It is opt-in, loopback
 only, and there is no remote or unauthenticated mode.
+
+## Workspace panel
+
+`workbenchPort` adds a local, IDE-shaped panel over one directory. It has its
+own file tree, editor, diff preview, and run change view; nothing is proxied
+through the host.
+
+```yaml
+- id: superagent
+  config:
+    workbenchPort: 0          # off by default; 0 = OS picks a free loopback port
+    workbenchRoot: /path/to/project
+```
+
+The bound URL and a fresh per-process token are written to
+`<stateDir>/workbench.json` (mode `0600`). Open `http://127.0.0.1:<port>/?token=<token>`
+once; the page keeps the token in `sessionStorage` and strips it from the
+address bar. Without the token every route answers `401`.
+
+The panel can list, read, and edit regular text files under `workbenchRoot`. It
+refuses absolute paths, `..` traversal, symlinks that leave the root, the plugin
+state directory, binary files, and files above 512 KB. Saving sends the hash and
+mtime the editor read; if either changed on disk, the save is refused with
+`external-change` instead of overwriting another process's work. Before a save
+is confirmed the page shows a unified diff.
+
+When `workbenchPort` is on, the plugin records the files each run changed into
+that run's JSON record (`run.changes`), so the Runs view can show those files and
+their diff against `git HEAD` later.
 
 ## State and recovery
 

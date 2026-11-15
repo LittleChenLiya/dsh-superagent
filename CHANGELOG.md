@@ -8,6 +8,21 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## Unreleased
+
+### Added
+
+- **Local workspace panel.** `workbenchPort` (off by default, loopback only)
+  serves an IDE-shaped page from `public/workbench.html`: file tree, text editor,
+  diff preview before save, and a run view that lists the files a run changed.
+  The plugin reads and edits the filesystem itself, so no host API is involved.
+  Every request needs the per-process bearer token in `workbench.json`; absolute
+  paths, traversal, symlinks out of the root, the state directory, binaries, and
+  files above 512 KB are refused with a reason. Saving requires the hash and
+  mtime the editor read, so an external edit is never overwritten.
+- Run records now carry `changes` (recorded when the panel is on), which is what
+  the panel's run view reads and diffs against `git HEAD`.
+
 ## 0.10.0 — 2026-11-15
 
 The dispatch, progress, delivery, and memory layer. No runtime dependencies were
