@@ -757,14 +757,33 @@ A window that comes due while the host is down is **not** replayed in full. The
 default policy, `miss_policy: "latest"`, runs only the newest missed window and
 records every other due window as `missed` with its scheduled time and the
 reason (the host was not running at that time); the plan then advances to its
-next window on the normal grid. `miss_policy: "none"` skips all due windows
-while the host was down, records the count, and resumes at the next scheduled
-window. Catch-up work is bounded, so a laptop that was off for a month does not
-queue thousands of runs.
+next window on the normal grid. The run that executes that newest window is a
+catch-up, and the plan says so: `totalRuns` counts it, `catchUpRuns` counts how
+many runs were catch-ups, and the `started` history entry names the window and
+the number of missed windows it stands in for. `miss_policy: "none"` skips all
+due windows while the host was down, records the count, and resumes at the next
+scheduled window. Catch-up work is bounded, so a laptop that was off for a month
+does not queue thousands of runs.
+
+The counters are separate on purpose: `missedRuns` is how many windows never
+ran, `catchUpRuns` is how many ran late, and `skippedRuns` is how many were
+passed over because the previous run was still active. `list` prints all three.
 
 A plan also never overlaps itself: if the previous execution is still active
 when a new window comes due, that window is not started and is recorded as
 `skipped: previous run still active`. The next window is evaluated normally.
+
+### Completion requires an artifact
+
+A worker ending its turn with `completed` is not, by itself, a completed
+subtask. When a subtask declares `deliverables` (file paths, relative to its
+working directory), every listed file must exist, be a file, and be non-empty
+before the subtask counts. With no file declared, the reply text is the
+artifact, so an empty or whitespace-only reply is rejected with
+`empty deliverable: ...` and the subtask is retried or failed like any other
+incomplete attempt. A run whose report strips down to nothing is recorded as
+`partial`, never `completed`, so a schedule cannot report success for an empty
+result.
 
 ### Quota and manual priority
 
@@ -811,10 +830,19 @@ autumn time uses the earlier offset.
 ### What a plan needs from the host
 
 Each plan is owned by the session that created it (or an explicit
-`session_id`). That session must be live when a window fires, because the run
-is started for it; a window with no live owner is recorded as failed with that
-reason instead of being silently dropped. If the owning session is gone for
-good, delete the plan or recreate it from a live session.
+`session_id`), and that owner is resolved **on every window**, not captured once.
+If the session is live, it is used as is. After a host restart the plugin asks
+the host to resume the persisted session (`agents.resume`, or the Host Session
+API where that is the available surface); if the session was deleted, it creates
+a replacement and the plan adopts the new id (recorded as `owner-recovered`). A
+plan therefore survives a restart without depending on the original process or
+conversation staying open.
+
+When the host exposes no way to resume or create a session at all, that limit is
+recorded at `create` time instead of being discovered as a pause. The response
+carries a warning and the plan is marked `requires a resident session`; when a
+window finds no live owner it is recorded as `blocked`, announced once, and the
+plan stays enabled. It is not silently paused after three windows.
 
 Nothing runs and nothing is written until the first `create`. An installation
 with no plans behaves exactly as it did before this tool existed.

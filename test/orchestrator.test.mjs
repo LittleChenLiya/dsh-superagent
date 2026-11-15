@@ -1315,10 +1315,55 @@ test('a report that is only a notebook block leaves no plugin syntax behind', as
     const run = await orchestrator.start({ goal: 'goal', parentSessionId: parent.id, parent })
     const finished = await orchestrator.status(run.id, 10)
 
-    assert.equal(finished.status, 'completed')
+    // The notebook block is the only content, so stripping it leaves no
+    // deliverable. That is an empty result, not a completed run.
+    assert.equal(finished.status, 'partial')
     assert.equal(finished.report, '')
+    assert.match(finished.error, /empty deliverable/)
     assert.equal(finished.memoryWrite.written, 1)
   })
+})
+
+test('a direct worker that returns no text is not a completion', async () => {
+  const spawner = makeSpawner(async () => completed(''))
+  const { orchestrator } = orchestratorWith({ spawner, config: { attempts: 1 } })
+
+  const run = await orchestrator.start({ goal: 'produce a line', parentSessionId: parent.id, parent, mode: 'direct' })
+  const finished = await orchestrator.status(run.id, 5)
+
+  assert.equal(finished.status, 'failed')
+  assert.match(finished.subtasks[0].error, /empty deliverable/)
+  assert.equal(finished.report, null)
+})
+
+test('a declared deliverable must exist before the subtask counts as completed', async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-deliverable-'))
+  try {
+    const plan = JSON.stringify({
+      subtasks: [{ title: 'write the report', prompt: 'write out.txt', deliverables: [{ path: 'out.txt' }] }],
+    })
+    const missing = makeSpawner(async spec => (
+      spec.label === 'superagent-plan' ? completed(plan) : completed('I think I wrote it')
+    ))
+    const first = orchestratorWith({ spawner: missing, config: { attempts: 1, workspaceRoot: root } })
+    const run = await first.orchestrator.start({ goal: 'write out.txt', parentSessionId: parent.id, parent })
+    const failed = await first.orchestrator.status(run.id, 5)
+    assert.equal(failed.status, 'failed')
+    assert.match(failed.subtasks[0].error, /declared deliverable "out\.txt" is missing/)
+
+    const present = makeSpawner(async spec => {
+      if (spec.label === 'superagent-plan') return completed(plan)
+      await fsp.writeFile(path.join(root, 'out.txt'), 'delivered\n', 'utf8')
+      return completed('wrote out.txt')
+    })
+    const second = orchestratorWith({ spawner: present, config: { attempts: 1, workspaceRoot: root } })
+    const ok = await second.orchestrator.start({ goal: 'write out.txt', parentSessionId: parent.id, parent })
+    const finished = await second.orchestrator.status(ok.id, 5)
+    assert.equal(finished.status, 'completed')
+    assert.match(finished.report, /wrote out\.txt/)
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true })
+  }
 })
 
 test('a resume clears the self-heal and memory-write outcome of the previous settle', async () => {
