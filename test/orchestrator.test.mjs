@@ -1397,6 +1397,28 @@ test('rules and profile notes are layered ahead of what runs learned', async () 
   })
 })
 
+test('the goal recalls the relevant old note instead of only the newest ones', async () => {
+  await withMemoryRoot(async root => {
+    const memory = createMemory(root)
+    await memory.set({ key: 'deploy-target', kind: 'decision', text: 'staging lives in eu-west' })
+    await memory.set({ key: 'css-reset', kind: 'note', text: 'the reset uses flexbox gaps' })
+
+    const spawner = makeSpawner(async spec => (spec.label === 'superagent-plan'
+      ? completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+      : completed('done')))
+    const { orchestrator } = orchestratorWith({ spawner, memory })
+
+    const run = await orchestrator.start({ goal: 'deploy to staging', parentSessionId: parent.id, parent })
+    await orchestrator.status(run.id, 10)
+
+    const plan = spawner.calls.find(call => call.label === 'superagent-plan').prompt
+    // The injected line names the run, the date and that it is still active, so
+    // the planner can weigh it instead of trusting an anonymous bullet.
+    assert.match(plan, /deploy-target \(run manual-[0-9a-f]+, \d{4}-\d{2}-\d{2}, active\): staging lives in eu-west/)
+    assert.doesNotMatch(plan, /css-reset/, 'an unrelated note does not take the budget')
+  })
+})
+
 test('two concurrent starts for one goal create a single run', async () => {
   const store = memoryStore()
   const release = []
