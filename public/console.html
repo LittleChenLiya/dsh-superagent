@@ -341,6 +341,138 @@
   }
   .run-actions button:hover { color: var(--text); border-color: #35464f; }
 
+  .env-bar {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 6px 20px; border-bottom: 1px solid var(--line-soft);
+    background: rgba(11, 15, 18, .55);
+  }
+  .env-bar[hidden] { display: none; }
+  .env-title { color: var(--faint); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; }
+  .env-items { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; }
+  .env-item {
+    display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px;
+    border-radius: 999px; border: 1px solid var(--line-soft); background: #10171c;
+    color: var(--muted); font-size: 11px;
+    cursor: pointer; font-family: inherit;
+  }
+  .env-item:hover { border-color: var(--line); }
+  .env-item .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+  .env-item.ok .dot { background: var(--green); }
+  .env-item.bad { border-color: rgba(246, 193, 119, .34); color: #e8c690; background: var(--amber-soft); }
+  .env-item.bad .dot { background: var(--amber); }
+  .env-item .env-action { color: var(--accent); font-size: 10.5px; }
+  .env-item .env-value { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .env-item.bad .env-value { color: #c9ab7f; }
+  .btn.tiny { height: 24px; padding: 0 9px; font-size: 11px; }
+
+  #wizardDialog { width: min(720px, calc(100vw - 32px)); }
+  .wiz-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 12px; border-bottom: 1px solid var(--line-soft); }
+  .wiz-head h2 { margin: 2px 0 0; font-size: 16px; }
+  .wiz-head .kicker { color: var(--accent); font: 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+  .wiz-head button { border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; }
+  .wiz-steps { display: flex; gap: 6px; padding: 12px 18px 0; }
+  .wiz-step {
+    flex: 1; padding: 7px 8px; border-radius: 8px; border: 1px solid var(--line-soft);
+    background: #0e1418; color: var(--faint); font-size: 11px; text-align: center;
+  }
+  .wiz-step.active { border-color: rgba(94, 234, 212, .4); color: var(--text); background: rgba(94, 234, 212, .07); }
+  .wiz-step.done { color: var(--green); border-color: rgba(99, 214, 164, .25); }
+  .wiz-body { padding: 14px 18px 8px; overflow: auto; max-height: calc(100vh - 270px); }
+  .wiz-lead { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+  .wiz-checks { display: flex; flex-direction: column; gap: 7px; }
+  .wiz-check {
+    display: flex; align-items: flex-start; gap: 9px; padding: 9px 10px;
+    border-radius: 9px; border: 1px solid var(--line-soft); background: #0e1418;
+  }
+  .wiz-check.bad { border-color: rgba(246, 193, 119, .3); background: var(--amber-soft); }
+  .wiz-check .dot { flex: none; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--green); }
+  .wiz-check.bad .dot { background: var(--amber); }
+  .wiz-check .body { flex: 1; min-width: 0; }
+  .wiz-check .label { font-size: 12px; color: var(--text); }
+  .wiz-check .value { margin-left: 6px; color: var(--muted); font: 11px var(--mono); word-break: break-all; }
+  .wiz-check .hint { margin-top: 3px; color: #c9ab7f; font-size: 11px; line-height: 1.55; }
+  .wiz-check button {
+    flex: none; height: 25px; padding: 0 8px; border-radius: 6px;
+    border: 1px solid rgba(246, 193, 119, .4); background: rgba(246, 193, 119, .1);
+    color: #f3d8ac; font-size: 11px;
+  }
+  .wiz-form { display: grid; gap: 10px; }
+  .wiz-field label { display: block; margin-bottom: 4px; color: var(--faint); font-size: 11px; }
+  .wiz-field input {
+    width: 100%; height: 34px; padding: 0 10px; border: 1px solid var(--line);
+    border-radius: 8px; background: #0a1014; color: var(--text); outline: 0; font-size: 12.5px;
+  }
+  .wiz-field input:focus { border-color: rgba(94, 234, 212, .48); }
+  .wiz-key-row { display: flex; align-items: center; gap: 8px; }
+  .wiz-key-row input { flex: 1; min-width: 0; }
+  .wiz-key-row .wiz-badge { flex: none; }
+  .wiz-note { color: var(--faint); font-size: 11px; line-height: 1.6; }
+  .wiz-badge {
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--faint); font-size: 10.5px;
+  }
+  .wiz-badge.ok { color: var(--green); border-color: rgba(99, 214, 164, .3); background: rgba(99, 214, 164, .07); }
+  .wiz-badge.bad { color: var(--amber); border-color: rgba(246, 193, 119, .3); background: var(--amber-soft); }
+  .wiz-error {
+    margin-top: 10px; padding: 9px 10px; border-radius: 9px; font-size: 11.5px; line-height: 1.6;
+    border: 1px solid rgba(255, 123, 114, .32); background: rgba(255, 123, 114, .07); color: #ffc0bb;
+  }
+  .wiz-error b { display: block; color: #ffd6d2; font-size: 12px; }
+  .wiz-summary { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+  .wiz-summary li { position: relative; padding-left: 16px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .wiz-summary li::before { content: "✓"; position: absolute; left: 0; color: var(--green); }
+  .wiz-kv {
+    display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px; padding: 10px;
+    border-radius: 9px; border: 1px solid var(--line-soft); background: #0e1418;
+    color: var(--faint); font-size: 11px;
+  }
+  .wiz-kv b { color: var(--muted); font-weight: 500; }
+  .wiz-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px 16px; border-top: 1px solid var(--line-soft); }
+  .wiz-foot .spacer { flex: 1; }
+  .wiz-primary {
+    height: 32px; padding: 0 14px; border-radius: 8px; border: 1px solid rgba(94, 234, 212, .4);
+    background: linear-gradient(145deg, var(--accent), #35c7b5); color: var(--accent-ink);
+    font-weight: 700; font-size: 12px;
+  }
+  .wiz-primary:disabled { opacity: .45; cursor: default; }
+  .wiz-secondary {
+    height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--muted); font-size: 12px;
+  }
+  .wiz-trial-verdict {
+    display: flex; align-items: center; gap: 9px; padding: 11px 12px; border-radius: 10px;
+    border: 1px solid var(--line-soft); background: #0e1418;
+  }
+  .wiz-trial-verdict.ok { border-color: rgba(99, 214, 164, .3); background: rgba(99, 214, 164, .06); color: #b8ecd5; }
+  .wiz-trial-verdict.bad { border-color: rgba(246, 193, 119, .3); background: var(--amber-soft); color: #e8c690; }
+  .wiz-trial-verdict .big { font-size: 20px; }
+  .wiz-trial-verdict .t { font-size: 12.5px; }
+  .wiz-trial-verdict .d { color: var(--faint); font-size: 11px; }
+  .wiz-steps-list { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; }
+  .wiz-task {
+    display: flex; gap: 8px; align-items: flex-start; padding: 7px 9px; border-radius: 7px;
+    border: 1px solid var(--line-soft); background: #0e1418; font-size: 11.5px;
+  }
+  .wiz-task .dot { flex: none; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--amber); }
+  .wiz-task.completed .dot { background: var(--green); }
+  .wiz-task.failed .dot { background: var(--red); }
+  .wiz-task .name { color: var(--text); font-family: var(--mono); font-size: 11px; }
+  .wiz-task .detail { margin-top: 2px; color: var(--faint); font-size: 11px; word-break: break-word; }
+  .wiz-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+  .wiz-stat { padding: 9px 10px; border-radius: 9px; border: 1px solid var(--line-soft); background: #0e1418; }
+  .wiz-stat .k { color: var(--faint); font-size: 10.5px; }
+  .wiz-stat .v { margin-top: 2px; color: var(--text); font: 13px var(--mono); word-break: break-all; }
+  .wiz-file {
+    margin-top: 10px; padding: 8px 10px; border-radius: 8px; border: 1px dashed var(--line);
+    color: var(--muted); font-size: 11.5px;
+  }
+  .wiz-busy { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+  .wiz-busy .spin {
+    width: 12px; height: 12px; border: 2px solid var(--line);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   .toasts { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 30; pointer-events: none; }
   .toast {
     max-width: 520px; padding: 9px 13px; border-radius: 9px;
@@ -421,9 +553,16 @@
     </div>
     <div class="topbar-actions">
       <span id="conn" class="conn"><i></i><span id="connText">连接中</span></span>
+      <button id="wizardOpen" class="btn" type="button">首次使用向导</button>
       <button id="newChat" class="btn" type="button" disabled>新对话</button>
     </div>
   </header>
+
+  <div id="envBar" class="env-bar" hidden>
+    <span class="env-title">环境</span>
+    <div id="envItems" class="env-items"></div>
+    <button id="envWizard" class="btn tiny" type="button">向导</button>
+  </div>
 
   <main class="grid">
     <section class="panel" aria-label="对话">
@@ -479,6 +618,19 @@
 
 <div id="toasts" class="toasts" aria-live="polite"></div>
 
+<dialog id="wizardDialog">
+  <div class="wiz-head">
+    <div>
+      <span class="kicker">首次使用向导</span>
+      <h2>用鼠标完成配置，并当场试跑</h2>
+    </div>
+    <button id="wizardClose" type="button" aria-label="关闭">×</button>
+  </div>
+  <div id="wizardSteps" class="wiz-steps"></div>
+  <div id="wizardBody" class="wiz-body"></div>
+  <div id="wizardFoot" class="wiz-foot"></div>
+</dialog>
+
 <dialog id="reportDialog">
   <div class="dialog-head">
     <h2 id="dialogTitle">报告</h2>
@@ -519,6 +671,12 @@
   const dialogTitleEl = $('dialogTitle')
   const dialogMetaEl = $('dialogMeta')
   const dialogReportEl = $('dialogReport')
+  const wizardDialogEl = $('wizardDialog')
+  const wizardStepsEl = $('wizardSteps')
+  const wizardBodyEl = $('wizardBody')
+  const wizardFootEl = $('wizardFoot')
+  const envBarEl = $('envBar')
+  const envItemsEl = $('envItems')
 
   const STATE = {
     token: '',
@@ -541,6 +699,21 @@
     busyAnswers: new Set(),
     autoScroll: true,
     booted: false,
+  }
+
+  const WIZ = {
+    status: null,
+    step: 1,
+    open: false,
+    busy: null,
+    statusPending: 0,
+    form: { provider: '', baseURL: '', model: '', apiKey: '' },
+    formTouched: false,
+    preview: null,
+    saved: null,
+    trial: null,
+    error: null,
+    autoOpened: false,
   }
 
   function el(tag, className, text) {
@@ -1320,6 +1493,7 @@
     renderRuns()
     if (STATE.messages.length === 0) renderEmpty()
     loadTools()
+    wizardLoad({ probe: false, auto: true })
   }
 
   const toolCountEl = $('toolCount')
@@ -1370,6 +1544,546 @@
       renderTools(await api(`/api/console/tools?sessionId=${encodeURIComponent(STATE.sessionId)}`))
     } catch (error) {
       renderTools({ reason: messageOf(error) })
+    }
+  }
+
+  // ---------- first-use wizard ----------
+
+  const WIZ_STEP_LABELS = ['环境自检', 'key 与模型', '确认写入', '试跑示例']
+
+  function wizardBusyNode(text) {
+    const row = el('div', 'wiz-busy')
+    row.append(el('span', 'spin'))
+    row.append(el('span', '', text))
+    return row
+  }
+
+  function wizardErrorNode() {
+    if (!WIZ.error) return null
+    const box = el('div', 'wiz-error')
+    box.append(el('b', '', WIZ.error.message))
+    if (WIZ.error.hint) box.append(el('div', '', WIZ.error.hint))
+    return box
+  }
+
+  function updateEnvBar(status) {
+    if (!status) {
+      envBarEl.hidden = true
+      return
+    }
+    envBarEl.hidden = false
+    envItemsEl.replaceChildren()
+    const items = Array.isArray(status.environment) ? status.environment : []
+    for (const id of ['host', 'plugin', 'tools', 'model', 'key']) {
+      const item = items.find(entry => entry.id === id)
+      if (!item) continue
+      const chip = el('button', `env-item ${item.ok ? 'ok' : 'bad'}`)
+      chip.type = 'button'
+      chip.title = item.hint || item.value || ''
+      chip.append(el('span', 'dot'))
+      chip.append(el('span', '', item.label))
+      chip.append(el('span', 'env-value', item.value || ''))
+      if (!item.ok) chip.append(el('span', 'env-action', '点这里处理'))
+      chip.addEventListener('click', () => wizardOpen(item.action?.step || 1))
+      envItemsEl.append(chip)
+    }
+    if (items.length === 0) envItemsEl.append(el('span', 'env-title', '环境检查不可用'))
+  }
+
+  async function wizardLoad({ probe = false, auto = false } = {}) {
+    if (!STATE.token) return
+    // Status loads overlap (bootstrap, auto-open, retry); a counter keeps one
+    // finishing load from clearing another's state or leaving a stale busy flag.
+    WIZ.statusPending += 1
+    if (WIZ.open) renderWizard()
+    try {
+      const data = await api(`/api/console/wizard/status?probe=${probe ? 1 : 0}`)
+      WIZ.status = data
+      if (!WIZ.formTouched) {
+        WIZ.form.provider = data.provider || data.defaults.provider
+        WIZ.form.baseURL = data.baseURL || data.defaults.baseURL
+        WIZ.form.model = data.model || data.defaults.model
+      }
+      WIZ.error = null
+      updateEnvBar(data)
+      if (auto && data.needsSetup && !WIZ.autoOpened) {
+        WIZ.autoOpened = true
+        wizardOpen(1)
+      }
+    } catch (error) {
+      if (error.status === 401) return
+      if (WIZ.open) {
+        WIZ.error = { message: messageOf(error), hint: error.hint, code: error.code }
+      }
+    } finally {
+      WIZ.statusPending = Math.max(0, WIZ.statusPending - 1)
+      if (WIZ.open) renderWizard()
+    }
+  }
+
+  function wizardOpen(step) {
+    WIZ.open = true
+    if (!wizardDialogEl.open) {
+      if (typeof wizardDialogEl.showModal === 'function') wizardDialogEl.showModal()
+      else wizardDialogEl.setAttribute('open', '')
+    }
+    if (step) WIZ.step = step
+    WIZ.error = null
+    renderWizard()
+    if (!WIZ.status) wizardLoad({ probe: true })
+    else if (WIZ.step === 1) wizardLoad({ probe: false })
+  }
+
+  function wizardClose() {
+    WIZ.open = false
+    if (wizardDialogEl.open) wizardDialogEl.close()
+  }
+
+  function wizardGo(step) {
+    if (step === 3 && !WIZ.preview) return
+    if (step === 4 && !WIZ.saved) return
+    WIZ.step = step
+    WIZ.error = null
+    renderWizard()
+  }
+
+  function wizardHandleAction(action) {
+    if (!action) return
+    if (action.kind === 'retry') {
+      wizardLoad({ probe: true })
+      return
+    }
+    if (action.kind === 'reload') {
+      window.location.reload()
+      return
+    }
+    wizardGo(action.step || 1)
+  }
+
+  function keyBadgeState() {
+    const failed = WIZ.error && ['key-rejected', 'model-missing', 'base-unreachable', 'base-timeout', 'endpoint-http', 'endpoint-invalid', 'base-tls'].includes(WIZ.error.code)
+    if (failed) return { text: '未通过', kind: 'bad' }
+    if (WIZ.preview?.key?.verified) return { text: '已验证', kind: 'ok' }
+    if (WIZ.status?.key?.verified) return { text: '已验证', kind: 'ok' }
+    if (WIZ.status?.key?.configured) return { text: '未验证', kind: 'bad' }
+    if (WIZ.form.apiKey?.trim()) return { text: '未验证', kind: 'bad' }
+    return { text: '未配置', kind: '' }
+  }
+
+  function updateKeyBadge() {
+    const badge = $('wizKeyBadge')
+    if (!badge) return
+    const state = keyBadgeState()
+    badge.className = `wiz-badge ${state.kind}`.trim()
+    badge.textContent = state.text
+  }
+
+  function renderWizard() {
+    if (!WIZ.open) return
+    wizardStepsEl.replaceChildren()
+    WIZ_STEP_LABELS.forEach((label, index) => {
+      const number = index + 1
+      const node = el(
+        'div',
+        `wiz-step${number === WIZ.step ? ' active' : ''}${number < WIZ.step ? ' done' : ''}`,
+        `${number} ${label}`,
+      )
+      wizardStepsEl.append(node)
+    })
+    wizardBodyEl.replaceChildren()
+    if (WIZ.step === 1) renderWizardStep1()
+    else if (WIZ.step === 2) renderWizardStep2()
+    else if (WIZ.step === 3) renderWizardStep3()
+    else renderWizardStep4()
+  }
+
+  function renderWizardStep1() {
+    wizardBodyEl.append(el('p', 'wiz-lead', '先看看宿主和环境是否准备好了。不通过的项可以直接点“点这里处理”，不需要读错误码。'))
+    if (!WIZ.status) {
+      wizardBodyEl.append(WIZ.statusPending > 0 ? wizardBusyNode('正在检查环境…') : el('p', 'wiz-note', '还没有读到检查结果。'))
+    } else {
+      const list = el('div', 'wiz-checks')
+      for (const item of WIZ.status.environment || []) {
+        const row = el('div', `wiz-check${item.ok ? '' : ' bad'}`)
+        row.append(el('span', 'dot'))
+        const body = el('div', 'body')
+        const line = el('div', 'label', item.label)
+        if (item.value) line.append(el('span', 'value', item.value))
+        body.append(line)
+        if (item.hint) body.append(el('div', 'hint', item.hint))
+        row.append(body)
+        if (!item.ok && item.action) {
+          const button = el('button', '', '点这里处理')
+          button.type = 'button'
+          button.addEventListener('click', () => wizardHandleAction(item.action))
+          row.append(button)
+        }
+        list.append(row)
+      }
+      wizardBodyEl.append(list)
+      if (WIZ.status.profile?.patchPath) {
+        wizardBodyEl.append(el('p', 'wiz-note', `配置文件：${WIZ.status.profile.patchPath}。写入前会自动备份，失败可以一键回滚。`))
+      }
+    }
+    const error = wizardErrorNode()
+    if (error) wizardBodyEl.append(error)
+
+    wizardFootEl.replaceChildren()
+    const retry = el('button', 'wiz-secondary', WIZ.statusPending > 0 ? '检查中…' : '重新检查')
+    retry.type = 'button'
+    retry.disabled = WIZ.statusPending > 0
+    retry.addEventListener('click', () => wizardLoad({ probe: true }))
+    const next = el('button', 'wiz-primary', '下一步：填写 key')
+    next.type = 'button'
+    next.disabled = !WIZ.status
+    next.addEventListener('click', () => wizardGo(2))
+    wizardFootEl.append(retry, el('span', 'spacer'), next)
+  }
+
+  function wizardField(key, label, type, placeholder, hint) {
+    const wrap = el('div', 'wiz-field')
+    const id = `wiz-${key}`
+    const labelEl = el('label', '', label)
+    labelEl.htmlFor = id
+    const input = document.createElement('input')
+    input.id = id
+    input.type = type || 'text'
+    input.value = WIZ.form[key] ?? ''
+    if (placeholder) input.placeholder = placeholder
+    if (type === 'password') input.autocomplete = 'off'
+    input.spellcheck = false
+    input.addEventListener('input', () => {
+      WIZ.form[key] = input.value
+      WIZ.formTouched = true
+      if (key === 'apiKey') updateKeyBadge()
+    })
+    wrap.append(labelEl, input)
+    if (hint) wrap.append(el('div', 'wiz-note', hint))
+    return wrap
+  }
+
+  function renderWizardStep2() {
+    const status = WIZ.status
+    wizardBodyEl.append(el('p', 'wiz-lead', '填你的 OpenAI 兼容端点。默认值已经填好，通常只需要粘贴 key。'))
+    const form = el('div', 'wiz-form')
+    form.append(wizardField('provider', '提供商名', 'text', 'haoduo', '小写字母、数字、短横线，会作为配置里的提供方 id。'))
+    form.append(wizardField('baseURL', 'Base URL', 'text', 'https://byte.haoduotoken.com/v1', 'OpenAI 兼容端点，通常以 /v1 结尾。'))
+    form.append(wizardField('model', '模型名', 'text', 'gpt-6.1-sol', '提供商控制台里的模型 id。'))
+
+    const keyWrap = el('div', 'wiz-field')
+    const labelEl = el('label', '', 'API key')
+    labelEl.htmlFor = 'wiz-apiKey'
+    const row = el('div', 'wiz-key-row')
+    const input = document.createElement('input')
+    input.id = 'wiz-apiKey'
+    input.type = 'password'
+    input.autocomplete = 'off'
+    input.spellcheck = false
+    input.value = WIZ.form.apiKey ?? ''
+    input.placeholder = status?.key?.configured
+      ? `已保存 ${status.key.mask || '（内容不可回读）'}，留空则沿用`
+      : '粘贴你的 API key'
+    input.addEventListener('input', () => {
+      WIZ.form.apiKey = input.value
+      WIZ.formTouched = true
+      updateKeyBadge()
+    })
+    const badgeState = keyBadgeState()
+    const badge = el('span', `wiz-badge ${badgeState.kind}`.trim(), badgeState.text)
+    badge.id = 'wizKeyBadge'
+    row.append(input, badge)
+    keyWrap.append(labelEl, row)
+    keyWrap.append(el('div', 'wiz-note', 'key 只写入宿主凭据库（或你已有的用户环境变量）；不会写进仓库、配置或日志，页面不显示完整值。'))
+    form.append(keyWrap)
+    wizardBodyEl.append(form)
+
+    const error = wizardErrorNode()
+    if (error) wizardBodyEl.append(error)
+
+    wizardFootEl.replaceChildren()
+    const back = el('button', 'wiz-secondary', '上一步')
+    back.type = 'button'
+    back.addEventListener('click', () => wizardGo(1))
+    const submit = el('button', 'wiz-primary', WIZ.busy === 'preview' ? '正在验证…' : '检查并预览')
+    submit.type = 'button'
+    submit.disabled = WIZ.busy === 'preview'
+    submit.addEventListener('click', wizardPreview)
+    wizardFootEl.append(back, el('span', 'spacer'), submit)
+  }
+
+  async function wizardPreview() {
+    if (WIZ.busy) return
+    WIZ.busy = 'preview'
+    WIZ.error = null
+    WIZ.preview = null
+    renderWizard()
+    try {
+      const body = {
+        provider: WIZ.form.provider.trim(),
+        baseURL: WIZ.form.baseURL.trim(),
+        model: WIZ.form.model.trim(),
+      }
+      if (WIZ.form.apiKey.trim()) body.apiKey = WIZ.form.apiKey.trim()
+      WIZ.preview = await api('/api/console/wizard/preview', { method: 'POST', body })
+      WIZ.step = 3
+    } catch (error) {
+      WIZ.error = { message: messageOf(error), hint: error.hint, code: error.code }
+    } finally {
+      WIZ.busy = null
+      renderWizard()
+    }
+  }
+
+  function renderWizardStep3() {
+    const preview = WIZ.preview
+    if (!preview) {
+      wizardBodyEl.append(el('p', 'wiz-note', '先回到上一步做一次检查。'))
+      wizardFootEl.replaceChildren()
+      const back = el('button', 'wiz-secondary', '返回')
+      back.type = 'button'
+      back.addEventListener('click', () => wizardGo(2))
+      wizardFootEl.append(back)
+      return
+    }
+    wizardBodyEl.append(el('p', 'wiz-lead', '这是将要写入的摘要。你不需要看 YAML；写入前会自动备份，失败可以一键回滚。'))
+    const list = el('ul', 'wiz-summary')
+    for (const line of preview.summary || []) list.append(el('li', '', line))
+    wizardBodyEl.append(list)
+
+    const kv = el('div', 'wiz-kv')
+    const add = (label, value) => {
+      const item = el('span')
+      item.append(el('b', '', `${label}：`))
+      item.append(document.createTextNode(value))
+      kv.append(item)
+    }
+    add('提供方', `${preview.provider} · ${preview.baseURL}`)
+    add('模型', preview.model)
+    add('key', `${preview.key.mask || '沿用已保存的 key'}（引用 ${preview.key.ref}）`)
+    add('配置文件', preview.target.patchPath)
+    add('备份', '写入前保存；可在下一步点“回滚上次写入”恢复')
+    wizardBodyEl.append(kv)
+
+    const error = wizardErrorNode()
+    if (error) wizardBodyEl.append(error)
+    if (WIZ.busy === 'save') wizardBodyEl.append(wizardBusyNode('正在写入配置并保存 key…'))
+    wizardBodyEl.append(el('p', 'wiz-note', preview.note || ''))
+
+    wizardFootEl.replaceChildren()
+    const back = el('button', 'wiz-secondary', '返回修改')
+    back.type = 'button'
+    back.disabled = WIZ.busy === 'save'
+    back.addEventListener('click', () => wizardGo(2))
+    const save = el('button', 'wiz-primary', WIZ.busy === 'save' ? '写入中…' : '写入配置')
+    save.type = 'button'
+    save.disabled = WIZ.busy === 'save'
+    save.addEventListener('click', wizardSave)
+    wizardFootEl.append(back, el('span', 'spacer'), save)
+  }
+
+  async function wizardSave() {
+    if (WIZ.busy) return
+    WIZ.busy = 'save'
+    WIZ.error = null
+    renderWizard()
+    try {
+      const body = {
+        provider: WIZ.form.provider.trim(),
+        baseURL: WIZ.form.baseURL.trim(),
+        model: WIZ.form.model.trim(),
+      }
+      if (WIZ.form.apiKey.trim()) body.apiKey = WIZ.form.apiKey.trim()
+      const data = await api('/api/console/wizard/save', { method: 'POST', body })
+      WIZ.saved = data
+      WIZ.preview = null
+      WIZ.form.apiKey = ''
+      WIZ.formTouched = false
+      WIZ.step = 4
+      pushToast(`配置已写入${data.backup ? `（备份 ${data.backup.id}）` : ''}。`, 'ok')
+      await wizardLoad({ probe: false })
+    } catch (error) {
+      await wizardLoad({ probe: false }).catch(() => {})
+      WIZ.error = { message: messageOf(error), hint: error.hint, code: error.code }
+    } finally {
+      WIZ.busy = null
+      renderWizard()
+    }
+  }
+
+  function trialStatusLabel(status) {
+    if (status === 'completed') return '已完成'
+    if (status === 'failed') return '失败'
+    return '进行中'
+  }
+
+  function renderWizardStep4() {
+    const trial = WIZ.trial
+    if (WIZ.busy === 'trial') {
+      wizardBodyEl.append(wizardBusyNode('正在临时目录里跑一个小任务（建文件并读回）…'))
+      wizardBodyEl.append(el('p', 'wiz-note', '不会碰你的项目目录。模型回复和工具调用会显示在下面。'))
+      wizardFootEl.replaceChildren()
+      const again = el('button', 'wiz-secondary', '试跑中…')
+      again.type = 'button'
+      again.disabled = true
+      wizardFootEl.append(again, el('span', 'spacer'))
+      return
+    }
+
+    if (!trial) {
+      wizardBodyEl.append(el('p', 'wiz-lead', '最后一步：在系统临时目录里建一个文件并读回。它不会碰你的真实项目。'))
+      if (WIZ.saved) {
+        const kv = el('div', 'wiz-kv')
+        const add = (label, value) => {
+          const item = el('span')
+          item.append(el('b', '', `${label}：`))
+          item.append(document.createTextNode(value))
+          kv.append(item)
+        }
+        add('已写入', WIZ.saved.target.patchPath)
+        add('备份', WIZ.saved.backup?.id || '无')
+        add('key', WIZ.saved.key.mask || '已保存')
+        wizardBodyEl.append(kv)
+      }
+      const error = wizardErrorNode()
+      if (error) wizardBodyEl.append(error)
+      wizardFootEl.replaceChildren()
+      const start = el('button', 'wiz-primary', '开始试跑')
+      start.type = 'button'
+      start.addEventListener('click', wizardTrial)
+      wizardFootEl.append(start, el('span', 'spacer'))
+      return
+    }
+
+    const emptyRun = !trial.ok && !trial.message && !(trial.usage?.modelCalls)
+    const verdict = el('div', `wiz-trial-verdict ${trial.ok ? 'ok' : 'bad'}`)
+    verdict.append(el('span', 'big', trial.ok ? '✓' : '!'))
+    const text = el('div')
+    text.append(el('div', 't', trial.ok
+      ? '试跑成功：它真的在临时目录里干了活。'
+      : (emptyRun ? '试跑没有跑起来' : '试跑没有完全成功')))
+    text.append(el('div', 'd', trial.ok
+      ? `用时 ${(trial.elapsedMs / 1000).toFixed(1)} 秒 · 会话 ${shortId(trial.sessionId)}`
+      : (emptyRun
+        ? '这一轮没有模型回复。宿主可能还没切换到新模型，点“重新试跑”再来一次。'
+        : (trial.hint || '看下面的步骤和提示。'))))
+    verdict.append(text)
+    wizardBodyEl.append(verdict)
+
+    wizardBodyEl.append(el('p', 'wiz-note', `子任务 / 工具步骤（${trial.subtasks?.length || 0}）`))
+    if (trial.subtasks?.length) {
+      const list = el('div', 'wiz-steps-list')
+      for (const step of trial.subtasks) {
+        const row = el('div', `wiz-task ${step.status || ''}`.trim())
+        row.append(el('span', 'dot'))
+        const body = el('div')
+        body.append(el('span', 'name', `${step.index}. ${step.title}`))
+        body.append(el('span', 'env-value', ` ${trialStatusLabel(step.status)}`))
+        if (step.detail) body.append(el('div', 'detail', step.detail))
+        row.append(body)
+        list.append(row)
+      }
+      wizardBodyEl.append(list)
+    } else {
+      wizardBodyEl.append(el('p', 'wiz-note', emptyRun
+        ? '这一轮没有工具调用，也没有模型回复。'
+        : '这一轮没有工具调用；模型可能直接回答了。'))
+    }
+
+    const stats = el('div', 'wiz-stats')
+    const stat = (key, value) => {
+      const box = el('div', 'wiz-stat')
+      box.append(el('div', 'k', key))
+      box.append(el('div', 'v', value))
+      stats.append(box)
+    }
+    stat('tokens', formatTokens(trial.usage?.totalTokens))
+    stat('花费', trial.cost
+      ? (trial.cost.complete
+        ? trial.cost.text
+        : (trial.cost.text === '$0' ? '未配置单价' : `${trial.cost.text}（部分未定价）`))
+      : '未配置单价')
+    stat('模型调用', String(trial.usage?.modelCalls || 0))
+    wizardBodyEl.append(stats)
+
+    const file = trial.file
+    const fileLine = file?.verified
+      ? `临时文件已创建并读回：${file.name}（${file.bytes} 字节，内容包含 ok）`
+      : file?.exists
+        ? `临时文件存在，但内容不是约定的 ok：${file.preview ?? ''}`
+        : '临时目录里没有找到约定的文件。'
+    wizardBodyEl.append(el('div', 'wiz-file', fileLine))
+
+    if (trial.message) wizardBodyEl.append(el('p', 'wiz-note', `模型回复：${trial.message}`))
+    const error = wizardErrorNode()
+    if (error) wizardBodyEl.append(error)
+
+    wizardFootEl.replaceChildren()
+    const again = el('button', 'wiz-secondary', '重新试跑')
+    again.type = 'button'
+    again.addEventListener('click', wizardTrial)
+    wizardFootEl.append(again)
+    const backup = WIZ.status?.backups?.[0]
+    if (backup) {
+      const rollback = el('button', 'wiz-secondary', `回滚上次写入（${backup.id}）`)
+      rollback.type = 'button'
+      rollback.addEventListener('click', wizardRollback)
+      wizardFootEl.append(rollback)
+    }
+    const done = el('button', 'wiz-primary', '完成')
+    done.type = 'button'
+    done.addEventListener('click', () => {
+      wizardClose()
+      inputEl.focus()
+    })
+    wizardFootEl.append(el('span', 'spacer'), done)
+  }
+
+  async function wizardTrial() {
+    if (WIZ.busy) return
+    WIZ.busy = 'trial'
+    WIZ.error = null
+    WIZ.trial = null
+    renderWizard()
+    try {
+      const data = await api('/api/console/wizard/trial', { method: 'POST', body: {} })
+      WIZ.trial = data
+      if (data.ok) pushToast('试跑成功：它真的在临时目录里干了活。', 'ok')
+      else pushToast('试跑没成功，按提示处理。', 'err')
+      await wizardLoad({ probe: false })
+    } catch (error) {
+      WIZ.error = {
+        message: messageOf(error),
+        hint: error.hint || (!error.status ? '宿主可能正在热加载配置，等两秒再点一次“开始试跑”。' : null),
+        code: error.code,
+      }
+    } finally {
+      WIZ.busy = null
+      renderWizard()
+    }
+  }
+
+  async function wizardRollback() {
+    const backup = WIZ.status?.backups?.[0]
+    if (!backup || WIZ.busy) return
+    const when = backup.createdAt ? new Date(backup.createdAt).toLocaleString('zh-CN') : backup.id
+    if (!window.confirm(`回滚到 ${when} 写入前的配置？API key 不会被删除。`)) return
+    WIZ.busy = 'rollback'
+    WIZ.error = null
+    renderWizard()
+    try {
+      await api('/api/console/wizard/rollback', { method: 'POST', body: { id: backup.id } })
+      WIZ.saved = null
+      WIZ.preview = null
+      WIZ.trial = null
+      WIZ.step = 1
+      WIZ.formTouched = false
+      pushToast('已回滚到写入前的配置。', 'ok')
+      await wizardLoad({ probe: true })
+    } catch (error) {
+      WIZ.error = { message: messageOf(error), hint: error.hint, code: error.code }
+    } finally {
+      WIZ.busy = null
+      renderWizard()
     }
   }
 
@@ -1575,6 +2289,13 @@
   }
 
   newChatEl.addEventListener('click', newConversation)
+  $('wizardOpen').addEventListener('click', () => wizardOpen(1))
+  $('envWizard').addEventListener('click', () => wizardOpen(1))
+  $('wizardClose').addEventListener('click', wizardClose)
+  wizardDialogEl.addEventListener('click', event => {
+    if (event.target === wizardDialogEl) wizardClose()
+  })
+  wizardDialogEl.addEventListener('close', () => { WIZ.open = false })
   $('dialogClose').addEventListener('click', () => reportDialogEl.close())
   reportDialogEl.addEventListener('click', event => {
     if (event.target === reportDialogEl) reportDialogEl.close()
