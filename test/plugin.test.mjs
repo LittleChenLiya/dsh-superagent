@@ -20,7 +20,7 @@ function gate() {
  * Mount the plugin against a fake host: only `tools.register`, `subagents`, and
  * `agents` are provided, which is the whole injected surface.
  */
-test('the plugin mounts, registers the eight tools, and runs a goal end to end', async () => {
+test('the plugin mounts, registers the ten tools, and runs a goal end to end', async () => {
   const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
   const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
   const previousHome = process.env.DSH_HOME
@@ -52,9 +52,9 @@ test('the plugin mounts, registers the eight tools, and runs a goal end to end',
     assert.deepEqual(
       [...tools.keys()].sort(),
       [
-        'superagent_answer', 'superagent_cancel', 'superagent_followup', 'superagent_list',
-        'superagent_memory', 'superagent_resume', 'superagent_start', 'superagent_status',
-        'superagent_template',
+        'superagent_answer', 'superagent_audit', 'superagent_cancel', 'superagent_followup',
+        'superagent_list', 'superagent_memory', 'superagent_resume', 'superagent_start',
+        'superagent_status', 'superagent_template',
       ],
     )
 
@@ -323,7 +323,7 @@ test('without a subagents service the tools still mount and explain what is miss
 
   try {
     apply(ctx, { stateDir })
-    assert.equal(tools.size, 9, 'the tools must not vanish when the service is optional')
+    assert.equal(tools.size, 10, 'the tools must not vanish when the service is optional')
 
     const started = await tools.get('superagent_start').execute({ goal: 'needs workers' }, { agent: { id: 'session-1' } })
     assert.match(started, /subagent service is unavailable/)
@@ -968,5 +968,46 @@ test('follow-up and answer say what they did and when it takes effect', async ()
     else process.env.DSH_HOME = previousHome
     await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
     await fsp.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+test('a policy file beside the state refuses a start and leaves a blocked event', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  const tools = new Map()
+  const ctx = {
+    tools: { register: tool => tools.set(tool.name, tool) },
+    subagents: {
+      async startActivation() {
+        throw new Error('a refused start must not reach a subagent')
+      },
+    },
+    get: () => undefined,
+  }
+
+  try {
+    await fsp.writeFile(path.join(stateDir, 'policy.json'), '{ "defaultLevel": "deny" }\n', 'utf8')
+    apply(ctx, { stateDir, notifyOnComplete: false })
+
+    const refused = await tools.get('superagent_start').execute(
+      { goal: 'spend money' },
+      { agent: { id: 'session-1' } },
+    )
+    assert.match(refused, /permission policy/)
+    assert.match(refused, /audit event evt_/)
+    assert.match(await tools.get('superagent_list').execute({}), /^no superagent runs recorded/)
+
+    const audit = await tools.get('superagent_audit').execute({})
+    assert.match(audit, /blocked 1/)
+    assert.match(audit, /defaultLevel/)
+    assert.match(audit, /spend money/)
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await fsp.rm(stateDir, { recursive: true, force: true })
+    await fsp.rm(home, { recursive: true, force: true })
   }
 })

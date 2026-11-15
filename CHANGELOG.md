@@ -24,6 +24,24 @@ README is updated to the version being released.
   audited override. Blocked calls surface in `superagent_status` and in a
   `## Safety guard` report section. See “Worker safety guard” in the README
   for the full defaults and their rationale.
+- **Permission policy.** `<stateDir>/policy.json` (or `policyFile`) lets a person
+  say which paths may be written, which commands may run, which action classes
+  need a human, and what the default level is per run. The file accepts `//`,
+  `#`, and `/* */` comments, validates against a schema, and reports every
+  problem with file, line, and column. It only tightens: deny wins, explicit
+  allow entries record what they relaxed, and an invalid policy fails closed. A
+  start the policy denies is refused before any run record exists; a start held
+  for confirmation needs `approve_policy: true`, which is logged.
+- **Audit trail.** Append-only JSONL at `<stateDir>/audit/audit.jsonl`: tool
+  calls, path writes, commands, blocks, approvals, attention decisions, and run
+  lifecycle, each with run id, subtask id, actor, timestamp, decision, result,
+  and duration. Appends are serialized in-process and locked across processes;
+  a torn tail or a damaged line is reported and skipped instead of hiding the
+  log. `audit: false` turns the trail off without changing run behaviour.
+- **`superagent_audit`** queries by run, subtask, kind, decision, result, target,
+  and time window, and exports the matching events as one JSONL or CSV file.
+- `createAuditor(...).attachGuard(fn)` is the seam for a separate path/command
+  guard: it can tighten a decision, never relax one.
 
 ## 0.11.0 — 2026-11-15
 
@@ -147,6 +165,7 @@ still ships one file per module from `lib/`.
 - Status prints the attention id, any recorded answer, and how many instructions
   were applied, are waiting, or never took effect; notifications lead with the
   question id so `superagent_answer` can be called directly.
+
 
 
 ## 0.10.0 — 2026-11-15

@@ -290,7 +290,9 @@ test('a queued run fails when no slot frees before queueTimeoutMinutes', async (
   })
   assert.equal(queued.queue.waiting, true)
   assert.equal(timers.length, 1)
-  assert.equal(timers[0].ms, 30 * 60000)
+  // The timer is armed for the time left on the deadline, so a few milliseconds
+  // may already have elapsed between writing the run and scheduling it.
+  assert.ok(timers[0].ms <= 30 * 60000 && timers[0].ms > 30 * 60000 - 1000, `timeout was ${timers[0].ms}ms`)
 
   timers[0].fn()
   const expired = await orchestrator.status(queued.id, 10)
