@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 Doc-only releases: npm serves the README from the tarball, so a README edit is
 invisible on the package page until something is published. When the edit
@@ -7,6 +7,26 @@ steps — it gets its own patch version (0.9.2, 0.9.3). Typos and wording ride
 along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
+
+## 0.14.1 — 2026-11-15
+
+### Added
+
+- **Plugin card metadata.** `icon.svg` is declared by the package manifest and
+  exported as `./icon`; `locale/en.json` and `locale/zh.json` carry the title,
+  description, and a `meta.detail` document. In a Chinese UI the card reads
+  “超级智能体” with a Chinese one-line description, and the detail page renders
+  `docs/DETAIL.zh.md` instead of the English README.
+- **A format-1 plugin index** at `plugin-index.json`, with the package name, a
+  Chinese title, and a `git` source pinned to a full 40-hex commit, so the
+  Discover page can add the index and install or update the plugin in one step.
+  The public URL and the two-step instructions are in the README.
+
+### Changed
+
+- `README.md` is now Simplified Chinese-first; `README.en.md` keeps the English
+  text and both open with a language switch. `README.zh.md` mirrors the Chinese
+  page, and `package.json`'s `description` is Chinese.
 
 ## 0.14.0 — 2026-11-15
 

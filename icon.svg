@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Superagent">
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="#0f766e"/>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="none" stroke="#99f6e4" stroke-width="16"/>
+  <path d="M256 148v44M256 192H144v56M256 192h112v56M256 192v56" fill="none" stroke="#f0fdfa" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="256" cy="116" r="40" fill="#f0fdfa"/>
+  <circle cx="144" cy="280" r="34" fill="#f0fdfa"/>
+  <circle cx="256" cy="280" r="34" fill="#f0fdfa"/>
+  <circle cx="368" cy="280" r="34" fill="#f0fdfa"/>
+  <rect x="144" y="352" width="224" height="44" rx="22" fill="#f0fdfa"/>
+</svg>
