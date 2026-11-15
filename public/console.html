@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Superagent Console</title>
+<title>Superagent 专属空间</title>
 <style>
   :root {
     color-scheme: dark;
@@ -45,6 +45,7 @@
 
   .shell { height: 100%; display: flex; flex-direction: column; }
   .topbar {
+    position: relative; z-index: 22;
     flex: 0 0 58px;
     display: flex; align-items: center; gap: 18px;
     padding: 0 20px;
@@ -87,11 +88,6 @@
   .btn:hover { color: var(--text); border-color: #35464f; background: #172028; }
   .btn:disabled { opacity: .45; cursor: default; }
 
-  .grid {
-    flex: 1; min-height: 0;
-    display: grid; grid-template-columns: minmax(0, 1fr) 392px;
-    gap: 14px; padding: 14px 18px 18px;
-  }
   .panel {
     min-height: 0; display: flex; flex-direction: column;
     border: 1px solid var(--line-soft); border-radius: var(--radius);
@@ -231,12 +227,6 @@
   .send:disabled { opacity: .35; cursor: default; }
   .composer.note { color: var(--faint); font-size: 12px; text-align: center; padding: 18px; }
 
-  .runs-head {
-    display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
-    padding: 16px 17px 13px; border-bottom: 1px solid var(--line-soft);
-  }
-  .runs-head h2 { margin: 0; font-size: 14px; }
-  .runs-head p { margin: 3px 0 0; color: var(--faint); font-size: 11px; }
   .count {
     min-width: 24px; height: 22px; padding: 0 7px; border-radius: 999px;
     display: inline-grid; place-items: center;
@@ -244,15 +234,6 @@
     font: 11px var(--mono);
   }
   .tools:empty { display: none; }
-  .tools-panel { border-bottom: 1px solid var(--line-soft); padding: 10px 14px; }
-  .tools-panel summary {
-    display: flex; align-items: center; gap: 8px; cursor: pointer;
-    color: var(--muted); font-size: 12px; list-style: none;
-  }
-  .tools-panel summary::-webkit-details-marker { display: none; }
-  .tools-panel summary::before { content: "▸"; color: var(--faint); font-size: 10px; }
-  .tools-panel[open] summary::before { content: "▾"; }
-  .tools-panel .count { margin-left: auto; }
   .tools-note { margin: 7px 0 0; color: var(--faint); font-size: 11px; line-height: 1.6; }
   .tool-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; max-height: 132px; overflow-y: auto; }
   .tool-name {
@@ -260,25 +241,6 @@
     background: #121a20; color: var(--muted); font: 10.5px var(--mono);
   }
   .tool-name.on { border-color: #2c5a48; color: #9fe0c2; }
-  .run-list { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
-  .run-empty { padding: 26px 18px; color: var(--faint); text-align: center; font-size: 12px; line-height: 1.7; }
-  .run-empty .line { display: block; width: 30px; height: 1px; margin: 12px auto; background: var(--line); }
-  .run {
-    position: relative; margin-bottom: 10px; padding: 12px;
-    border: 1px solid var(--line-soft); border-radius: 11px;
-    background: #10161b;
-  }
-  .run::before {
-    content: ""; position: absolute; left: 0; top: 11px; bottom: 11px; width: 2px; border-radius: 2px;
-    background: var(--line);
-  }
-  .run.running::before { background: var(--amber); }
-  .run.completed::before { background: var(--green); }
-  .run.failed::before, .run.interrupted::before { background: var(--red); }
-  .run-top { display: flex; align-items: flex-start; gap: 8px; }
-  .run-title { flex: 1; min-width: 0; }
-  .run-title h3 { margin: 0; font-size: 12.5px; font-weight: 600; line-height: 1.45; word-break: break-word; }
-  .run-title p { margin: 3px 0 0; color: var(--faint); font: 10.5px var(--mono); }
   .status-pill {
     flex: none; padding: 2px 7px; border-radius: 999px;
     border: 1px solid var(--line); color: var(--muted); font-size: 10.5px; white-space: nowrap;
@@ -286,19 +248,8 @@
   .status-pill.running { color: var(--amber); border-color: rgba(246, 193, 119, .32); background: var(--amber-soft); }
   .status-pill.completed { color: var(--green); border-color: rgba(99, 214, 164, .32); background: rgba(99, 214, 164, .07); }
   .status-pill.failed, .status-pill.interrupted { color: var(--red); border-color: rgba(255, 123, 114, .32); background: rgba(255, 123, 114, .07); }
-  .run-meta { display: flex; flex-wrap: wrap; gap: 10px; margin: 9px 0 0; color: var(--faint); font-size: 11px; }
-  .run-meta b { color: var(--muted); font-weight: 600; }
   .progress { height: 3px; margin: 9px 0 0; border-radius: 999px; background: #1b252c; overflow: hidden; }
   .progress i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #3dc6b5, var(--accent)); transition: width .3s; }
-  .subtasks { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
-  .subtask {
-    max-width: 100%; padding: 2px 7px; border-radius: 6px;
-    border: 1px solid var(--line-soft); color: var(--faint); font-size: 10.5px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .subtask.completed { color: var(--green); border-color: rgba(99, 214, 164, .22); }
-  .subtask.running { color: var(--amber); border-color: rgba(246, 193, 119, .22); }
-  .subtask.failed { color: var(--red); border-color: rgba(255, 123, 114, .22); }
   .attention-card {
     margin-top: 10px; padding: 10px; border-radius: 9px;
     border: 1px solid rgba(246, 193, 119, .36); background: var(--amber-soft);
@@ -308,6 +259,31 @@
   }
   .attention-card p { margin: 5px 0 0; color: #edd7b2; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
   .attention-card .reason { color: #b9a789; font-size: 11px; }
+  .approval-card {
+    margin-top: 10px; padding: 10px 12px; border-radius: 9px;
+    border: 1px solid rgba(246, 193, 119, .40); background: var(--amber-soft);
+  }
+  .approval-card .kicker {
+    color: var(--amber); font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  }
+  .approval-card .what { margin-top: 6px; color: #e9d9bd; font-size: 11.5px; }
+  .approval-card .what b { color: #f6e3c4; font-weight: 600; }
+  .approval-card .where {
+    margin-top: 6px; padding: 5px 7px; border-radius: 6px;
+    background: rgba(10, 15, 18, .5); color: #f0dcbb;
+    font: 11px var(--mono); word-break: break-all;
+  }
+  .approval-card .why {
+    margin: 6px 0 0; color: #edd7b2; font-size: 12px; line-height: 1.55; white-space: pre-wrap;
+  }
+  .approval-card .state { margin-top: 8px; color: #b9a789; font-size: 11px; }
+  .approval-card .options { margin-top: 8px; }
+  .approval-card .options button.allow {
+    border-color: rgba(126, 214, 160, .5); background: rgba(126, 214, 160, .12); color: #cdeed8;
+  }
+  .approval-card .options button.reject {
+    border-color: rgba(240, 130, 130, .5); background: rgba(240, 130, 130, .1); color: #f3cccc;
+  }
   .options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .options button {
     padding: 4px 9px; border-radius: 7px;
@@ -334,13 +310,6 @@
     border-radius: 8px; border: 1px solid var(--line-soft); background: #0a0f12;
     color: var(--muted); font: 11px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word;
   }
-  .run-actions { display: flex; gap: 8px; margin-top: 8px; }
-  .run-actions button {
-    height: 25px; padding: 0 8px; border-radius: 6px;
-    border: 1px solid var(--line); background: transparent; color: var(--faint); font-size: 10.5px;
-  }
-  .run-actions button:hover { color: var(--text); border-color: #35464f; }
-
   .env-bar {
     flex: 0 0 auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     padding: 6px 20px; border-bottom: 1px solid var(--line-soft);
@@ -525,13 +494,110 @@
     background: #0a0f12; font: 12px/1.65 var(--mono); white-space: pre-wrap; word-break: break-word;
   }
 
-  @media (max-width: 980px) {
-    .grid { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(240px, 44vh); }
-    .topbar-mid .session-label { display: none; }
+  /* ---- conversation-first stage ---- */
+  .stage { flex: 1; min-height: 0; display: flex; justify-content: center; padding: 0 18px 18px; }
+  .stage .panel { width: min(960px, 100%); }
+  .chat-head p { color: var(--faint); }
+
+  /* ---- task lanes inside the conversation ---- */
+  .lane-group {
+    margin: 0 0 18px; padding: 10px 12px 12px;
+    border: 1px solid var(--line-soft); border-radius: 12px;
+    background: rgba(16, 23, 28, .72);
+    animation: rise .18s ease-out;
   }
-  @media (max-width: 620px) {
-    .grid { padding: 10px; gap: 10px; }
-    .topbar { padding: 0 12px; }
+  .lane-group-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--faint); font-size: 11px; letter-spacing: .03em; }
+  .lane-group-head .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); animation: blink 1.2s infinite; }
+  .lane-group-head.done .dot { background: var(--green); animation: none; }
+  .lane {
+    position: relative; margin-top: 8px; padding: 10px 11px;
+    border: 1px solid var(--line-soft); border-radius: 10px; background: #0f1519;
+  }
+  .lane:first-of-type { margin-top: 0; }
+  .lane::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 2px; border-radius: 2px; background: var(--line); }
+  .lane.running::before { background: var(--amber); }
+  .lane.completed::before { background: var(--green); }
+  .lane.failed::before { background: var(--red); }
+  .lane-head { display: flex; align-items: flex-start; gap: 10px; }
+  .lane-title { flex: 1; min-width: 0; }
+  .lane-goal { font-size: 12.5px; font-weight: 600; line-height: 1.45; word-break: break-word; }
+  .lane-now { display: flex; align-items: center; gap: 6px; margin-top: 3px; color: var(--muted); font-size: 11px; }
+  .lane-now .spark { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--amber); animation: blink 1.1s infinite; }
+  .steps { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+  .step { display: flex; align-items: flex-start; gap: 7px; color: var(--faint); font-size: 11px; line-height: 1.5; }
+  .step .sdot { flex: none; width: 6px; height: 6px; margin-top: 4px; border-radius: 50%; background: #3a4a55; }
+  .step.completed { color: var(--muted); }
+  .step.completed .sdot { background: var(--green); }
+  .step.running .sdot { background: var(--amber); animation: blink 1.1s infinite; }
+  .step.failed { color: #ffb4ae; }
+  .step.failed .sdot { background: var(--red); }
+  .lane-progress-text { margin-top: 5px; color: var(--faint); font-size: 10.5px; }
+
+  .summary {
+    margin-top: 10px; padding: 10px 11px; border-radius: 10px;
+    border: 1px solid rgba(99, 214, 164, .28); background: rgba(99, 214, 164, .05);
+  }
+  .summary.bad { border-color: rgba(255, 123, 114, .3); background: rgba(255, 123, 114, .05); }
+  .summary .st { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; }
+  .summary .sd { margin-top: 3px; color: var(--faint); font-size: 11px; }
+  .artifacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+  .artifact {
+    display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+    padding: 4px 9px; border-radius: 8px; text-decoration: none;
+    border: 1px solid rgba(94, 234, 212, .3); background: rgba(94, 234, 212, .07); color: #bdf3e8; font-size: 11.5px;
+  }
+  .artifact:hover { background: rgba(94, 234, 212, .14); }
+  .artifact .ak { color: var(--faint); font: 10px var(--mono); }
+  .artifact .an { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sum-run { margin-top: 8px; }
+  .sum-run-title { color: var(--muted); font-size: 11.5px; margin-bottom: 4px; }
+  .msg.flash .bubble { box-shadow: 0 0 0 3px rgba(94, 234, 212, .18); transition: box-shadow .2s; }
+
+  /* ---- drawers ---- */
+  .scrim { position: fixed; inset: 58px 0 0; z-index: 20; background: rgba(5, 8, 10, .55); backdrop-filter: blur(2px); }
+  .scrim[hidden] { display: none; }
+  .drawer {
+    position: fixed; top: 58px; right: 0; bottom: 0; z-index: 21;
+    width: min(430px, calc(100vw - 40px));
+    display: flex; flex-direction: column;
+    border-left: 1px solid var(--line); background: var(--panel);
+    box-shadow: -30px 0 80px rgba(0, 0, 0, .45);
+    animation: slideIn .18s ease-out;
+  }
+  .drawer[hidden] { display: none; }
+  @keyframes slideIn { from { transform: translateX(16px); opacity: .4; } to { transform: none; opacity: 1; } }
+  .drawer-head { display: flex; align-items: flex-start; gap: 10px; padding: 16px 18px 12px; border-bottom: 1px solid var(--line-soft); }
+  .drawer-head h2 { margin: 2px 0 0; font-size: 14px; }
+  .drawer-head .kicker { color: var(--accent); font: 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+  .drawer-close { margin-left: auto; border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; }
+  .drawer-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 24px; }
+  .adv-sec { padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--line-soft); }
+  .adv-sec:last-child { border-bottom: 0; margin-bottom: 0; }
+  .adv-sec h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; color: var(--muted); font-size: 12px; font-weight: 600; }
+  .adv-kv { display: grid; gap: 5px; }
+  .adv-row { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
+  .adv-label { color: var(--faint); font-size: 11px; }
+  .adv-row code { color: var(--muted); font: 11px var(--mono); word-break: break-all; text-align: right; }
+  .adv-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .adv-note { margin: 8px 0 0; color: var(--faint); font-size: 11px; line-height: 1.6; }
+  .adv-runs { display: flex; flex-direction: column; gap: 8px; }
+  .adv-run { padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line-soft); background: #0e1418; }
+  .adv-run .t { color: var(--muted); font-size: 11.5px; margin-bottom: 3px; word-break: break-word; }
+  .adv-run .m { color: var(--faint); font: 10.5px var(--mono); word-break: break-all; }
+  .adv-run .btn { margin-top: 7px; }
+  .hist-item {
+    display: block; width: 100%; margin-bottom: 10px; padding: 10px 11px;
+    border: 1px solid var(--line-soft); border-radius: 10px; background: #0f1519;
+    color: var(--text); text-align: left; cursor: pointer;
+  }
+  .hist-item:hover { border-color: #35464f; }
+  .hist-top { display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: 10.5px; }
+  .hist-state { margin-left: auto; }
+  .hist-text { margin-top: 4px; font-size: 12px; line-height: 1.55; word-break: break-word; }
+
+  @media (max-width: 720px) {
+    .stage { padding: 0 10px 10px; }
+    .topbar { padding: 0 12px; gap: 10px; }
     .topbar-actions .conn { display: none; }
     .brand { min-width: 0; }
     .brand div span { display: none; }
@@ -545,64 +611,97 @@
   <header class="topbar">
     <div class="brand">
       <div class="mark">S</div>
-      <div><strong>Superagent</strong><span>Console</span></div>
+      <div><strong>Superagent</strong><span>专属空间</span></div>
     </div>
     <div class="topbar-mid">
       <span id="modeBadge" class="badge"><span class="pulse"></span><span id="modeText">连接中</span></span>
-      <span id="sessionLabel" class="session-label mono" title="Host Session id">no session</span>
+      <span id="sessionLabel" class="session-label mono" hidden></span>
     </div>
     <div class="topbar-actions">
       <span id="conn" class="conn"><i></i><span id="connText">连接中</span></span>
-      <button id="wizardOpen" class="btn" type="button">首次使用向导</button>
-      <button id="newChat" class="btn" type="button" disabled>新对话</button>
+      <button id="historyOpen" class="btn" type="button">历史</button>
+      <button id="advancedOpen" class="btn" type="button">高级</button>
     </div>
   </header>
 
   <div id="envBar" class="env-bar" hidden>
-    <span class="env-title">环境</span>
+    <span class="env-title">需要处理</span>
     <div id="envItems" class="env-items"></div>
-    <button id="envWizard" class="btn tiny" type="button">向导</button>
+    <button id="envWizard" class="btn tiny" type="button">去配置</button>
   </div>
 
-  <main class="grid">
-    <section class="panel" aria-label="对话">
+  <main class="stage">
+    <section class="panel chat" aria-label="对话">
       <div class="chat-head">
         <div>
-          <h1>对话</h1>
-          <p>真实 Host Session · <strong>这是对话会话，不是 run 指挥台</strong></p>
+          <h1>Superagent</h1>
+          <p>说一句就行 · 自动拆成任务线并行推进 · 跑完在这一条对话里汇总</p>
         </div>
         <div id="typing" class="typing" hidden><span></span><span></span><span></span><em id="typingText" style="font-style:normal;margin-left:3px">运行中</em></div>
       </div>
       <div id="messages" class="messages" aria-live="polite"></div>
       <form id="composer" class="composer" autocomplete="off">
         <div class="composer-box">
-          <textarea id="input" rows="1" placeholder="和 Superagent 说话，例如：先查清登录失败的根因，再把它拆成 run 修掉" disabled></textarea>
+          <textarea id="input" rows="1" placeholder="直接说你想让它做什么…" disabled></textarea>
           <div class="composer-bar">
-            <div class="segmented" role="group" aria-label="发送方式">
-              <button type="button" data-mode="queue" class="active">排队</button>
-              <button type="button" data-mode="steer">插话</button>
-            </div>
             <span class="hint">Enter 发送 · Shift+Enter 换行</span>
             <button id="send" class="send" type="submit" aria-label="发送" disabled>↑</button>
           </div>
         </div>
       </form>
     </section>
-
-    <aside class="panel" aria-label="派生的 runs">
-      <div class="runs-head">
-        <div><h2>派生的 runs</h2><p>这个对话启动的子任务</p></div>
-        <span id="runCount" class="count">0</span>
-      </div>
-      <details id="toolsPanel" class="tools-panel" open>
-        <summary><span>这个会话挂载的工具</span><span id="toolCount" class="count">—</span></summary>
-        <p id="toolNote" class="tools-note">加载中…</p>
-        <div id="toolList" class="tool-list"></div>
-      </details>
-      <div id="runs" class="run-list"></div>
-    </aside>
   </main>
 </div>
+
+<div id="scrim" class="scrim" hidden></div>
+
+<aside id="historyDrawer" class="drawer" hidden aria-label="历史">
+  <div class="drawer-head">
+    <div>
+      <span class="kicker">历史</span>
+      <h2>这次对话的时间线</h2>
+    </div>
+    <button class="drawer-close" data-close="history" type="button" aria-label="关闭">×</button>
+  </div>
+  <div id="historyList" class="drawer-body"></div>
+</aside>
+
+<aside id="advancedDrawer" class="drawer" hidden aria-label="高级">
+  <div class="drawer-head">
+    <div>
+      <span class="kicker">高级</span>
+      <h2>运行细节</h2>
+    </div>
+    <button class="drawer-close" data-close="advanced" type="button" aria-label="关闭">×</button>
+  </div>
+  <div class="drawer-body">
+    <section class="adv-sec">
+      <h3>会话</h3>
+      <div id="advSession" class="adv-kv"></div>
+      <div class="adv-actions">
+        <button id="newChat" class="btn tiny" type="button" disabled>开始新对话</button>
+        <button id="wizardOpen" class="btn tiny" type="button">首次使用向导</button>
+      </div>
+    </section>
+    <section class="adv-sec">
+      <h3>发送方式</h3>
+      <div class="segmented" role="group" aria-label="发送方式">
+        <button type="button" data-mode="queue" class="active">排队</button>
+        <button type="button" data-mode="steer">插话</button>
+      </div>
+      <p class="adv-note">排队：等这一轮结束后再发。插话：立刻打断这一轮。</p>
+    </section>
+    <section class="adv-sec">
+      <h3>挂载的工具 <span id="toolCount" class="count">—</span></h3>
+      <p id="toolNote" class="tools-note">加载中…</p>
+      <div id="toolList" class="tool-list"></div>
+    </section>
+    <section class="adv-sec">
+      <h3>任务线细节</h3>
+      <div id="advRuns" class="adv-runs"></div>
+    </section>
+  </div>
+</aside>
 
 <div id="gate" class="gate" hidden>
   <form id="gateForm" class="gate-card">
@@ -649,7 +748,6 @@
   const TOKEN_KEY = 'dsh-superagent-console-token'
   const $ = id => document.getElementById(id)
   const messagesEl = $('messages')
-  const runsEl = $('runs')
   const inputEl = $('input')
   const sendEl = $('send')
   const composerEl = $('composer')
@@ -661,7 +759,6 @@
   const connEl = $('conn')
   const connTextEl = $('connText')
   const newChatEl = $('newChat')
-  const runCountEl = $('runCount')
   const gateEl = $('gate')
   const gateFormEl = $('gateForm')
   const gateErrorEl = $('gateError')
@@ -677,6 +774,12 @@
   const wizardFootEl = $('wizardFoot')
   const envBarEl = $('envBar')
   const envItemsEl = $('envItems')
+  const scrimEl = $('scrim')
+  const historyDrawerEl = $('historyDrawer')
+  const historyListEl = $('historyList')
+  const advancedDrawerEl = $('advancedDrawer')
+  const advSessionEl = $('advSession')
+  const advRunsEl = $('advRuns')
 
   const STATE = {
     token: '',
@@ -699,6 +802,11 @@
     busyAnswers: new Set(),
     autoScroll: true,
     booted: false,
+    preset: null,
+    laneEls: new Map(),
+    runAnchors: new Map(),
+    attentionSeen: new Set(),
+    approvals: new Map(),
   }
 
   const WIZ = {
@@ -797,7 +905,7 @@
     STATE.capabilities = capabilities || STATE.capabilities
     const chat = mode === 'chat'
     modeBadgeEl.className = `badge ${chat ? 'chat' : 'off'}`
-    modeTextEl.textContent = chat ? '对话会话' : mode === 'loading' ? '连接中' : '未连接'
+    modeTextEl.textContent = chat ? '已就绪' : mode === 'loading' ? '连接中' : '未连接'
     newChatEl.disabled = !chat
     inputEl.disabled = !chat
     updateSend()
@@ -946,7 +1054,11 @@
       tools: [],
     }
     STATE.messages.push(message)
-    messagesEl.append(messageElement(message))
+    const node = messageElement(message)
+    // A task lane with no user message sits at the end; keep new turns above it.
+    const orphan = STATE.laneEls.get('')
+    if (orphan && orphan.parentNode === messagesEl) messagesEl.insertBefore(node, orphan)
+    else messagesEl.append(node)
     if (role === 'assistant') STATE.currentAssistant = message
     scrollToEnd()
     return message
@@ -956,6 +1068,7 @@
     STATE.messages = []
     STATE.currentAssistant = null
     STATE.toolCalls.clear()
+    resetLanes()
     messagesEl.textContent = ''
   }
 
@@ -974,12 +1087,12 @@
     }
     wrap.append(el('div', 'orb', 'S'))
     wrap.append(el('h1', '', '今天想推进什么？'))
-    wrap.append(el('p', '', '这是一个真实的 Host Session，可以直接说话、追问。让它把工作拆成 run 后，右侧会实时出现子任务、成本和需要你决定的问题。'))
+    wrap.append(el('p', '', '这里是 Superagent 的专属空间，和宿主的普通会话分开。直接说一句就行：它会自己判断是一步做完，还是拆成几条任务线并行推进；跑完在这一条对话里汇总，并把可以点开的产物放在这里。'))
     const examples = el('div', 'examples')
     const samples = [
-      '先查清登录失败的根因，再拆成 run 修掉',
-      '把这次重构拆成并行子任务，最后汇总',
-      '跑一个 run 检查最近的改动有没有回归',
+      '把这周的项目进度整理成一页 HTML 报告',
+      '先查清登录失败的根因，再修掉',
+      '把这份需求拆成并行任务，最后汇总',
     ]
     for (const sample of samples) {
       const button = el('button', '', sample)
@@ -1006,128 +1119,364 @@
     inputEl.style.height = `${Math.min(180, Math.max(46, inputEl.scrollHeight))}px`
   }
 
-  // ---------- rendering runs ----------
+  // ---------- task lanes ----------
 
-  function draftKey(runId, attentionId) {
-    return `${runId}::${attentionId || 'single'}`
+  const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'interrupted', 'blocked'])
+
+  function isTerminal(status) {
+    return TERMINAL_STATUSES.has(status)
   }
 
-  function renderRuns() {
+  function laneStatusText(run) {
+    if (run.status === 'queued') return '排队'
+    if (run.status === 'completed') return '完成'
+    if (isTerminal(run.status)) return '失败'
+    return '进行中'
+  }
+
+  function formatDuration(ms) {
+    if (!Number.isFinite(ms) || ms < 0) return ''
+    const seconds = Math.max(1, Math.round(ms / 1000))
+    if (seconds < 60) return `${seconds} 秒`
+    const minutes = Math.round(seconds / 60)
+    if (minutes < 60) return `${minutes} 分钟`
+    return `${(minutes / 60).toFixed(1)} 小时`
+  }
+
+  function stepLabel(subtask) {
+    return subtask.title || `步骤 ${subtask.index ?? ''}`.trim()
+  }
+
+  function currentAction(run) {
+    const subtasks = Array.isArray(run.subtasks) ? run.subtasks : []
+    if (run.status === 'queued') return '排队，等前一条任务线让出位置'
+    if (run.status === 'planning') return '正在拆步骤'
+    if (run.status === 'aggregating') return '正在汇总各步骤的结果'
+    if (run.status === 'completed') return '已交付，产物见汇总'
+    if (isTerminal(run.status)) return run.status === 'cancelled' ? '已取消' : '没走通，原因见汇总'
+    const running = subtasks.filter(subtask => subtask.status === 'running')
+    if (running.length > 1) return `同时推进 ${running.length} 个步骤`
+    if (running.length === 1) return `正在做：${stepLabel(running[0])}`
+    const next = subtasks.find(subtask => subtask.status !== 'completed' && subtask.status !== 'failed')
+    if (next) return `准备：${stepLabel(next)}`
+    return '正在推进'
+  }
+
+  function laneSignature(run) {
+    const steps = Array.isArray(run.subtasks)
+      ? run.subtasks.map(subtask => `${subtask.status}:${subtask.title}`).join(',')
+      : ''
+    const attention = Array.isArray(run.attention)
+      ? run.attention.map(item => `${item.id}:${item.question}`).join(',')
+      : ''
+    return [run.status, steps, attention, run.report ? run.report.length : 0, run.finishedAt || ''].join('|')
+  }
+
+  /**
+   * Files and pages a run report names. They are the only things offered as
+   * "open me", and the artifact route re-checks the same report before serving
+   * one, so a link can never reach a path the agent did not already report.
+   */
+  function artifactsOf(run) {
+    const text = typeof run.report === 'string' ? run.report : ''
+    if (!text) return []
+    const items = []
+    const seen = new Set()
+    const push = value => {
+      const href = value.replace(/[.,;:，。；：]+$/, '')
+      if (!href || seen.has(href)) return
+      seen.add(href)
+      items.push({ href, runId: run.id })
+    }
+    for (const match of text.matchAll(/https?:\/\/[^\s"'`<>)\]}|]+/g)) push(match[0])
+    for (const match of text.matchAll(/(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|~[\\/])[^\s"'`<>|]+?\.(?:html?|md|pdf|docx?|xlsx?|csv|tsv|json|ya?ml|txt|log|png|jpe?g|gif|webp|svg|zip|pptx?|py|js|mjs|css)\b/gi)) {
+      push(match[0])
+    }
+    return items.slice(0, 12)
+  }
+
+  function artifactElement(item) {
+    const isUrl = /^https?:\/\//i.test(item.href)
+    const link = el('a', 'artifact')
+    link.href = isUrl
+      ? item.href
+      : `/api/console/artifact?path=${encodeURIComponent(item.href)}&runId=${encodeURIComponent(item.runId)}&token=${encodeURIComponent(STATE.token)}`
+    link.target = '_blank'
+    link.rel = 'noopener'
+    link.title = item.href
+    link.append(el('span', 'ak', isUrl ? '页面' : '文件'))
+    link.append(el('span', 'an', item.href.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || item.href))
+    return link
+  }
+
+  function resetLanes() {
+    STATE.laneEls.clear()
+    STATE.runAnchors.clear()
+    STATE.attentionSeen.clear()
+  }
+
+  function anchorForRun(run) {
+    const at = Date.parse(run.createdAt || '')
+    const limit = Number.isFinite(at) ? at : Date.now()
+    for (let i = STATE.messages.length - 1; i >= 0; i -= 1) {
+      const message = STATE.messages[i]
+      if (message.role === 'user' && message.at <= limit + 2000) return message.id
+    }
+    return ''
+  }
+
+  function renderLanes() {
     const active = document.activeElement
     const activeKey = active && active.dataset ? active.dataset.draftKey : null
-    const activeValue = activeKey ? active.value : null
-    const activeStart = activeKey && typeof active.selectionStart === 'number' ? active.selectionStart : null
-
-    runsEl.textContent = ''
-    runCountEl.textContent = String(STATE.runs.length)
-    if (STATE.runs.length === 0) {
-      const empty = el('div', 'run-empty')
-      empty.append(el('div', '', '还没有 run。'))
-      empty.append(el('span', 'line'))
-      empty.append(el('div', '', '让它把工作拆出去，例如：帮我把登录失败的根因查清楚并修复。'))
-      runsEl.append(empty)
-      return
-    }
-
+    const groups = new Map()
     for (const run of STATE.runs) {
-      runsEl.append(runElement(run))
+      let key = STATE.runAnchors.get(run.id)
+      if (key === undefined) {
+        key = anchorForRun(run)
+        STATE.runAnchors.set(run.id, key)
+      }
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key).push(run)
     }
-
-    if (activeKey) {
-      const next = runsEl.querySelector(`[data-draft-key="${cssEscape(activeKey)}"]`)
-      if (next) {
-        next.focus()
-        if (activeValue !== null) next.value = activeValue
-        if (activeStart !== null) {
-          try { next.setSelectionRange(activeStart, activeStart) } catch {}
+    for (const [key, runs] of groups) {
+      const anchor = key ? STATE.messages.find(message => message.id === key) : null
+      let node = STATE.laneEls.get(key)
+      if (!node) {
+        node = el('div', 'lane-group')
+        STATE.laneEls.set(key, node)
+        if (anchor && anchor.el && anchor.el.parentNode === messagesEl) {
+          anchor.el.after(node)
+        } else {
+          removeEmpty()
+          messagesEl.append(node)
         }
       }
+      const signature = runs.map(run => `${run.id}:${laneSignature(run)}`).join('#')
+      if (node.dataset.sig === signature) continue
+      node.dataset.sig = signature
+      node.replaceChildren()
+      const done = runs.every(run => isTerminal(run.status))
+      const head = el('div', `lane-group-head${done ? ' done' : ''}`)
+      head.append(el('span', 'dot'))
+      head.append(el('span', '', done ? `这一轮完成 · ${runs.length} 条任务线` : `推进中 · ${runs.length} 条任务线`))
+      node.append(head)
+      for (const run of runs) node.append(laneElement(run))
+      if (done) node.append(summaryElement(runs))
+    }
+    const openAttention = STATE.runs.flatMap(run => (Array.isArray(run.attention) ? run.attention : [])
+      .map(item => ({ run, item, key: `${run.id}:${item.id}` })))
+    const fresh = openAttention.filter(entry => !STATE.attentionSeen.has(entry.key))
+    for (const entry of openAttention) STATE.attentionSeen.add(entry.key)
+    if (fresh.length > 0) {
+      STATE.autoScroll = true
+      pushToast('有一条任务线在等你决定。')
+      const card = messagesEl.querySelector('.attention-card')
+      if (card) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+    scrollToEnd()
+    if (activeKey) {
+      const next = document.querySelector(`[data-draft-key="${cssEscape(activeKey)}"]`)
+      if (next) {
+        next.focus()
+        try { next.setSelectionRange(next.value.length, next.value.length) } catch {}
+      }
+    }
+    renderAdvancedRuns()
+    renderHistory()
+  }
+
+  function renderHistory() {
+    if (historyDrawerEl.hidden) return
+    historyListEl.replaceChildren()
+    const entries = []
+    for (const message of STATE.messages) {
+      if (message.role !== 'user') continue
+      entries.push({
+        message,
+        runs: STATE.runs.filter(run => STATE.runAnchors.get(run.id) === message.id),
+      })
+    }
+    if (entries.length === 0) {
+      historyListEl.append(el('p', 'adv-note', '还没有下达过任务。'))
+      return
+    }
+    for (const entry of entries.reverse()) {
+      const item = el('div', 'hist-item')
+      const top = el('div', 'hist-top')
+      top.append(el('span', '', timeLabel(entry.message.at)))
+      if (entry.runs.length > 0) {
+        const done = entry.runs.filter(run => run.status === 'completed').length
+        top.append(el('span', 'hist-state', `${done}/${entry.runs.length} 条任务线完成`))
+      }
+      item.append(top)
+      item.append(el('div', 'hist-text', entry.message.text))
+      const artifacts = []
+      const seen = new Set()
+      for (const run of entry.runs) {
+        for (const artifact of artifactsOf(run)) {
+          if (seen.has(artifact.href)) continue
+          seen.add(artifact.href)
+          artifacts.push(artifact)
+        }
+      }
+      if (artifacts.length > 0) {
+        const chips = el('div', 'artifacts')
+        for (const artifact of artifacts) chips.append(artifactElement(artifact))
+        item.append(chips)
+      }
+      item.addEventListener('click', event => {
+        if (event.target.closest('a')) return
+        drawerClose()
+        entry.message.el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        entry.message.el?.classList.add('flash')
+        setTimeout(() => entry.message.el?.classList.remove('flash'), 1200)
+      })
+      historyListEl.append(item)
     }
   }
+
+  function advRow(label, value) {
+    const row = el('div', 'adv-row')
+    row.append(el('span', 'adv-label', label))
+    row.append(el('code', '', value))
+    return row
+  }
+
+  function renderAdvancedRuns() {
+    if (advancedDrawerEl.hidden) return
+    advSessionEl.replaceChildren()
+    advSessionEl.append(advRow('会话', STATE.sessionId ? shortId(STATE.sessionId) : '未建立'))
+    advSessionEl.append(advRow('预置', STATE.preset || '默认'))
+    advRunsEl.replaceChildren()
+    if (STATE.runs.length === 0) {
+      advRunsEl.append(el('p', 'adv-note', '还没有任务线。'))
+      return
+    }
+    for (const run of STATE.runs) {
+      const row = el('div', 'adv-run')
+      row.append(el('div', 't', run.goal || '任务线'))
+      row.append(el('div', 'm', run.id))
+      row.append(el('div', 'm', [
+        statusText(run.status),
+        run.usage ? `${formatTokens(run.usage.totalTokens)} tokens` : null,
+        run.cost?.text ?? null,
+        `${Array.isArray(run.subtasks) ? run.subtasks.length : 0} 个步骤`,
+      ].filter(Boolean).join(' · ')))
+      const view = el('button', 'btn tiny', '查看完整报告')
+      view.type = 'button'
+      view.addEventListener('click', () => openReport(run.id))
+      row.append(view)
+      advRunsEl.append(row)
+    }
+  }
+
 
   function cssEscape(value) {
     if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value)
     return String(value).replace(/["\\]/g, '\\$&')
   }
 
-  function runElement(run) {
-    const card = el('article', `run ${statusClass(run.status)}`)
+  function laneElement(run) {
+    const card = el('div', `lane ${statusClass(run.status)}`)
     card.dataset.runId = run.id
 
-    const top = el('div', 'run-top')
-    const title = el('div', 'run-title')
-    title.append(el('h3', '', run.goal || '(no goal)'))
-    title.append(el('p', '', `${shortId(run.id)} · ${timeLabel(run.createdAt)}`))
-    top.append(title)
-    top.append(el('span', `status-pill ${statusClass(run.status)}`, statusText(run.status)))
-    card.append(top)
+    const head = el('div', 'lane-head')
+    const title = el('div', 'lane-title')
+    title.append(el('div', 'lane-goal', run.goal || '这条任务线'))
+    const action = currentAction(run)
+    if (action) {
+      const line = el('div', 'lane-now')
+      if (!isTerminal(run.status)) line.append(el('span', 'spark'))
+      line.append(el('span', '', action))
+      title.append(line)
+    }
+    head.append(title)
+    head.append(el('span', `status-pill ${statusClass(run.status)}`, laneStatusText(run)))
+    card.append(head)
 
-    const meta = el('div', 'run-meta')
-    if (run.cost) {
-      const cost = el('span')
-      cost.append(el('b', '', run.cost.text || '—'))
-      cost.append(document.createTextNode(` 成本${run.cost.complete ? '' : '（部分未定价）'}`))
-      meta.append(cost)
-    }
-    if (run.usage) {
-      const usage = el('span')
-      usage.append(el('b', '', formatTokens(run.usage.totalTokens)))
-      usage.append(document.createTextNode(' tokens'))
-      meta.append(usage)
-    }
-    const total = Array.isArray(run.subtasks) ? run.subtasks.length : 0
-    const done = Array.isArray(run.subtasks) ? run.subtasks.filter(s => s.status === 'completed').length : 0
-    if (total > 0) {
-      const progress = el('span')
-      progress.append(el('b', '', `${done}/${total}`))
-      progress.append(document.createTextNode(' 子任务'))
-      meta.append(progress)
-    }
-    card.append(meta)
+    const subtasks = Array.isArray(run.subtasks) ? run.subtasks : []
+    if (subtasks.length > 0) {
+      const steps = el('div', 'steps')
+      for (const subtask of subtasks.slice(0, 8)) {
+        const row = el('div', `step ${subtask.status || ''}`.trim())
+        row.append(el('span', 'sdot'))
+        row.append(el('span', '', stepLabel(subtask)))
+        steps.append(row)
+      }
+      if (subtasks.length > 8) {
+        const row = el('div', 'step')
+        row.append(el('span', 'sdot'))
+        row.append(el('span', '', `还有 ${subtasks.length - 8} 个步骤`))
+        steps.append(row)
+      }
+      card.append(steps)
 
-    if (total > 0) {
+      const done = subtasks.filter(subtask => subtask.status === 'completed').length
       const bar = el('div', 'progress')
       const fill = el('i')
-      fill.style.width = `${Math.round((done / total) * 100)}%`
+      fill.style.width = `${Math.round((done / subtasks.length) * 100)}%`
       bar.append(fill)
       card.append(bar)
-
-      const subtasks = el('div', 'subtasks')
-      for (const subtask of run.subtasks.slice(0, 8)) {
-        const chip = el('span', `subtask ${subtask.status || ''}`.trim(), subtask.title || `subtask ${subtask.index ?? ''}`)
-        chip.title = `${subtask.status || 'unknown'}${subtask.childId ? ` · ${subtask.childId}` : ''}`
-        subtasks.append(chip)
-      }
-      if (total > 8) subtasks.append(el('span', 'subtask', `+${total - 8}`))
-      card.append(subtasks)
+      card.append(el('div', 'lane-progress-text', `${done}/${subtasks.length} 步骤完成`))
     }
 
-    if (Array.isArray(run.attention) && run.attention.length > 0) {
-      for (const item of run.attention) {
-        card.append(attentionElement(run, item))
-      }
+    if (Array.isArray(run.attention)) {
+      for (const item of run.attention) card.append(attentionElement(run, item))
     }
-
-    if (run.report) {
-      const details = el('details', 'report')
-      details.append(el('summary', '', `报告 · ${run.reportTruncated ? '前段预览' : '完整'}`))
-      details.append(el('pre', '', run.report))
-      card.append(details)
-    }
-
-    const actions = el('div', 'run-actions')
-    const reportButton = el('button', '', '查看完整报告')
-    reportButton.type = 'button'
-    reportButton.addEventListener('click', () => openReport(run.id))
-    actions.append(reportButton)
-    card.append(actions)
 
     return card
   }
 
+  function summaryElement(runs) {
+    const failed = runs.filter(run => isTerminal(run.status) && run.status !== 'completed')
+    const box = el('div', `summary${failed.length > 0 ? ' bad' : ''}`)
+    box.append(el('div', 'st', failed.length > 0
+      ? `完成，${failed.length} 条任务线没走通`
+      : `全部完成 · ${runs.length} 条任务线`))
+
+    const first = runs.map(run => Date.parse(run.createdAt)).filter(Number.isFinite).sort((a, b) => a - b)[0]
+    const last = runs.map(run => Date.parse(run.finishedAt)).filter(Number.isFinite).sort((a, b) => b - a)[0]
+    const facts = []
+    if (Number.isFinite(first) && Number.isFinite(last)) facts.push(`用时 ${formatDuration(last - first)}`)
+    if (failed.length > 0) facts.push(failed.map(run => run.goal || '一条任务线').join('、'))
+    if (facts.length > 0) box.append(el('div', 'sd', facts.join(' · ')))
+
+    const artifacts = []
+    const seen = new Set()
+    for (const run of runs) {
+      for (const item of artifactsOf(run)) {
+        if (seen.has(item.href)) continue
+        seen.add(item.href)
+        artifacts.push(item)
+      }
+    }
+    if (artifacts.length > 0) {
+      const list = el('div', 'artifacts')
+      for (const item of artifacts) list.append(artifactElement(item))
+      box.append(list)
+    } else {
+      box.append(el('div', 'sd', '这次没有可以点开的产物；完整汇总在下面。'))
+    }
+
+    const details = el('details', 'report')
+    details.append(el('summary', '', '汇总'))
+    for (const run of runs) {
+      const block = el('div', 'sum-run')
+      block.append(el('div', 'sum-run-title', `${run.goal || '任务线'} · ${laneStatusText(run)}`))
+      block.append(el('pre', '', run.report || '(这条任务线没有返回报告)'))
+      details.append(block)
+    }
+    box.append(details)
+    return box
+  }
+
+  function draftKey(runId, attentionId) {
+    return `${runId}::${attentionId || 'single'}`
+  }
+
   function attentionElement(run, item) {
     const card = el('div', 'attention-card')
-    card.append(el('div', 'kicker', `需要你决定${item.id ? ` · ${item.id}` : ''}`))
+    card.append(el('div', 'kicker', '需要你决定'))
     card.append(el('p', '', item.question || '运行中的任务在等一个决定'))
     if (item.reason) card.append(el('p', 'reason', item.reason))
 
@@ -1177,19 +1526,139 @@
   async function submitAnswer(runId, attentionId, answer, key) {
     if (STATE.busyAnswers.has(key)) return
     STATE.busyAnswers.add(key)
-    renderRuns()
+    renderLanes()
     try {
       await api('/api/console/answer', {
         method: 'POST',
         body: { sessionId: STATE.sessionId, runId, attentionId, answer },
       })
       STATE.drafts.delete(key)
-      pushToast('决定已提交，run 会在下一个边界应用。', 'ok')
+      pushToast('决定已提交，任务线会在下一个边界应用。', 'ok')
     } catch (error) {
       pushToast(`提交失败：${messageOf(error)}`, 'err')
     } finally {
       STATE.busyAnswers.delete(key)
-      renderRuns()
+      renderLanes()
+    }
+  }
+
+  // ---------- approvals ----------
+
+  /** Best-effort target of the blocked call, so the person sees what would change. */
+  function approvalTarget(approval) {
+    const candidates = [approval.callArguments]
+    const call = approval.callId ? STATE.toolCalls.get(approval.callId) : null
+    if (call && call.arguments) candidates.push(call.arguments)
+    for (const raw of candidates) {
+      if (typeof raw !== 'string' || !raw.trim()) continue
+      try {
+        const args = JSON.parse(raw)
+        const target = args?.path ?? args?.file_path ?? args?.filePath ?? args?.target ?? args?.cwd
+        if (typeof target === 'string' && target.trim()) return target.trim()
+      } catch {
+        // Streamed arguments arrive in pieces; fall back to the asker's wording.
+      }
+    }
+    const match = `${approval.reason || ''}`.match(/[A-Za-z]:[\\/][^\s'"，。)]+|\/(?:[^\s'"，。)/]+\/)*[^\s'"，。)/]+/)
+    return match ? match[0] : ''
+  }
+
+  /** Name the task line that asked, using the lanes the page already shows. */
+  function approvalSource(approval) {
+    const agentId = approval.agentId
+    if (agentId) {
+      for (const run of STATE.runs || []) {
+        const lanes = Array.isArray(run.subtasks) ? run.subtasks : []
+        const hit = lanes.find(item => item && item.childId === agentId)
+        if (hit) return `${run.goal || '任务线'} · ${hit.title || '子任务'}`
+      }
+    }
+    return approval.source || '这条对话'
+  }
+
+  function approvalCard(approval) {
+    const card = el('div', 'approval-card')
+    card.dataset.approvalId = approval.id
+    card.append(el('div', 'kicker', '需要你决定'))
+    const what = el('div', 'what')
+    what.append(el('span', '', '来源 '), el('b', '', approvalSource(approval)))
+    what.append(el('span', '', ' · 工具 '), el('b', '', approval.toolName || 'tool'))
+    card.append(what)
+    const target = approvalTarget(approval)
+    if (target) card.append(el('div', 'where', `要动的位置：${target}`))
+    const reason = approval.displayReason?.zh || approval.reason
+    card.append(el('p', 'why', reason || '宿主的工具调用被拦住了，需要你明确决定这一次。'))
+    card.append(el('div', 'state', '等待你的决定…'))
+    const options = el('div', 'options')
+    const allow = el('button', 'allow', '允许这一次')
+    allow.type = 'button'
+    allow.addEventListener('click', () => decideApproval(approval.id, 'allow'))
+    const reject = el('button', 'reject', '拒绝')
+    reject.type = 'button'
+    reject.addEventListener('click', () => decideApproval(approval.id, 'reject'))
+    options.append(allow, reject)
+    card.append(options)
+    return card
+  }
+
+  function settleApprovalNode(entry) {
+    if (!entry || !entry.node) return
+    entry.node.querySelector('.options')?.remove()
+    const state = entry.node.querySelector('.state')
+    if (!state) return
+    if (entry.decided === 'allow') state.textContent = '已允许这一次（只对这一条调用生效）'
+    else if (entry.decided === 'reject') state.textContent = '已拒绝'
+    else if (entry.decided === 'cancelled') state.textContent = '没有回答，按拒绝处理'
+    else state.textContent = '等待你的决定…'
+  }
+
+  function seatApproval(approval) {
+    if (!approval || !approval.id) return null
+    const existing = STATE.approvals.get(approval.id)
+    if (existing) {
+      if (existing.node && existing.node.parentNode !== messagesEl) messagesEl.append(existing.node)
+      return existing
+    }
+    removeEmpty()
+    const entry = { approval, node: approvalCard(approval), decided: null }
+    STATE.approvals.set(approval.id, entry)
+    const orphan = STATE.laneEls.get('')
+    if (orphan && orphan.parentNode === messagesEl) messagesEl.insertBefore(entry.node, orphan)
+    else messagesEl.append(entry.node)
+    scrollToEnd()
+    return entry
+  }
+
+  /** Re-seat approvals a snapshot cleared, without losing their decided state. */
+  function renderApprovals() {
+    for (const entry of STATE.approvals.values()) {
+      if (!entry.node || entry.node.parentNode !== messagesEl) {
+        entry.node = approvalCard(entry.approval)
+        messagesEl.append(entry.node)
+      }
+      if (entry.decided) settleApprovalNode(entry)
+    }
+    if (STATE.approvals.size > 0) scrollToEnd()
+  }
+
+  async function decideApproval(id, decision) {
+    const entry = STATE.approvals.get(id)
+    if (!entry || entry.decided) return
+    const state = entry.node.querySelector('.state')
+    for (const button of entry.node.querySelectorAll('button')) button.disabled = true
+    if (state) state.textContent = decision === 'allow' ? '正在允许这一次…' : '正在拒绝…'
+    try {
+      await api('/api/console/approval', { method: 'POST', body: { id, decision } })
+      entry.decided = decision
+      settleApprovalNode(entry)
+      pushToast(
+        decision === 'allow' ? '已允许这一次；只对这一条调用生效。' : '已拒绝这一条调用。',
+        'ok',
+      )
+    } catch (error) {
+      for (const button of entry.node.querySelectorAll('button')) button.disabled = false
+      if (state) state.textContent = `没有提交成功：${messageOf(error)}`
+      pushToast(`审批没有提交成功：${messageOf(error)}`, 'err')
     }
   }
 
@@ -1225,6 +1694,7 @@
       case 'session':
         if (frame.sessionId && frame.sessionId !== STATE.sessionId) {
           setSession(frame.sessionId)
+          STATE.approvals.clear()
           clearMessages()
           renderEmpty()
         }
@@ -1237,6 +1707,7 @@
         }
         removeEmpty()
         if (STATE.messages.length === 0) renderEmpty()
+        renderApprovals()
         scrollToEnd()
         break
       case 'session.event':
@@ -1259,9 +1730,25 @@
           }
         }
         break
+      case 'approval': {
+        const approval = frame.approval
+        if (frame.action === 'asked' && approval && approval.id) {
+          seatApproval(approval)
+          pushToast('有一个工具调用在等你决定。', 'warn')
+        } else if ((frame.action === 'decided' || frame.action === 'expired') && frame.id) {
+          const entry = STATE.approvals.get(frame.id)
+          if (entry) {
+            entry.decided = frame.action === 'expired'
+              ? 'cancelled'
+              : frame.outcome === 'allowed-once' ? 'allow' : frame.outcome === 'rejected' ? 'reject' : 'cancelled'
+            settleApprovalNode(entry)
+          }
+        }
+        break
+      }
       case 'runs':
         STATE.runs = Array.isArray(frame.runs) ? frame.runs : []
-        renderRuns()
+        renderLanes()
         break
       case 'answered':
         pushToast(`已提交 ${frame.attentionId || '决定'}。`, 'ok')
@@ -1489,8 +1976,10 @@
     STATE.booted = true
     setMode(data.mode === 'chat' ? 'chat' : 'unavailable', data.capabilities)
     if (data.sessionId) setSession(data.sessionId)
+    if (data.preset) STATE.preset = data.preset
     STATE.runs = Array.isArray(data.runs) ? data.runs : []
-    renderRuns()
+    renderLanes()
+    for (const approval of Array.isArray(data.approvals) ? data.approvals : []) seatApproval(approval)
     if (STATE.messages.length === 0) renderEmpty()
     loadTools()
     wizardLoad({ probe: false, auto: true })
@@ -1567,27 +2056,26 @@
   }
 
   function updateEnvBar(status) {
-    if (!status) {
+    const items = Array.isArray(status?.environment) ? status.environment : []
+    const broken = items.filter(item => !item.ok)
+    if (!status || broken.length === 0) {
       envBarEl.hidden = true
+      envItemsEl.replaceChildren()
       return
     }
     envBarEl.hidden = false
     envItemsEl.replaceChildren()
-    const items = Array.isArray(status.environment) ? status.environment : []
-    for (const id of ['host', 'plugin', 'tools', 'model', 'key']) {
-      const item = items.find(entry => entry.id === id)
-      if (!item) continue
+    for (const item of broken) {
       const chip = el('button', `env-item ${item.ok ? 'ok' : 'bad'}`)
       chip.type = 'button'
       chip.title = item.hint || item.value || ''
       chip.append(el('span', 'dot'))
       chip.append(el('span', '', item.label))
       chip.append(el('span', 'env-value', item.value || ''))
-      if (!item.ok) chip.append(el('span', 'env-action', '点这里处理'))
+      chip.append(el('span', 'env-action', '点这里处理'))
       chip.addEventListener('click', () => wizardOpen(item.action?.step || 1))
       envItemsEl.append(chip)
     }
-    if (items.length === 0) envItemsEl.append(el('span', 'env-title', '环境检查不可用'))
   }
 
   async function wizardLoad({ probe = false, auto = false } = {}) {
@@ -2208,9 +2696,10 @@
       const data = await api('/api/console/session', { method: 'POST' })
       if (STATE.streamAbort) STATE.streamAbort.abort()
       setSession(data.sessionId)
+      STATE.approvals.clear()
       clearMessages()
       STATE.runs = []
-      renderRuns()
+      renderLanes()
       renderEmpty()
       renderTools(null)
       loadTools()
@@ -2256,6 +2745,24 @@
     }
   }
 
+  // ---------- drawers ----------
+
+  function drawerOpen(which) {
+    const target = which === 'history' ? historyDrawerEl : advancedDrawerEl
+    historyDrawerEl.hidden = target !== historyDrawerEl
+    advancedDrawerEl.hidden = target !== advancedDrawerEl
+    scrimEl.hidden = false
+    target.hidden = false
+    if (which === 'history') renderHistory()
+    else renderAdvancedRuns()
+  }
+
+  function drawerClose() {
+    historyDrawerEl.hidden = true
+    advancedDrawerEl.hidden = true
+    scrimEl.hidden = true
+  }
+
   // ---------- wiring ----------
 
   messagesEl.addEventListener('scroll', () => {
@@ -2290,6 +2797,17 @@
   }
 
   newChatEl.addEventListener('click', newConversation)
+  $('historyOpen').addEventListener('click', () => drawerOpen('history'))
+  $('advancedOpen').addEventListener('click', () => drawerOpen('advanced'))
+  for (const button of document.querySelectorAll('[data-close]')) {
+    button.addEventListener('click', drawerClose)
+  }
+  scrimEl.addEventListener('click', drawerClose)
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return
+    if (wizardDialogEl.open) return
+    drawerClose()
+  })
   $('wizardOpen').addEventListener('click', () => wizardOpen(1))
   $('envWizard').addEventListener('click', () => wizardOpen(1))
   $('wizardClose').addEventListener('click', wizardClose)

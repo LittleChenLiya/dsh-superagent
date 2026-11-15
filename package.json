@@ -1,6 +1,6 @@
 {
   "name": "@xiangyixie/dsh-superagent",
-  "version": "0.14.2",
+  "version": "0.14.3",
   "description": "长周期自主执行插件：一个目标拆成可并行的子任务，交付一份合并报告，重启后仍可继续。",
   "author": "Admire (LittleChenLiya)",
   "type": "module",
@@ -12,7 +12,7 @@
   "bugs": {
     "url": "https://github.com/LittleChenLiya/dsh-superagent/issues"
   },
-  "main": "lib/index.js",
+  "main": "lib/entry.js",
   "icon": "./icon.svg",
   "bin": {
     "dsh-superagent-watch": "bin/watch.js",
@@ -23,7 +23,8 @@
     "dsh-superagent-workbench": "bin/workbench.js"
   },
   "exports": {
-    ".": "./lib/index.js",
+    ".": "./lib/entry.js",
+    "./client": "./lib/client.js",
     "./icon": "./icon.svg",
     "./locale/*.json": "./locale/*.json",
     "./cordis.patch.yml": "./cordis.patch.yml",
@@ -37,6 +38,8 @@
     "icon.svg",
     "locale/*.json",
     "lib/index.js",
+    "lib/entry.js",
+    "lib/client.js",
     "lib/orchestrator.js",
     "lib/store.js",
     "lib/errors.js",
@@ -93,7 +96,7 @@
     "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "scripts": {
-    "test": "node --test test/orchestrator.test.mjs test/direct-and-queue.test.mjs test/dialog.test.mjs test/workspace.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/guard.test.mjs test/goal.test.mjs test/cron.test.mjs test/schedule.test.mjs test/audit.test.mjs test/inject.test.mjs test/sync.test.mjs test/workbench.test.mjs test/usage.test.mjs test/cost.test.mjs test/ledger.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/user-memory.test.mjs test/notify.test.mjs test/templates.test.mjs test/archive.test.mjs test/doctor.test.mjs test/pack.test.mjs test/runtime-control.test.mjs test/console.test.mjs test/wizard.test.mjs test/board.test.mjs",
+    "test": "node --test test/orchestrator.test.mjs test/direct-and-queue.test.mjs test/dialog.test.mjs test/workspace.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/guard.test.mjs test/goal.test.mjs test/cron.test.mjs test/schedule.test.mjs test/audit.test.mjs test/inject.test.mjs test/sync.test.mjs test/workbench.test.mjs test/usage.test.mjs test/cost.test.mjs test/ledger.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/user-memory.test.mjs test/notify.test.mjs test/templates.test.mjs test/archive.test.mjs test/doctor.test.mjs test/pack.test.mjs test/runtime-control.test.mjs test/console.test.mjs test/client-bundle.test.mjs test/wizard.test.mjs test/board.test.mjs",
     "check-pack": "node scripts/check-pack.mjs"
   },
   "keywords": [
@@ -109,6 +112,9 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
     }
   }
 }

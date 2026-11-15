@@ -6,6 +6,7 @@ Long-horizon autonomous runs: give it one goal and it plans parallel subtasks, r
 
 ## What it solves
 
+- **Your work spans several domains, and managing sessions costs more than doing the work.** Code, documents, data, and browser steps each get their own session, progress notes, and context; the more of them you run, the easier it is to lose track of where you stopped. The plugin works as a dispatch desk: you state the result you want, and it splits the work, runs it in parallel, tracks progress, and merges the result. You give the orders, make the key calls, and accept the outcome, without tending the conversational details.
 - **A goal that does not fit one step.** The goal is planned into dependent subtasks and advanced step by step instead of being crammed into one conversation.
 - **Work that runs too slowly in sequence.** Independent subtasks run in parallel, each in its own worktree, without overwriting one another.
 - **Runs that get interrupted.** The plan, progress, and produced files are durable; a host restart or a closed conversation does not reset the run.

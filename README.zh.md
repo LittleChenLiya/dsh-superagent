@@ -18,14 +18,14 @@
 
 三种安装方式，`dsh plugin add` 和桌面应用的 **Add plugin** 对话框都接受：
 
-- **npm 包名**：`@xiangyixie/dsh-superagent@0.14.2`，从 npm 安装。请写明版本号，原因见下文。
-- **GitHub 仓库**：`https://github.com/LittleChenLiya/dsh-superagent`，从仓库安装。需要固定版本时加 `#v0.14.2`。
+- **npm 包名**：`@xiangyixie/dsh-superagent@0.14.3`，从 npm 安装。请写明版本号，原因见下文。
+- **GitHub 仓库**：`https://github.com/LittleChenLiya/dsh-superagent`，从仓库安装。需要固定版本时加 `#v0.14.3`。
 - **本地目录**：`file:/absolute/path/to/dsh-superagent`，拷贝本地 checkout。改过源码之后要重新 add 一次。
 
 最常用的一条命令：
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.2
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.3
 ```
 
 ### 从插件索引安装（可选）
@@ -47,6 +47,8 @@ dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.2
 ```bash
 npm ls --prefix <DSH_HOME>/profiles/web @xiangyixie/dsh-superagent
 ```
+
+装完或更新完，必须**重启 DSH** 才生效：桌面端完全退出应用再打开，命令行宿主停掉 `dsh web` 再启动。插件只在宿主启动时加载一次，替换磁盘上的文件不会改变已经在跑的进程。`superagent_status` 会在「磁盘版本 ≠ 宿主已加载版本」时多打一行 `note: ... restart DSH`；但这个检查本身也要新版本代码在运行才存在，所以升级之后仍以重启为准。
 
 离线机器或需要固定制品时，改装打好的 tarball——它与 registry 提供的内容逐字节一致：
 
@@ -83,7 +85,7 @@ npx @deepseek-ai/dsh@0.2.2-rc.1 --version
 
 ```bash
 # 1. install the plugin into a profile (web, headless, ... whatever you run)
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.2
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.3
 
 # 2. confirm the bundle row exists in the merged config
 dsh --profile web --dump-config
@@ -93,8 +95,8 @@ dsh --profile web --dump-config
 
 | 对话框中的栏目 | 填写值 | 作用 |
 | --- | --- | --- |
-| 包名（Package name） | `@xiangyixie/dsh-superagent@0.14.2` | 从 npm 安装。要写明版本号（见上文）。 |
-| GitHub 仓库（GitHub repository） | `https://github.com/LittleChenLiya/dsh-superagent` | 从仓库安装。需要固定版本时加 `#v0.14.2`。 |
+| 包名（Package name） | `@xiangyixie/dsh-superagent@0.14.3` | 从 npm 安装。要写明版本号（见上文）。 |
+| GitHub 仓库（GitHub repository） | `https://github.com/LittleChenLiya/dsh-superagent` | 从仓库安装。需要固定版本时加 `#v0.14.3`。 |
 | 本地目录（Local directory） | `file:/absolute/path/to/dsh-superagent` | 拷贝本地 checkout。改过源码后需重新 add 一次。 |
 
 安装的三种形式和升级方式见上文的[安装](#安装)一节。查一下 dump 里有没有下面这一段。如果没有，说明插件装了但没挂载，任何 `superagent_*` 工具都不会存在：
@@ -156,7 +158,7 @@ report:
 - id: superagent
   config:
     maxSubtasks: 8
-    maxParallel: 3
+    maxParallel: 4
     maxActiveRuns: 2
 ```
 
@@ -175,7 +177,7 @@ report:
 | `maxSubagentDepth` | `1` | 子 agent 还能往下委派几层。`1` 禁止孙代理；`provider-managed` 交给后端。 |
 | `commandWorkerPermission` | `inherit` | 给"计划条目里声明了命令能力"的 worker（`shell`、`bash`、`pwsh`、…）使用的沙箱模式。`danger-full-access` 让这些 worker 在 `workspace-write` 宿主上真正执行命令；其他子 agent 保持继承。见[按 worker 设置命令权限](#按-worker-设置命令权限)。 |
 | `maxSubtasks` | `8` | 计划中子任务数量的上限。工具参数只能调低，不能调高；硬上限 16。 |
-| `maxParallel` | `3` | 同时执行的子任务数。工具参数只能调低；硬上限 8。 |
+| `maxParallel` | `4` | 同时执行的子任务数。工具参数只能调低；硬上限 8。 |
 | `maxActiveRuns` | `2` | 每个状态目录的活跃 run 数，跨共享该目录的 profile 和宿主计算。超出后再 `superagent_start` 会被拒，除非带上 `queue: true`，那样会等一个空位。`superagent_resume` 不计入配额，配额满了也能用，因为它只是把已经存在的活儿干完。 |
 | `maxQueuedRuns` | `5` | 同时允许排队等空位的 run 数；硬上限 32。`0` 关闭排队，超过 `maxActiveRuns` 的启动重新一律被拒。 |
 | `queueTimeoutMinutes` | `30` | 排队的 run 等多久还没开始就失败；期间不花任何钱。 |
@@ -206,7 +208,8 @@ report:
 | `auditDir` | `<stateDir>/audit` | `audit.jsonl` 及其导出文件所在目录。 |
 | `controlPort` | 关 | 嵌入接口的回环端口；`0` 让系统挑一个空闲端口。见 [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md)。 |
 | `workspaceIsolation` | `false` | 给每个 worker 一个自己的 git worktree，避免并行 worker 互相覆盖。见[按 worker 隔离工作区](#按-worker-隔离工作区)。 |
-| `workspaceRoot` | 宿主 cwd | `workspaceIsolation` 打开时，worker 在其中被隔离的仓库。必须是至少有一次提交的 git 工作树。 |
+| `workspaceRoot` | 会话目录（见 `workspaceBase`） | `workspaceIsolation` 打开时，worker 在其中被隔离的仓库。必须是至少有一次提交的 git 工作树。 |
+| `workspaceBase` | `session` | 隔离的基准目录。`session` 用当前会话的目录（或 git 从它解析出的仓库根），`workspaceRoot` 只有指向同一目录时才生效；`config` 恢复旧行为，始终使用 `workspaceRoot`。两者不一致时 status 打印 `workspace warning`，并在日志里说明，不会静默改用另一个项目。 |
 | `workbenchPort` | 关 | 本地工作区面板的回环端口；`0` 让系统挑一个空闲端口。面板自己读写文件，不经过宿主 API。 |
 | `workbenchRoot` | `process.cwd()` | 面板可以浏览和编辑的目录。它之外的任何路径都会被拒绝。 |
 | `consolePort` | 关 | 对话控制台的回环端口；`0` 让系统挑一个空闲端口。需要宿主的 `sessionController` 服务。 |
@@ -292,12 +295,14 @@ kept at <repository>/.superagent/worktrees/20261115T101500-ab12/w2; the main che
 was lost. Resolve with: git -C "/home/me/projects/api" merge superagent/20261115T101500-ab12-w2
 ```
 
-该 run 的唤醒消息会用一行说出同样的事，因为冲突是那种即便 run 本身"completed"也必须让人知道的结局。什么都不会被丢弃：分支和它的 checkout 会一直保留，直到你合并或删除它们。另外两种情况也照样报告，而不是悄悄丢掉：
+该 run 的唤醒消息会用一行说出同样的事。只要有一条分支没合回主 checkout（冲突，或者合并时主 checkout 是脏的），run 就不会报 `completed`：它降级为 `partial`，并往收件箱写一条 attention，写明分支、worktree 还在哪、为什么没合，以及手工收尾要跑的命令。什么都不会被丢弃：分支和它的 checkout 会一直保留，直到你合并或删除它们。另外两种情况也照样报告，而不是悄悄丢掉：
 
 - 该合并时主 checkout 还有未提交的改动——所有分支都不合并，因为往脏树上合并会把你的改动和 worker 的混在一起，中止时还会恢复成错误的状态；
 - 合并之前 run 被取消或撞上了 deadline——分支保留，resume 会复用同一批 worktree。
 
-**无法隔离时。** 如果 `workspaceRoot` 不是 git 工作树、`PATH` 里没有 git，或者仓库还没有任何提交，run 不会失败。它退回共享目录（也就是旧行为），并且 `superagent_status` 和通知都会说明：
+**基准目录。** 隔离默认以当前会话所在目录为准（`workspaceBase: "session"`），也就是沙箱边界、声明的交付物和合并目标都指向的那个目录；`workspaceRoot` 只有在指向同一目录时才生效，不一致时 `superagent_status` 会打印 `workspace warning` 并说明用了哪个目录，而不是默默在另一个项目里隔离。`workspaceBase: "config"` 恢复旧行为，始终使用 `workspaceRoot`。
+
+**无法隔离时。** 如果基准目录不是 git 工作树、`PATH` 里没有 git，或者仓库还没有任何提交，run 不会失败。它退回共享目录（也就是旧行为），并且 `superagent_status` 和通知都会说明：
 
 ```
 workspace: isolation was requested but is unavailable — /tmp/notes is not a git working tree,
@@ -487,6 +492,8 @@ cost: ¥0.0952 + $0.0248 (estimate; all models priced)
 并抓取该窗口。
 
 ## 工具
+
+如果目标有两个及以上可独立交付的产物，或含“先做 A 才能做 B”的前置依赖，就用 `superagent_start`，不要用宿主自带的 `subagent` 自己编排：只有 run 会留下计划、并行时序和一份合并报告。顶层会话的第一步会收到一条同样意思的简短提示，子会话不会重复收到。单一动作（一次查询、一次编辑、一条命令、一段短文本）不必起 run，直接做。
 
 - `superagent_start(goal, mode?, queue?, max_subtasks?, max_parallel?, deadline_minutes?, allow_duplicate?, wait_seconds?)`
   启动一次 run 并立刻返回 run id。`mode: "direct"` 让一个 worker 直接跑这个 goal，不要 planner 也不要 aggregator，并把该 worker 的回复原样作为报告返回——适合一次自成一体的查询、修改、检索或短写作，不适合可以并行拆开的目标。默认的 `mode: "planned"` 走完整的 planner → worker → 合并报告流程。计划中的子任务可以声明 `dependsOn` 另一个子任务：依赖方会等它，并在自己的 prompt 里拿到它的报告，而彼此独立的子任务仍然并行。依赖成环会在任何工作开始前否掉整个计划，依赖一个计划从未声明的任务则以原因跳过。两种模式产出相同的 run 记录、配额、deadline、取消和用量记账。`goal_mode: true` 增加一步验收，并在失败的轮次重新规划；见 [Goal 模式](#goal-模式)。
@@ -904,6 +911,8 @@ curl -s -H "Authorization: Bearer $TOKEN" "$URL/runs"
 事件流）都返回 `401`，而每个带非回环
 `Host` 头的请求返回 `403`。
 
+第一次使用时，页面上的「首次使用向导」按顺序走：检查环境 → 验证 API key（真的请求端点，通过了才写任何东西）→ 预览并保存 profile patch → 在一个临时目录里跑一次真实的 trial run。每次保存前会留一份可回滚的 patch 备份（保留最近 10 次），密钥只交给宿主的凭据存储，patch 里只留引用；向导只改它自己那两个条目（`llm-pi-ai`、`agent-default-model`），其余行和注释原样不动。宿主没有提供向导接口时，按钮会说明本宿主不支持，而不是弹一个填了也没用的表单。
+
 如果宿主没有挂载 `sessionController`（例如没有 web session API 的无头 profile），页面会说明这一点并拒绝创建会话。它**不会**假装成一个聊天。控制台在一个进程里也只保留一个活跃
 对话；"新对话"会创建一个新的 Host Session，旧的保持原样。以宿主 `pendingInput` 形式出现的审批提示会显示在
 状态行里，但不会由这个页面回答；只有 run 的 attention 问题会被回答。
@@ -1131,8 +1140,8 @@ SHA-256）。`--format html` 把同样的内容写成一个自包含
 
 | 你看到的 | 含义 | 怎么办 |
 | --- | --- | --- |
-| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.2` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
-| `Cannot find module .../lib/control.js`（或 `watch.js` / `report.js`）且插件从未激活 | 那个 profile 里的副本不完整——被中断的 `add` 会留下残缺的解包结果。已发布的包不是原因：每个版本都带全部三十个 `lib/` 文件。 | 删掉 profile 的 `node_modules` 下该插件的目录（带 scope 的 `@xiangyixie/dsh-superagent`，或旧 tarball 安装留下的无 scope 的 `dsh-superagent`），再用同一条 `add` 命令重装，并带上版本号。不要手工拷贝文件进去。 |
+| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.3` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
+| `Cannot find module .../lib/control.js`（或 `watch.js` / `report.js` / `wizard.js`），或宿主日志里的 `[dsh-superagent] dsh-superagent failed to load because a file it imports is missing: ...` | 那个 profile 里的副本不完整——被中断的 `add` 会留下残缺的解包结果。0.14.3 起的入口会直接点名缺哪个文件。已发布的包不是原因：每个版本都带全部三十四个 `lib/` 文件。 | 删掉 profile 的 `node_modules` 下该插件的目录（带 scope 的 `@xiangyixie/dsh-superagent`，或旧 tarball 安装留下的无 scope 的 `dsh-superagent`），再用同一条 `add` 命令重装，并带上版本号。不要手工拷贝文件进去。 |
 | `[error] the model provider rejected the API key` | 启动宿主的那个进程里缺 key 环境变量。 | 导出 `DEEPSEEK_API_KEY`（默认路由）或你那条路由声明的变量，然后重启 `dsh`。 |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | profile 的路由在环境里没有凭据。 | 设置该路由对应的环境变量并重启。错误行里写了路由名，以它为准，不要照本文。 |
 | `[error] the subagent service is unavailable` | profile 没有 `subagents` 服务，插件没有东西可 spawn。 | 用基于 base bundle 的 profile（原版镜像的 `web` 或 `headless`），或者给该 profile 加上 subagent 插件。 |

@@ -309,7 +309,7 @@ test('an expanded template is a normal goal: same planner, same plan, same limit
       assert.equal(run.subtasks.length, 2)
       // Every limit comes from the operator's config, not from the template.
       assert.equal(run.limits.maxSubtasks, 8)
-      assert.equal(run.limits.maxParallel, 3)
+      assert.equal(run.limits.maxParallel, 4)
       assert.equal(run.limits.attempts, 2)
       assert.equal(run.limits.deadlineMinutes, 120)
     } finally {

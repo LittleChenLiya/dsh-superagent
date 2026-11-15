@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict'
+﻿import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -76,6 +76,59 @@ test('the plugin mounts, registers the twelve tools, and runs a goal end to end'
     assert.match(missing, /^\[error\] no run with that id/)
     assert.match(missing, /^hint: /m)
     assert.match(missing, /^detail: /m)
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await fsp.rm(stateDir, { recursive: true, force: true })
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('a host that reads the delegation spec flat (dsh 0.2.2-rc.3) starts every child', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  const tools = new Map()
+  const seen = []
+  const ctx = {
+    tools: { register: tool => tools.set(tool.name, tool) },
+    subagents: {
+      // dsh 0.2.2-rc.3 reads parent/prompt/maxDepth from the spec itself
+      // (see startActivation in dsh-subagent). A spec that only nests them
+      // under `request` arrives here as undefined and throws at spec.parent.id,
+      // which is the failure this test pins down.
+      async startActivation(spec) {
+        if (!spec.parent || spec.parent.id === undefined) {
+          throw new TypeError("Cannot read properties of undefined (reading 'id')")
+        }
+        assert.equal(typeof spec.prompt?.[0]?.text, 'string')
+        seen.push(spec.label)
+        const text = spec.label === 'superagent-plan'
+          ? JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] })
+          : 'flat shape answer'
+        return {
+          childId: `flat-${spec.label}`,
+          result: Promise.resolve({ output: [{ type: 'text', text }], stopReason: 'completed' }),
+          dispose: async () => {},
+        }
+      },
+    },
+    get: () => undefined,
+  }
+
+  try {
+    apply(ctx, { stateDir, notifyOnComplete: false })
+
+    const started = await tools.get('superagent_start').execute(
+      { goal: 'say hi', wait_seconds: 20 },
+      { agent: { id: 'session-flat' } },
+    )
+    assert.match(started, /— completed/)
+    assert.match(started, /flat shape answer/)
+    assert.ok(seen.includes('superagent-plan'))
+    assert.ok(seen.includes('superagent-1'), `expected a worker spawn, saw ${JSON.stringify(seen)}`)
   } finally {
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
@@ -1187,3 +1240,96 @@ test('a refused activation still restores the parent sandbox mode', async () => 
   }
 })
 
+
+test('the multi-step nudge is injected once, at the first step of a top-level session only', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+
+  const tools = new Map()
+  const listeners = new Map()
+  const ctx = {
+    tools: { register: tool => tools.set(tool.name, tool) },
+    on(event, handler) { listeners.set(event, handler) },
+    get: () => undefined,
+  }
+
+  try {
+    apply(ctx, { stateDir, notifyOnComplete: false })
+    const preStep = listeners.get('agent/pre-step')
+    assert.equal(typeof preStep, 'function')
+
+    const turn = {
+      kind: 'proceed',
+      messages: [{
+        id: 'm1',
+        role: 'user',
+        content: [{ type: 'text', text: '搭一个仓库工具包：README + 两个脚本 + CHANGELOG' }],
+        source: { kind: 'user' },
+      }],
+    }
+    const top = { session: { header: { id: 'session-1', delegationDepth: 0 } } }
+
+    const injected = await preStep({ agent: top, step: 1 }, async () => turn)
+    assert.equal(injected.messages.length, 2)
+    assert.equal(injected.messages[0].source.kind, 'superagent-guidance')
+    assert.match(injected.messages[0].content[0].text, /superagent_start/)
+    assert.match(injected.messages[0].content[0].text, /subagent/)
+    assert.equal(injected.messages[1], turn.messages[0])
+
+    // Later steps of the same turn carry the nudge already; nothing is re-added.
+    const later = await preStep({ agent: top, step: 2 }, async () => turn)
+    assert.equal(later.messages.length, 1)
+
+    // A nudge that is already in the batch is never duplicated.
+    const again = await preStep({ agent: top, step: 1 }, async () => injected)
+    assert.equal(again.messages.length, 2)
+
+    // Child agents (delegated sessions) are left untouched.
+    const deep = { session: { header: { id: 'child-1', delegationDepth: 1, origin: 'subagent' } } }
+    assert.equal((await preStep({ agent: deep, step: 1 }, async () => turn)).messages.length, 1)
+    const marked = { session: { header: { id: 'child-2', delegationDepth: 0, origin: 'subagent' } } }
+    assert.equal((await preStep({ agent: marked, step: 1 }, async () => turn)).messages.length, 1)
+
+    // A rejected step is returned as-is.
+    const rejected = { kind: 'reject', reason: 'archived' }
+    assert.equal(await preStep({ agent: top, step: 1 }, async () => rejected), rejected)
+
+    // A host without an agent session on the event is left alone too.
+    assert.equal((await preStep({ agent: {}, step: 1 }, async () => turn)).messages.length, 1)
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    await fsp.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+/* --- an incomplete installation says what is missing --------------------- */
+
+test('a missing imported module is named with the fix, not swallowed', async () => {
+  const { explainLoadError } = await import('../lib/entry.js')
+
+  const notFound = Object.assign(
+    new Error("Cannot find module 'C:\\pkg\\lib\\wizard.js' imported from C:\\pkg\\lib\\index.js"),
+    { code: 'ERR_MODULE_NOT_FOUND' },
+  )
+  const file = explainLoadError(notFound, 'C:\\pkg\\lib')
+  assert.ok(file.includes('file it imports is missing: C:\\pkg\\lib\\wizard.js'), file)
+  assert.ok(file.includes('Copy-Item lib\\* -Force'), file)
+  assert.ok(file.includes('into C:\\pkg\\lib'), file)
+  // The consequence is spelled out, because "tools disappeared" is what the user actually sees.
+  assert.match(file, /none of its tools appear in any session/)
+
+  const pkg = explainLoadError(
+    new Error("Cannot find package 'left-pad' imported from C:\\pkg\\lib\\index.js"),
+    'C:\\pkg\\lib',
+  )
+  assert.match(pkg, /a package it imports is missing: left-pad/)
+  assert.ok(pkg.includes('npm install in C:\\pkg'), pkg)
+
+  const other = explainLoadError(new Error('boom'), 'C:\\pkg')
+  assert.match(other, /failed to load: boom/)
+  assert.match(other, /keeps its other tools/)
+})

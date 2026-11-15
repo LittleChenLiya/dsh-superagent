@@ -212,7 +212,7 @@
       <span class="tag">planner → N workers → aggregator</span>
     </div>
     <p>
-      一次规划模型调用把目标拆成互不依赖的子任务，按 <code>maxParallel</code>（默认 3，硬上限 8）并发跑，
+      一次规划模型调用把目标拆成互不依赖的子任务，按 <code>maxParallel</code>（默认 4，硬上限 8）并发跑，
       最后合并。子代理之间上下文隔离，只把结果交回来，所以一次 run 的上下文不会随子任务数量线性膨胀。
     </p>
     <figure>

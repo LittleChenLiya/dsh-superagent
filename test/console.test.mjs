@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict'
+﻿import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import http from 'node:http'
 import os from 'node:os'
@@ -191,7 +191,7 @@ test('the console page and every API refuse a request without the token', async 
     const page = await fetch(`${panel.url}/?token=${encodeURIComponent(panel.token)}`)
     assert.equal(page.status, 200)
     const html = await page.text()
-    assert.match(html, /这是对话会话，不是 run 指挥台/)
+    assert.match(html, /自动拆成任务线并行推进/)
     assert.match(page.headers.get('content-security-policy') ?? '', /default-src 'none'/)
 
     const discovery = JSON.parse(await fsp.readFile(path.join(state, 'console.json'), 'utf8'))
@@ -679,3 +679,241 @@ test('without sessionController the page reports unavailable and refuses to fake
     await fsp.rm(base, { recursive: true, force: true })
   }
 })
+
+test('the artifact route only opens files a run report names', async () => {
+  const { base, state } = await fixture()
+  const outDir = path.join(base, 'out')
+  await fsp.mkdir(outDir, { recursive: true })
+  const reportFile = path.join(outDir, 'report.html')
+  await fsp.writeFile(reportFile, '<h1>ok</h1>')
+  const secret = path.join(base, 'secret.txt')
+  await fsp.writeFile(secret, 'nope')
+  const { host } = fakeHost()
+  host.listRuns = async () => [{ id: 'run-1', report: `wrote ${reportFile}` }]
+  host.readRun = async (sessionId, runId) => (runId === 'run-1' ? { id: 'run-1', report: `wrote ${reportFile}` } : null)
+  let panel = null
+  try {
+    panel = await startConsole(state, host)
+    assert.equal((await request(panel, 'POST', '/api/console/bootstrap', {})).status, 200)
+    const query = `path=${encodeURIComponent(reportFile)}&runId=run-1&token=${encodeURIComponent(panel.token)}`
+    const listed = await fetch(`${panel.url}/api/console/artifact?${query}`)
+    assert.equal(listed.status, 200)
+    assert.match(listed.headers.get('content-security-policy') ?? '', /sandbox/)
+    assert.match(await listed.text(), /<h1>ok<\/h1>/)
+    const denied = await fetch(`${panel.url}/api/console/artifact?path=${encodeURIComponent(secret)}&token=${encodeURIComponent(panel.token)}`)
+    assert.equal(denied.status, 403)
+    const unauthorized = await fetch(`${panel.url}/api/console/artifact?path=${encodeURIComponent(reportFile)}`)
+    assert.equal(unauthorized.status, 401)
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('a restart reopens the same conversation, and a dead id is forgotten rather than faked', async () => {
+  const { base, state } = await fixture()
+  let first = null
+  let second = null
+  try {
+    const fake = fakeHost({
+      sessionId: 'session-console',
+      onPrompt: text => [{
+        type: 'stream.snapshot',
+        header: { id: 'session-console' },
+        cursor: 1,
+        records: [{
+          type: 'event',
+          event: {
+            type: 'user/message',
+            seq: 1,
+            time: Date.now(),
+            data: { content: [{ type: 'text', text }], source: { kind: 'user' } },
+          },
+        }],
+      }],
+    })
+    first = await startConsole(state, fake.host)
+    const boot = await request(first, 'POST', '/api/console/bootstrap', {})
+    assert.equal(boot.status, 200)
+    assert.equal(boot.json.data.sessionId, 'session-console')
+    const live = await fetch(`${first.url}/api/console/events?sessionId=session-console`, {
+      headers: { authorization: `Bearer ${first.token}` },
+    })
+    assert.equal(live.status, 200)
+    // Keep the tab open (no read/abort): the prompt's frames must reach a real
+    // subscriber, which is what fills the remembered transcript.
+    await request(first, 'POST', '/api/console/message', { text: '记住这一句' })
+    const timeline = path.join(state, 'console-timeline.json')
+    let saved = null
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      saved = JSON.parse(await fsp.readFile(timeline, 'utf8').catch(() => 'null'))
+      if ((saved?.records?.length ?? 0) > 0) break
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    assert.equal(saved?.sessionId, 'session-console')
+    assert.ok(
+      JSON.stringify(saved.records).includes('记住这一句'),
+      `the transcript window must be remembered, got ${JSON.stringify(saved.records).slice(0, 300)}`,
+    )
+  } finally {
+    if (first) await first.stop()
+  }
+  try {
+    // Same state root, new process: the remembered id and transcript come back,
+    // so the page reopens the same words instead of an empty conversation.
+    second = await startConsole(state, fakeHost().host)
+    const stateResponse = await request(second, 'GET', '/api/console/state')
+    assert.equal(stateResponse.json.data.sessionId, 'session-console')
+    const boot = await request(second, 'POST', '/api/console/bootstrap', {})
+    assert.equal(boot.json.data.sessionId, 'session-console')
+    const replay = await fetch(`${second.url}/api/console/events?sessionId=session-console`, {
+      headers: { authorization: `Bearer ${second.token}` },
+    })
+    const frames = await collectFrames(replay, { count: 2, timeoutMs: 800 })
+    assert.ok(
+      frames.some(frame => JSON.stringify(frame).includes('记住这一句')),
+      `the first opening after a restart must carry the transcript, got ${JSON.stringify(frames).slice(0, 400)}`,
+    )
+  } finally {
+    if (second) await second.stop()
+  }
+  // A remembered session the host can no longer open is dropped, not replayed.
+  const broken = fakeHost()
+  broken.host.subscribe = () => {
+    throw new Error('session not found')
+  }
+  let third = null
+  try {
+    third = await startConsole(state, broken.host)
+    const response = await fetch(`${third.url}/api/console/events?sessionId=session-console`, {
+      headers: { authorization: `Bearer ${third.token}` },
+    })
+    assert.equal(response.status, 200)
+    await collectFrames(response, { count: 1, timeoutMs: 300 }).catch(() => {})
+    const after = await request(third, 'GET', '/api/console/state')
+    assert.equal(after.json.data.sessionId, null)
+    let saved = null
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      saved = JSON.parse(await fsp.readFile(path.join(state, 'console-timeline.json'), 'utf8').catch(() => 'null'))
+      if (saved?.sessionId === null) break
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    assert.equal(saved?.sessionId, null)
+  } finally {
+    if (third) await third.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('an oversized remembered timeline is rewritten to the stated bound at startup', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    // A file left by an older build: 200 fat records, well past both bounds.
+    const records = Array.from({ length: 200 }, (_, index) => ({
+      type: 'event',
+      event: {
+        type: 'user/message',
+        seq: index + 1,
+        time: Date.now(),
+        data: { content: [{ type: 'text', text: 'x'.repeat(2000) }], source: { kind: 'user' } },
+      },
+    }))
+    await fsp.writeFile(
+      path.join(state, 'console-timeline.json'),
+      JSON.stringify({ version: 1, sessionId: 'session-console', savedAt: new Date().toISOString(), records }),
+    )
+    panel = await startConsole(state, fakeHost().host)
+    let saved = null
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      saved = JSON.parse(await fsp.readFile(path.join(state, 'console-timeline.json'), 'utf8'))
+      if (saved.records.length <= 120) break
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    assert.equal(saved.sessionId, 'session-console')
+    assert.ok(saved.records.length <= 120, `expected at most 120 records, got ${saved.records.length}`)
+    assert.ok(
+      Buffer.byteLength(JSON.stringify(saved.records)) <= 160 * 1024,
+      `expected at most 160 KiB of records, got ${Buffer.byteLength(JSON.stringify(saved.records))}`,
+    )
+    assert.ok(saved.records.length > 0, 'trimming must keep the newest records, not drop them all')
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('a remembered conversation that had no saved words still records the next turn', async () => {
+  const { base, state } = await fixture()
+  let first = null
+  let second = null
+  try {
+    first = await startConsole(state, fakeHost().host)
+    await request(first, 'POST', '/api/console/bootstrap', {})
+  } finally {
+    if (first) await first.stop()
+  }
+  const fake = fakeHost({
+    sessionId: 'session-console',
+    onPrompt: text => [{
+      type: 'stream.snapshot',
+      header: { id: 'session-console' },
+      cursor: 1,
+      records: [{
+        type: 'event',
+        event: {
+          type: 'user/message',
+          seq: 1,
+          time: Date.now(),
+          data: { content: [{ type: 'text', text }], source: { kind: 'user' } },
+        },
+      }],
+    }],
+  })
+  try {
+    second = await startConsole(state, fake.host)
+    const live = await fetch(`${second.url}/api/console/events?sessionId=session-console`, {
+      headers: { authorization: `Bearer ${second.token}` },
+    })
+    assert.equal(live.status, 200)
+    await request(second, 'POST', '/api/console/message', { text: '这句要留下' })
+    let saved = null
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      saved = JSON.parse(await fsp.readFile(path.join(state, 'console-timeline.json'), 'utf8').catch(() => 'null'))
+      if ((saved?.records?.length ?? 0) > 0) break
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    assert.ok(
+      JSON.stringify(saved?.records ?? []).includes('这句要留下'),
+      `a restored conversation must keep recording, got ${JSON.stringify(saved?.records ?? []).slice(0, 200)}`,
+    )
+  } finally {
+    if (second) await second.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('an approval never resolves without a page, and refuses stray answers', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    panel = await startConsole(state, fakeHost().host)
+    // No stream is open, so the only honest answer is "nobody decided".
+    assert.equal(
+      await panel.askApproval({ toolName: 'write_file', reason: 'blocked outside the workspace' }),
+      'cancelled',
+    )
+    const unknown = await request(panel, 'POST', '/api/console/approval', { id: 'ap_missing', decision: 'allow' })
+    assert.equal(unknown.status, 409)
+    const bad = await request(panel, 'POST', '/api/console/approval', { id: 'ap_missing', decision: 'maybe' })
+    assert.equal(bad.status, 400)
+    const anonymous = await request(panel, 'POST', '/api/console/approval', { id: 'ap_missing', decision: 'allow' }, null)
+    assert.equal(anonymous.status, 401)
+    const view = await request(panel, 'GET', '/api/console/state')
+    assert.deepEqual(view.json.data.approvals, [])
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+

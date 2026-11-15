@@ -8,10 +8,37 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
-## Unreleased
+## 0.14.3 — 2026-11-15
+
+The release is about the three things a run could not answer for itself: which
+directory it is allowed to work in, whether its files actually reached that
+directory, and whether the session mounts the plugin at all.
 
 ### Added
 
+- **Sidebar entry and approval card.** The package now publishes
+  `exports["./client"]` → `lib/client.js` and declares `dsh.client.platform:
+  "web"`, so a web host shows a Superagent entry next to its own sidebar items
+  instead of leaving the console reachable only by port. The entry discovers the
+  console through `GET /superagent/console-address` (the route answers with the
+  address the host actually serves, not the port from the patch file), and
+  `approval/request` is bridged to the console session with `prepend` so the
+  approval card appears where the console is open and an unanswered request
+  counts as a refusal. A client bundle that does not compile is reported on the
+  entry itself (`client.js.broken`) instead of silently disappearing from the
+  sidebar.
+- **First-use wizard.** `lib/wizard.js` plus `GET|POST /api/console/wizard/*`
+  (`status`, `preview`, `save`, `rollback`, `trial`) walk a user who has never
+  opened a terminal from "nothing configured" to "a real run finished": the
+  environment check explains each item, an API key is verified against the real
+  endpoint before anything is written, and the key itself goes to the host's
+  credential store with only its reference left in the profile patch. The patch
+  editor understands exactly the two entries it owns (`llm-pi-ai`,
+  `agent-default-model`), leaves every other line and comment untouched, and
+  keeps the last 10 backups restorable from the page. The last step is a real
+  trial run in a temporary directory, not a simulated success. Without the
+  wizard hooks on the host the console answers `501 wizard-unavailable` and says
+  why instead of drawing a dead form.
 - **Task board.** `boardPort` serves one Chinese page where a run is a column
   of subtask cards (status, steps, elapsed time, tokens, cost, dependencies,
   and the dependency that skipped it). Cards can be cancelled or rerun one at a
@@ -35,6 +62,95 @@ README is updated to the version being released.
 - **Reconnect-safe stream.** `/api/board/events` opens with a full snapshot and
   polls durable run records, so a refresh or a dropped connection restores the
   board instead of leaving it blank.
+- **A stated policy for multi-step goals.** A session that mounts
+  `superagent_start` next to the host's `subagent` tool can hand-orchestrate the
+  work with the latter and never create a run — no plan, no timing, no merged
+  report, nothing in the run list. `lib/index.js` now registers an
+  `agent/pre-step` hook that prepends one system-reminder at the first step of a
+  **top-level** turn only (`delegationDepth === 0` and no `origin: "subagent"`),
+  never twice in the same turn, and passes a rejected step through untouched.
+  The text defines multi-step (two or more independently deliverable artifacts,
+  or a prerequisite step), names `superagent_start(mode="planned")` /
+  `superagent_followup` / `superagent_status`, says to call the tool first rather
+  than audit its own tool list, and keeps single actions (one lookup, one edit,
+  one command, one short piece of writing) out of a run. Guidance only: no new
+  tool, no new spend. `superagent_start`'s description says the same in one
+  sentence.
+- **`workspaceBase`.** New config (`session` by default, `config` for the old
+  behaviour) decides what per-worker isolation is based on. See “Changed” for
+  what it fixes; the README table documents both values.
+- **The planner preset has a card of its own.** `cordis.patch.yml` now declares
+  the tool-less `planner` preset with the Chinese name
+  “插件内部：规划器（请勿选择）”, a description saying that picking it leaves the
+  session with no tools, and `order: 9999`. A fresh install used to show a bare
+  `planner` row with an empty description at the top of the mode picker. The
+  host preset schema has no hidden/internal field, so this is the closest the
+  schema allows.
+
+### Changed
+
+- **Four workers per layer by default.** `maxParallel` now defaults to 4 (hard
+  max 8) instead of 3, so a plan whose layer has three independent subtasks
+  starts all three instead of queueing the third. Dependency order is unchanged —
+  a subtask still starts only after its `dependsOn` finish — and two subtasks
+  that declare the same deliverable path are never in flight together, so a wider
+  layer cannot turn a same-file race into a lost file.
+- **A budget stop is a notice, not an error.** Hitting `maxModelCallsPerRun` or
+  `maxTokensPerRun` no longer writes `model-call budget reached (86/80 calls)`
+  into the run's `error`. It is recorded as `budgetStop` (detail, time, calls,
+  tokens), the status text prints it as `note: stopped starting new workers — …`,
+  and a run that still finished every subtask stays `completed` with `error`
+  null. A run that did not finish keeps the detail in `error` so the reason is
+  not lost, and the scheduler still pauses a plan on it.
+- **A run whose files never reached the target is `partial`, not `completed`.**
+  A skipped merge (uncommitted changes in the main checkout) and a conflict both
+  leave the worker's work only inside its branch. Such a run now drops to
+  `partial` and records one attention item naming: the branches, the worktree
+  each is kept in, why the merge was refused, the two options, and the exact
+  `git stash push -u` plus `git merge --no-ff <branch>` commands that finish it
+  by hand. Nothing is deleted, so a manual merge stays possible.
+- **The package entry point is `lib/entry.js`.** `main` and `exports["."]` point
+  at a file whose only job is to import `lib/index.js`; a missing sibling
+  (`wizard.js`, `board.js`, …) is caught there and reported as the missing file
+  plus the fix (`Copy-Item lib\* -Force`, or reinstall) instead of the plugin
+  vanishing with no explanation.
+- **`superagent_status` reports a version mismatch.** When `package.json` on
+  disk differs from the version the host loaded, the status text ends with
+  `note: ... restart DSH`. Code is read once at startup, so replacing files
+  changes nothing until a restart; the README's install section now says so.
+- **Child activations carry the delegation fields twice.** `startActivation` is
+  given both `request` and the same fields at the top level of the spec, because
+  dsh 0.2.2-rc.1 reads the former and the desktop host (0.2.2-rc.3) reads the
+  latter and otherwise throws `Cannot read properties of undefined (reading
+  'id')` before any child exists.
+- **The planner failure log keeps the host stack.** A planner attempt that fails
+  inside the host now logs the stack alongside the message that goes into the
+  run file.
+- **Docs.** `README.md` / `README.en.md` / `README.zh.md` gained the restart
+  requirement and the `workspaceBase` row; `docs/DETAIL.md` and
+  `docs/DETAIL.zh.md` open “What it solves” with the dispatch-desk case (work
+  spread across domains costs more to manage than to do). `docs/host-compat.md`
+  lists every rc.1/rc.3 shape difference the plugin papers over — start-request
+  field placement, child handle, host service probes, preset schema — with the
+  file and line to re-check when the host changes.
+
+### Fixed
+
+- **Isolation followed `workspaceRoot` even when it named another project.**
+  The base was taken from the profile, while the sandbox boundary, the declared
+  deliverables, and the merge target all came from the session — so merges
+  landed where nobody looked, or were refused because that checkout had
+  unrelated local edits. The default (`workspaceBase: "session"`) now uses the
+  session's cwd (or the repository root git resolves from it) and honours
+  `workspaceRoot` only when it names that same directory, comparing paths
+  case-insensitively on Windows. A mismatch is recorded on the run as
+  `workspace.baseNote` and printed by status as `workspace warning: ...` instead
+  of being silently applied; when isolation is impossible, the shared directory
+  reported as `base` is the session's too.
+- **A merge that never happened used to print `completed`.** The user opened the
+  target directory and found it empty. Covered by the `partial` change above.
+- **An incomplete install no longer looks like a plugin with no tools.**
+  Covered by the entry-point change above.
 
 ## 0.14.2 — 2026-11-15
 

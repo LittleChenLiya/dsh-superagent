@@ -217,6 +217,22 @@ test('describeWorkspace turns merge outcomes into lines a user can act on', () =
   assert.match(text, /workspace conflict: \[3\] a\.js, b\.js/)
   assert.match(text, /git -C "C:\\repo" merge superagent\/r-w3/)
   assert.match(text, /\[4\] not merged \(skipped\)/)
+  // A held-back merge is still finishable by hand, so the line says how.
+  assert.match(text, /branch superagent\/r-w4 kept/)
+  assert.match(text, /Finish with: git -C "C:\\repo" merge --no-ff superagent\/r-w4/)
+})
+
+test('describeWorkspace repeats a workspace base warning instead of hiding it', () => {
+  const text = describeWorkspace({
+    mode: 'git-worktree',
+    base: 'D:\\DSH测试',
+    root: 'D:\\DSH测试\\.superagent\\worktrees',
+    baseNote: 'workspaceRoot D:/dsh/work/smoke-repo is not this session\'s directory (D:\\DSH测试), '
+      + "so isolation used the session directory; set workspaceBase: 'config' to keep the configured one",
+    merges: [],
+  }).join('\n')
+  assert.match(text, /workspace warning: workspaceRoot D:\/dsh\/work\/smoke-repo is not this session's directory/)
+  assert.match(text, /workspaceBase: 'config'/)
 })
 
 test('describeWorkspace explains an unavailable environment and an empty record', () => {

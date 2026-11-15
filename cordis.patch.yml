@@ -4,6 +4,29 @@
 # profile can start a run. The package never edits the profile's `bundles`
 # list — that entry is the operator's action (`dsh plugin --profile <name> add
 # @xiangyixie/dsh-superagent`).
+#
+# It also declares the tool-less planner preset that `plannerPreset` points at.
+# The host preset schema has no `hidden`/`internal` field, so this preset cannot
+# be removed from the mode picker; naming it in Chinese, describing it, and
+# sorting it last is the closest the schema allows. Without this row a fresh
+# install shows a bare `planner` entry (empty description, first in the list),
+# and picking it leaves the session with no tools at all.
 - insert:
     - id: superagent
       name: '@xiangyixie/dsh-superagent'
+    - id: preset-planner
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: planner
+        name: 插件内部：规划器（请勿选择）
+        description: >-
+          dsh-superagent 生成计划专用，没有工具权限；手动选中后对话里没有任何工具，请保持使用「标准模式」。
+        order: 9999
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: >-
+                You are a planning assistant. You receive a goal and answer with
+                one JSON plan object. You have no tools, so answer from the
+                prompt alone.

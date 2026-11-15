@@ -27,7 +27,7 @@ filesystem; this is not a sandbox.
 in the environment:
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.2
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.3
 ```
 
 Then ask the session for a run — a real call, not a sketch:
@@ -80,7 +80,7 @@ your `PATH`, use `npx @deepseek-ai/dsh@0.2.2-rc.1` instead.
 
 ```bash
 # 1. install the plugin into a profile (web, headless, ... whatever you run)
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.2
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.3
 
 # 2. confirm the bundle row exists in the merged config
 dsh --profile web --dump-config
@@ -101,8 +101,8 @@ The desktop app's **Add plugin** dialog accepts the same three forms:
 
 | Dialog input | Value | What it does |
 | --- | --- | --- |
-| Package name | `@xiangyixie/dsh-superagent@0.14.2` | Installs from npm. Name the version (see below). |
-| GitHub repository | `https://github.com/LittleChenLiya/dsh-superagent` | Installs from the repository. Add `#v0.14.2` if you need a fixed release. |
+| Package name | `@xiangyixie/dsh-superagent@0.14.3` | Installs from npm. Name the version (see below). |
+| GitHub repository | `https://github.com/LittleChenLiya/dsh-superagent` | Installs from the repository. Add `#v0.14.3` if you need a fixed release. |
 | Local directory | `file:/absolute/path/to/dsh-superagent` | Copies the checkout. Re-add after changing the source. |
 
 Upgrading is remove-then-add, not in-place: remove the old copy
@@ -120,6 +120,14 @@ actually landed with:
 ```bash
 npm ls --prefix <DSH_HOME>/profiles/web @xiangyixie/dsh-superagent
 ```
+
+A new or updated plugin takes effect only after **restarting DSH**: quit the
+desktop app completely and reopen it, or stop and start the `dsh web` host.
+Code is loaded once at host startup, so replacing files on disk does not change
+the process that is already running. `superagent_status` appends a
+`note: ... restart DSH` line when the version on disk differs from the one the
+host loaded; that check itself only exists in the newer code, so after an
+upgrade the restart is still what makes it real.
 
 For an offline machine or a pinned artifact, install a packed tarball instead —
 it is byte-identical to what the registry serves:
@@ -212,7 +220,7 @@ Row config in `<profile>/cordis.patch.yml`:
 - id: superagent
   config:
     maxSubtasks: 8
-    maxParallel: 3
+    maxParallel: 4
     maxActiveRuns: 2
 ```
 
@@ -231,7 +239,7 @@ Row config in `<profile>/cordis.patch.yml`:
 | `maxSubagentDepth` | `1` | How deep children may delegate. `1` forbids grandchildren; `provider-managed` leaves it to the backend. |
 | `commandWorkerPermission` | `inherit` | Sandbox mode for workers whose plan entry declares a command capability (`shell`, `bash`, `pwsh`, …). `danger-full-access` lets those workers actually run commands on a `workspace-write` host; every other child keeps inheritance. See [Per-worker command permissions](#per-worker-command-permissions). |
 | `maxSubtasks` | `8` | Cap on planned subtasks. A tool argument can only lower it, never raise it; hard max 16. |
-| `maxParallel` | `3` | Subtasks executing at once. A tool argument can only lower it; hard max 8. |
+| `maxParallel` | `4` | Subtasks executing at once. A tool argument can only lower it; hard max 8. |
 | `maxActiveRuns` | `2` | Active runs per state directory, across profiles and hosts that share it. A further `superagent_start` is rejected unless it passes `queue: true`, in which case it waits for a slot instead. `superagent_resume` is not counted and works when the cap is full, because it only finishes work that already exists. |
 | `maxQueuedRuns` | `5` | Runs allowed to wait for a free slot at once; hard max 32. `0` turns queueing off, so every start over `maxActiveRuns` is rejected again. |
 | `queueTimeoutMinutes` | `30` | How long a queued run waits before it fails without ever starting; nothing is spent. |
@@ -262,7 +270,8 @@ Row config in `<profile>/cordis.patch.yml`:
 | `auditDir` | `<stateDir>/audit` | Where `audit.jsonl` and its exports live. |
 | `controlPort` | off | Loopback port for the embedding surface; `0` picks a free one. See [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md). |
 | `workspaceIsolation` | `false` | Give every worker its own git worktree so parallel workers cannot overwrite each other. See [Per-worker workspace isolation](#per-worker-workspace-isolation). |
-| `workspaceRoot` | host cwd | Repository the workers are isolated in when `workspaceIsolation` is on. Must be a git working tree with at least one commit. |
+| `workspaceRoot` | session directory (see `workspaceBase`) | Repository the workers are isolated in when `workspaceIsolation` is on. Must be a git working tree with at least one commit. |
+| `workspaceBase` | `session` | What isolation is based on. `session` uses the current session's directory (or the repository root git resolves from it) and honours `workspaceRoot` only when it names the same directory; `config` restores the old behaviour of always using `workspaceRoot`. A mismatch prints `workspace warning` in status and in the log instead of silently isolating in another project. |
 | `workbenchPort` | off | Loopback port for the local workspace panel; `0` picks a free one. The panel reads and edits files itself, without a host API. |
 | `workbenchRoot` | `process.cwd()` | Directory the panel may browse and edit. Every path outside it is refused. |
 | `consolePort` | off | Loopback port for the conversation console; `0` picks a free one. Requires the host `sessionController` service. |
@@ -410,10 +419,13 @@ kept at <repository>/.superagent/worktrees/20261115T101500-ab12/w2; the main che
 was lost. Resolve with: git -C "/home/me/projects/api" merge superagent/20261115T101500-ab12-w2
 ```
 
-The wake-up message for the run says the same in one line, because a conflict is
-the one outcome that needs the user even when the run itself "completed". Nothing
-is discarded: the branch and its checkout are kept until you merge or delete
-them. Two more cases are reported the same way rather than silently dropped:
+The wake-up message for the run says the same in one line. As soon as one branch
+has not reached the main checkout — a conflict, or a dirty checkout at merge time
+— the run is not reported as `completed`: it drops to `partial` and writes one
+attention item naming the branch, where its worktree still is, why the merge was
+refused, and the commands that finish it by hand. Nothing is discarded: the
+branch and its checkout are kept until you merge or delete them. Two more cases
+are reported the same way rather than silently dropped:
 
 - the main checkout has uncommitted changes when the merge is due — every
   branch is left unmerged, since merging into a dirty tree would mix your edits
@@ -421,7 +433,15 @@ them. Two more cases are reported the same way rather than silently dropped:
 - the run was cancelled or hit its deadline before merging — the branches are
   kept and a resume reuses the same worktrees.
 
-**When isolation is not possible.** If `workspaceRoot` is not a git working tree,
+**What isolation is based on.** The default is the session's own directory
+(`workspaceBase: "session"`) — the same directory the sandbox boundary, the
+declared deliverables, and the merge target already use. `workspaceRoot` is
+honoured only when it names that directory; when it does not,
+`superagent_status` prints `workspace warning` and names the directory actually
+used instead of isolating inside another project. `workspaceBase: "config"`
+restores the old behaviour of always using `workspaceRoot`.
+
+**When isolation is not possible.** If the base directory is not a git working tree,
 git is not on `PATH`, or the repository has no commit yet, the run does not fail.
 It falls back to the shared directory (the previous behaviour) and both
 `superagent_status` and the notification say so:
@@ -709,6 +729,13 @@ click and text into it, verifies both from the target process's own state file,
 and captures the window.
 
 ## Tools
+
+When a goal has two or more independently deliverable artifacts, or a step that
+must precede another, use `superagent_start` rather than hand-orchestrating the
+host's own `subagent` tool: only a run keeps the plan, the parallel timing, and
+one merged report. A top-level session gets a short reminder saying the same at
+its first step; child sessions are not given it again. A single action — one
+lookup, one edit, one command, one short piece of writing — does not need a run.
 
 - `superagent_start(goal, mode?, queue?, max_subtasks?, max_parallel?, deadline_minutes?, allow_duplicate?, wait_seconds?)`
   starts a run and returns immediately with a run id. `mode: "direct"` runs the
@@ -1423,6 +1450,16 @@ The bound URL and a fresh per-process token are written to
 the event stream, answers `401` without it, and every request with a non-loopback
 `Host` header answers `403`.
 
+On a fresh install the page opens with 首次使用向导 (first-use wizard): an
+environment check, an API key verified against the real endpoint before anything
+is written, a preview and save of the profile patch, and one real trial run in a
+temporary directory. Every save leaves a restorable backup (the last 10), the key
+goes only to the host's credential store while the patch keeps its reference, and
+the editor touches just the two entries it owns (`llm-pi-ai`,
+`agent-default-model`). A host without the wizard hooks answers
+`501 wizard-unavailable`, so the button says that rather than opening a form that
+cannot work.
+
 If the host does not mount `sessionController` (for example a headless profile
 without the web session API), the page says so and refuses to create a session.
 It does **not** pretend to be a chat. The console also keeps one active
@@ -1741,8 +1778,8 @@ appears to "hang" until the ignored-abort child returns.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.2` and read the host log for `[dsh-superagent]` lines. |
-| `Cannot find module .../lib/control.js` (or `watch.js` / `report.js`) and the plugin never activates | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. The published package is not the cause: every version ships all thirty `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
+| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.3` and read the host log for `[dsh-superagent]` lines. |
+| `Cannot find module .../lib/control.js` (or `watch.js` / `report.js` / `wizard.js`), or `[dsh-superagent] dsh-superagent failed to load because a file it imports is missing: ...` in the host log | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. From 0.14.3 the entry point names the missing file itself. The published package is not the cause: every version ships all thirty-four `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |
 | `[error] the subagent service is unavailable` | The profile has no `subagents` service, so the plugin has nothing to spawn. | Use a profile built on the base bundle (`web` or `headless` from the stock image), or add the subagent plugin to the profile. |

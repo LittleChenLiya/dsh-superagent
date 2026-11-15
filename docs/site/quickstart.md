@@ -210,7 +210,7 @@ $DSH_HOME/profiles/web/cordis.patch.yml
 ```yaml
 - id: superagent
   config:
-    maxParallel: 3
+    maxParallel: 4
     maxModelCallsPerRun: 80
     maxTokensPerRun: 2000000
     pricing:

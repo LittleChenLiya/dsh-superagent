@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { promisify } from 'node:util'
 
 import {
   capabilityGaps,
@@ -17,6 +19,8 @@ import {
 } from '../lib/orchestrator.js'
 import { createMemory } from '../lib/memory.js'
 import { ACTIVE_STATUSES, createStore } from '../lib/store.js'
+
+const execFileAsync = promisify(execFile)
 
 const BASE_CONFIG = {
   maxSubtasks: 6,
@@ -178,6 +182,70 @@ test('plan is decomposed and subtasks run in parallel within the limit', async (
   assert.equal(finished.usage.inputTokens, 50)
   assert.equal(finished.report, 'result for superagent-aggregate')
   assert.equal((await store.read(run.id)).status, 'completed')
+})
+
+test('four independent subtasks run at once when the cap allows it', async () => {
+  let running = 0
+  let peak = 0
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [
+          { title: 'A', prompt: 'do A' },
+          { title: 'B', prompt: 'do B' },
+          { title: 'C', prompt: 'do C' },
+          { title: 'D', prompt: 'do D' },
+        ],
+      }))
+    }
+    running++
+    peak = Math.max(peak, running)
+    await new Promise(resolve => setTimeout(resolve, 25))
+    running--
+    return completed(`result for ${spec.label}`)
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, config: { maxParallel: 4 } })
+
+  const run = await orchestrator.start({ goal: 'ship four things', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+  assert.equal(finished.status, 'completed')
+  assert.equal(peak, 4, `peak concurrency was ${peak}`)
+})
+
+test('subtasks that declare the same file are never in flight at the same time', async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-clash-'))
+  try {
+    const plan = JSON.stringify({
+      subtasks: [
+        { title: 'first', prompt: 'write shared.txt', deliverables: [{ path: 'shared.txt' }] },
+        { title: 'second', prompt: 'write shared.txt', deliverables: [{ path: 'shared.txt' }] },
+      ],
+    })
+    let active = 0
+    let overlapped = false
+    const { spawnChild } = makeSpawner(async spec => {
+      if (spec.label === 'superagent-plan') return completed(plan)
+      if (spec.label === 'superagent-aggregate') return completed('merged')
+      active++
+      if (active > 1) overlapped = true
+      await new Promise(resolve => setTimeout(resolve, 25))
+      await fsp.writeFile(path.join(root, 'shared.txt'), `${spec.label}\n`, 'utf8')
+      active--
+      return completed(`wrote for ${spec.label}`)
+    })
+    const { orchestrator } = orchestratorWith({
+      spawner: { spawnChild },
+      config: { attempts: 1, maxParallel: 4, workspaceRoot: root },
+    })
+
+    const run = await orchestrator.start({ goal: 'write shared.txt twice', parentSessionId: parent.id, parent })
+    const finished = await orchestrator.status(run.id, 10)
+    assert.equal(finished.status, 'completed')
+    assert.equal(overlapped, false, 'two workers wrote the same file at once')
+    assert.deepEqual(finished.subtasks.map(item => item.status), ['completed', 'completed'])
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true })
+  }
 })
 
 test('a subtask waits for the subtask it depends on', async () => {
@@ -1231,6 +1299,30 @@ test('the model-call budget stops new children and keeps the work that finished'
   assert.equal(calls.filter(call => call.label === 'superagent-3').length, 0)
 })
 
+test('a completed run records the budget stop as a notice, not an error', async () => {
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }],
+      }))
+    }
+    return completed(`ok ${spec.label}`)
+  })
+  const { orchestrator } = orchestratorWith({
+    store: memoryStore(),
+    spawner: { spawnChild },
+    config: { maxParallel: 2, maxModelCallsPerRun: 3 },
+  })
+
+  const run = await orchestrator.start({ goal: 'stay inside the budget', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.error ?? null, null, 'a budget stop is not an error once the work finished')
+  assert.match(finished.budgetStop?.detail ?? '', /budget reached/)
+  assert.deepEqual(finished.subtasks.map(item => item.status), ['completed', 'completed'])
+})
+
 test('the call budget still stops a run when child usage cannot be read at all', async () => {
   const { spawnChild, calls } = makeSpawner(async spec => {
     if (spec.label === 'superagent-plan') {
@@ -2179,72 +2271,159 @@ test('isolation on names each worker directory in its prompt and merges the bran
   assert.equal(finished.subtasks[0].workspace.dir, null)
 })
 
-/** A workspace manager whose worktrees are real directories, for deliverable tests. */
-function diskWorkspace(base, dir) {
-  return {
-    root: path.dirname(dir),
-    baseDir: base,
-    async probe() {
-      return { ok: true, base, reason: null }
-    },
-    async prepare() {
-      return { ok: true, dir, branch: 'superagent/test-w1', base, reused: false, reason: null }
-    },
-    async harvest() {
-      return { status: 'committed', files: [], commit: 'abc1234', detail: null }
-    },
-    async mergeAll(workers) {
-      return workers.map(worker => ({
-        index: worker.index,
-        branch: worker.branch,
-        dir: null,
-        status: 'merged',
-        files: [],
-        detail: null,
-      }))
-    },
-    async release() {},
-  }
+/** Compare paths the way Windows does: git prints forward slashes and its own casing. */
+function normalizePath(value) {
+  return String(value).replace(/\\/g, '/').toLowerCase()
 }
 
-/** A one-subtask plan that declares out.txt; `write` decides where the worker puts it. */
-function deliverableSpawner(write) {
+async function gitIn(cwd, args) {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd,
+    env: {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_AUTHOR_NAME: 't',
+      GIT_AUTHOR_EMAIL: 't@t',
+      GIT_COMMITTER_NAME: 't',
+      GIT_COMMITTER_EMAIL: 't@t',
+    },
+  })
+  return stdout
+}
+
+/** A committed throwaway repository with one tracked file. */
+async function makeRepo() {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-base-'))
+  await gitIn(dir, ['init', '-b', 'main'])
+  // A machine-wide autocrlf would rewrite every checkout and make the content
+  // assertions below test the runner's git config instead of the behaviour.
+  await gitIn(dir, ['config', 'core.autocrlf', 'false'])
+  await fsp.writeFile(path.join(dir, 'notes.txt'), 'one\n', 'utf8')
+  await gitIn(dir, ['add', '-A'])
+  await gitIn(dir, ['commit', '-m', 'initial'])
+  return dir
+}
+
+/** A plan with one worker that writes `a.txt` into whatever cwd it is given. */
+function fileWritingSpawner() {
   return makeSpawner(async spec => {
     if (spec.label === 'superagent-plan') {
-      return completed(JSON.stringify({
-        subtasks: [{
-          title: 'write the report',
-          prompt: 'write out.txt',
-          deliverables: [{ path: 'out.txt', kind: 'text' }],
-        }],
-      }))
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'write a.txt' }] }))
     }
-    await write()
-    return completed('wrote the report')
+    if (spec.cwd) await fsp.writeFile(path.join(spec.cwd, 'a.txt'), 'delivered\n', 'utf8')
+    return completed('wrote a.txt')
   })
 }
 
-async function tempDir() {
-  return fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-root-'))
-}
+test('isolation follows the session directory, so the merge lands where the user looks', async () => {
+  const session = await makeRepo()
+  const stale = await makeRepo()
+  const withCwd = { id: 'session-cwd', session: { header: { cwd: session } } }
+  try {
+    const { orchestrator } = orchestratorWith({
+      spawner: fileWritingSpawner(),
+      // A profile left over from another project: this is the directory that
+      // used to be used unconditionally, and the merge target with it.
+      config: { workspaceIsolation: true, attempts: 1, workspaceRoot: stale },
+    })
+    const run = await orchestrator.start({ goal: 'write a.txt', parentSessionId: withCwd.id, parent: withCwd })
+    const finished = await orchestrator.status(run.id, 20)
 
-async function runDeliverableCase(write) {
-  const base = await tempDir()
-  const dir = await tempDir()
-  const spawner = deliverableSpawner(() => write(base, dir))
-  const { orchestrator } = orchestratorWith({
-    spawner,
-    workspace: diskWorkspace(base, dir),
-    config: { workspaceIsolation: true, attempts: 1 },
-  })
-  const run = await orchestrator.start({ goal: 'write a report', parentSessionId: parent.id, parent })
-  const finished = await orchestrator.status(run.id, 10)
-  return { finished, spawner, base, dir }
-}
+    assert.equal(finished.status, 'completed')
+    assert.equal(normalizePath(finished.workspace.base), normalizePath(session))
+    assert.match(finished.workspace.baseNote, /workspaceRoot .* is not this session's directory/)
+    // The deliverable lands in the session repository; the stale one is untouched.
+    assert.equal(await fsp.readFile(path.join(session, 'a.txt'), 'utf8'), 'delivered\n')
+    await assert.rejects(fsp.stat(path.join(stale, 'a.txt')))
+  } finally {
+    await fsp.rm(session, { recursive: true, force: true })
+    await fsp.rm(stale, { recursive: true, force: true })
+  }
+})
 
-function escapeRegExp(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
+test("workspaceBase: 'config' still isolates against the configured repository", async () => {
+  const session = await makeRepo()
+  const configured = await makeRepo()
+  const withCwd = { id: 'session-cwd', session: { header: { cwd: session } } }
+  try {
+    const { orchestrator } = orchestratorWith({
+      spawner: fileWritingSpawner(),
+      config: { workspaceIsolation: true, attempts: 1, workspaceRoot: configured, workspaceBase: 'config' },
+    })
+    const run = await orchestrator.start({ goal: 'write a.txt', parentSessionId: withCwd.id, parent: withCwd })
+    const finished = await orchestrator.status(run.id, 20)
+
+    assert.equal(finished.status, 'completed')
+    assert.equal(normalizePath(finished.workspace.base), normalizePath(configured))
+    // An explicit opt-in keeps the old behaviour and says nothing about it.
+    assert.equal(finished.workspace.baseNote, undefined)
+    assert.equal(await fsp.readFile(path.join(configured, 'a.txt'), 'utf8'), 'delivered\n')
+  } finally {
+    await fsp.rm(session, { recursive: true, force: true })
+    await fsp.rm(configured, { recursive: true, force: true })
+  }
+})
+
+test('a dirty checkout leaves a real run partial and names the branch to merge', async () => {
+  const session = await makeRepo()
+  // The exact state of run 20261115T131322-d464: the main checkout has local
+  // edits, so git refuses the merge and the deliverable stays in the worktree.
+  await fsp.writeFile(path.join(session, 'notes.txt'), 'local edit\n', 'utf8')
+  const withCwd = { id: 'session-cwd', session: { header: { cwd: session } } }
+  try {
+    const { orchestrator } = orchestratorWith({
+      spawner: fileWritingSpawner(),
+      config: { workspaceIsolation: true, attempts: 1 },
+    })
+    const run = await orchestrator.start({ goal: 'write a.txt', parentSessionId: withCwd.id, parent: withCwd })
+    const finished = await orchestrator.status(run.id, 20)
+
+    assert.equal(finished.workspace.merges[0].status, 'skipped')
+    assert.equal(finished.status, 'partial')
+    assert.match(finished.error, /1 worker branch\(es\) were not merged/)
+    const item = (finished.attention?.items ?? []).find(entry => entry.source === 'workspace-merge')
+    assert.ok(item, 'the unmerged branch must be explained in the inbox')
+    assert.match(item.question, /stash push -u -m superagent-before-merge/)
+    // The file is not where the user would look, and the run no longer pretends it is.
+    await assert.rejects(fsp.stat(path.join(session, 'a.txt')))
+    assert.equal(await fsp.readFile(path.join(finished.workspace.merges[0].dir, 'a.txt'), 'utf8'), 'delivered\n')
+  } finally {
+    await fsp.rm(session, { recursive: true, force: true })
+  }
+})
+
+test('an unavailable isolation still checks deliverables in the session directory', async () => {
+  const session = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-shared-'))
+  const stale = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-stale-'))
+  const withCwd = { id: 'session-cwd', session: { header: { cwd: session } } }
+  try {
+    const spawner = makeSpawner(async spec => {
+      if (spec.label === 'superagent-plan') {
+        return completed(JSON.stringify({
+          subtasks: [{ title: 'write', prompt: 'write out.txt', deliverables: [{ path: 'out.txt' }] }],
+        }))
+      }
+      await fsp.writeFile(path.join(session, 'out.txt'), 'shared dir\n', 'utf8')
+      return completed('wrote out.txt')
+    })
+    const { orchestrator } = orchestratorWith({
+      spawner,
+      config: { workspaceIsolation: true, attempts: 1, workspaceRoot: stale },
+    })
+    const run = await orchestrator.start({ goal: 'write out.txt', parentSessionId: withCwd.id, parent: withCwd })
+    const finished = await orchestrator.status(run.id, 15)
+
+    assert.equal(finished.workspace.mode, 'unavailable')
+    // The shared directory is the session's, so the deliverable check passes;
+    // a stale workspaceRoot must not turn a written file into "missing".
+    assert.equal(normalizePath(finished.workspace.base), normalizePath(session))
+    assert.equal(finished.status, 'completed')
+    assert.equal(finished.subtasks[0].deliverables[0].status, 'verified')
+  } finally {
+    await fsp.rm(session, { recursive: true, force: true })
+    await fsp.rm(stale, { recursive: true, force: true })
+  }
+})
 
 test('a deliverable in the isolated checkout verifies, and the child starts in that checkout', async () => {
   const { finished, spawner, dir } = await runDeliverableCase(async (base, worktree) => {
@@ -2281,7 +2460,8 @@ test('a deliverable produced nowhere is missing', async () => {
   assert.equal(finished.subtasks[0].deliverableCheck.misplaced, 0)
 })
 
-test('a merge conflict is recorded on the run and its branch is kept', async () => {  const spawner = twoTaskSpawner()
+test('a merge conflict is recorded on the run and its branch is kept', async () => {
+  const spawner = twoTaskSpawner()
   const workspace = fakeWorkspace({
     mergeOutcomes: worker => (worker.index === 2
       ? { index: 2, branch: worker.branch, dir: worker.dir, status: 'conflict', files: ['notes.txt'], detail: 'conflicts with work already in /repo' }
@@ -2292,8 +2472,9 @@ test('a merge conflict is recorded on the run and its branch is kept', async () 
   const run = await orchestrator.start({ goal: 'conflicting edits', parentSessionId: parent.id, parent })
   const finished = await orchestrator.status(run.id, 10)
 
-  // The run itself still settles: a conflict is a merge outcome, not a failure.
-  assert.equal(finished.status, 'completed')
+  // A conflict leaves the deliverable outside the target workspace, so the run
+  // must not report "completed" for files the user cannot see.
+  assert.equal(finished.status, 'partial')
   assert.equal(finished.workspace.conflicts, 1)
   const conflict = finished.workspace.merges.find(merge => merge.index === 2)
   assert.equal(conflict.status, 'conflict')
@@ -2302,6 +2483,29 @@ test('a merge conflict is recorded on the run and its branch is kept', async () 
   // The kept checkout is the evidence the user merges by hand.
   assert.equal(finished.subtasks[1].workspace.dir, `/state/workspaces/${run.id}/w2`)
   assert.match(finished.report, /done/)
+})
+
+test('a merge that never happened is partial, and the branch reaches the inbox', async () => {
+  const spawner = twoTaskSpawner()
+  const workspace = fakeWorkspace({
+    mergeOutcomes: worker => (worker.index === 2
+      ? { index: 2, branch: worker.branch, dir: worker.dir, status: 'skipped', files: [], detail: '/repo has uncommitted changes' }
+      : { index: worker.index, branch: worker.branch, dir: null, status: 'merged', files: [], detail: null }),
+  })
+  const { orchestrator } = orchestratorWith({ spawner, workspace, config: { workspaceIsolation: true } })
+
+  const run = await orchestrator.start({ goal: 'two files into a dirty checkout', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  // A skipped merge means the file never reached the target directory, so the
+  // run cannot report "completed" while the user's folder stays unchanged.
+  assert.equal(finished.status, 'partial')
+  assert.match(finished.error, /not merged/)
+  const item = finished.attention.items.find(entry => entry.source === 'workspace-merge')
+  assert.ok(item, 'the unmerged branch must reach the attention inbox')
+  assert.match(item.question, /git -C "\/repo" stash push -u/)
+  assert.match(item.question, /git -C "\/repo" merge --no-ff superagent\//)
+  assert.match(item.reason, /uncommitted changes or the merge conflicted/)
 })
 
 test('isolation falls back to the shared directory when the target is not a git repo', async () => {
@@ -2650,3 +2854,67 @@ test('a scheduled plan refuses a second active run and a resume beside it', asyn
   assert.equal((await orchestrator.status(second.id, 10)).status, 'completed')
 })
 
+async function runDeliverableCase(write) {
+  const base = await tempDir()
+  const dir = await tempDir()
+  const spawner = deliverableSpawner(() => write(base, dir))
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    workspace: diskWorkspace(base, dir),
+    config: { workspaceIsolation: true, attempts: 1 },
+  })
+  const run = await orchestrator.start({ goal: 'write a report', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+  return { finished, spawner, base, dir }
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function deliverableSpawner(write) {
+  return makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{
+          title: 'write the report',
+          prompt: 'write out.txt',
+          deliverables: [{ path: 'out.txt', kind: 'text' }],
+        }],
+      }))
+    }
+    await write()
+    return completed('wrote the report')
+  })
+}
+
+function diskWorkspace(base, dir) {
+  return {
+    root: path.dirname(dir),
+    baseDir: base,
+    async probe() {
+      return { ok: true, base, reason: null }
+    },
+    async prepare() {
+      return { ok: true, dir, branch: 'superagent/test-w1', base, reused: false, reason: null }
+    },
+    async harvest() {
+      return { status: 'committed', files: [], commit: 'abc1234', detail: null }
+    },
+    async mergeAll(workers) {
+      return workers.map(worker => ({
+        index: worker.index,
+        branch: worker.branch,
+        dir: null,
+        status: 'merged',
+        files: [],
+        detail: null,
+      }))
+    },
+    async release() {},
+  }
+}
+
+async function tempDir() {
+  return fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-root-'))
+}
