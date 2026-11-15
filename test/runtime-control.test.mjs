@@ -9,7 +9,7 @@ import { createAuditor } from '../lib/audit.js'
 import { createGuard } from '../lib/guard.js'
 import { createRuntimeControl, checkNavigation, irreversibleIntent, LOOPBACK_HOSTS } from '../lib/runtime-control.js'
 import { resolveVirtualKeys } from '../lib/desktop.js'
-import { findBrowserExecutable } from '../lib/browser.js'
+import { classifyHumanGate, findBrowserExecutable } from '../lib/browser.js'
 
 /** Build one runtime layer over a real auditor, so the trail can be read back. */
 function runtimeFor(stateDir, config) {
@@ -28,6 +28,102 @@ function fakeHost() {
       get: () => undefined,
     },
   }
+}
+
+/**
+ * A page stub with just the methods runtime-control calls. It records how the
+ * session was initialised and replays a fixed human-gate answer, so the hand-off
+ * path can be exercised without a real browser.
+ */
+function fakePage({ url = 'http://127.0.0.1:8080/', title = 'Test page', gate = null, element = null } = {}) {
+  let currentUrl = url
+  let currentElement = element
+  const initCalls = []
+  return {
+    initCalls,
+    get url() {
+      return currentUrl
+    },
+    setElement(value) {
+      currentElement = value
+    },
+    async init(options = {}) {
+      initCalls.push(options)
+    },
+    async goto(target) {
+      currentUrl = target
+      return { url: currentUrl, title }
+    },
+    async evaluate(expression) {
+      if (expression.includes('data-dsh-el')) return currentElement
+      if (expression.includes('location.href')) {
+        return expression.includes('document.title') ? { url: currentUrl, title } : currentUrl
+      }
+      if (expression.includes('innerWidth')) return { width: 1280, height: 900 }
+      if (expression.includes('document.activeElement')) return { tag: 'input', value: 'typed' }
+      return null
+    },
+    async humanGate() {
+      return typeof gate === 'function' ? gate() : gate
+    },
+    async elements() {
+      return {
+        url: currentUrl,
+        title,
+        scroll: { x: 0, y: 0 },
+        viewport: { width: 1280, height: 900 },
+        elements: [],
+      }
+    },
+    async clickIndex() {
+      return { x: 10, y: 20, box: currentElement?.box ?? { x: 0, y: 0, width: 20, height: 20 } }
+    },
+    async clickAt(point) {
+      return { ...point, box: point.box ?? null }
+    },
+    async typeInto() {
+      return { index: 0, inserted: 3, submit: false }
+    },
+    async screenshot({ path: file }) {
+      return { path: file, bytes: 12, width: 1280, height: 900 }
+    },
+    async waitFor() {},
+  }
+}
+
+/** One live browser session as runtime-control expects it. */
+function fakeLive({ mode = 'launch', port = 5555, page = fakePage() } = {}) {
+  return {
+    page,
+    connection: null,
+    mode,
+    port,
+    executablePath: 'C:/fake/chrome.exe',
+    userDataDir: mode === 'attach' ? null : 'C:/temp/fake-profile',
+    persistentProfile: mode === 'attach',
+    headless: mode !== 'attach',
+    browser: mode === 'attach' ? 'Chrome/999.0' : null,
+    attachedUrl: mode === 'attach' ? 'http://127.0.0.1:8080/inbox' : null,
+    pid: mode === 'attach' ? null : 4242,
+    closed: false,
+    async close() {
+      this.closed = true
+    },
+  }
+}
+
+/** A runtime layer over stubs, with the browser half replaceable. */
+function runtimeWith(stateDir, config, { openBrowserImpl = null, attachBrowserImpl = null } = {}) {
+  const auditor = createAuditor({ dir: path.join(stateDir, 'audit'), warn: () => {} })
+  const runtime = createRuntimeControl({
+    config,
+    stateRoot: stateDir,
+    auditor,
+    warn: () => {},
+    ...(openBrowserImpl ? { openBrowserImpl } : {}),
+    ...(attachBrowserImpl ? { attachBrowserImpl } : {}),
+  })
+  return { runtime, auditor }
 }
 
 test('runtime control is not registered unless a profile opts in', async () => {
@@ -52,7 +148,8 @@ test('opting in registers browser tools and leaves desktop off until it is enabl
   apply(ctx, { stateDir, notifyOnComplete: false, runtime: { enabled: true } })
   for (const name of [
     'browser_open', 'browser_elements', 'browser_click', 'browser_type',
-    'browser_screenshot', 'browser_script', 'browser_wait', 'browser_close', 'runtime_status',
+    'browser_screenshot', 'browser_script', 'browser_wait', 'browser_await_human',
+    'browser_close', 'runtime_status',
   ]) {
     assert.equal(tools.has(name), true, `${name} should be registered`)
   }
@@ -102,6 +199,248 @@ test('irreversible intent is detected in English and Chinese labels only', () =>
   assert.equal(irreversibleIntent('Add to cart'), null)
   assert.equal(irreversibleIntent('Next'), null)
   assert.equal(irreversibleIntent(''), null)
+})
+
+test('human checks are recognised in both languages and ordinary pages stay quiet', () => {
+  assert.equal(classifyHumanGate({ text: '请先登录后继续' }).kind, 'login-required')
+  assert.equal(classifyHumanGate({ text: 'Please sign in to continue' }).kind, 'login-required')
+  assert.equal(classifyHumanGate({ text: 'Confirm you are human to continue' }).kind, 'human-verification')
+  assert.equal(classifyHumanGate({ text: '请完成人机验证' }).kind, 'human-verification')
+  assert.equal(classifyHumanGate({ text: '请输入短信验证码' }).kind, 'sms-code')
+  assert.equal(classifyHumanGate({ text: 'Enter the verification code we sent' }).kind, 'sms-code')
+  assert.equal(classifyHumanGate({ text: '双重验证' }).kind, 'two-factor')
+  assert.equal(classifyHumanGate({ text: 'Scan the QR code to sign in' }).kind, 'qr-login')
+  assert.equal(classifyHumanGate({ text: '请扫码登录' }).kind, 'qr-login')
+  assert.equal(classifyHumanGate({ text: '欢迎回来 登录', passwordField: true }).kind, 'login-required')
+  assert.equal(classifyHumanGate({ text: 'Change password', passwordField: true }), null)
+  assert.equal(classifyHumanGate({ text: 'Browse products' }), null)
+  assert.equal(classifyHumanGate({}), null)
+})
+
+test('a sign-in page stops the action as attention, not as a failure', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-attention-'))
+  const page = fakePage({ gate: { kind: 'login-required', label: 'a sign-in the page is waiting for', matched: '请先登录' } })
+  const { runtime } = runtimeWith(stateDir, { enabled: true }, { openBrowserImpl: async () => fakeLive({ page }) })
+  const open = runtime.tools.find(tool => tool.name === 'browser_open')
+  const result = await open.execute({ url: 'http://127.0.0.1:8080/' })
+
+  assert.match(result, /^\[attention\]/)
+  assert.doesNotMatch(result, /^\[error\]/)
+  assert.match(result, /browser_await_human/)
+  assert.match(result, /sign-in the page is waiting for/)
+
+  const { events } = await readAudit(stateDir)
+  const attention = events.find(event => event.kind === 'attention')
+  assert.ok(attention, 'the hand-off must be in the audit trail')
+  assert.equal(attention.action, 'open')
+  assert.equal(attention.decision, 'attention')
+  assert.equal(attention.result, 'needs-human')
+  assert.equal(attention.rule, 'runtime/needs-human')
+  assert.equal(attention.meta.gate, 'login-required')
+  assert.equal(attention.meta.session, 'launch')
+  assert.equal(attention.meta.port, 5555)
+  assert.equal(attention.meta.profile, 'C:/temp/fake-profile')
+  assert.ok(attention.meta.screenshot)
+})
+
+test('browser_await_human continues once the person clears the check', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-await-'))
+  const gate = { kind: 'sms-code', label: 'an SMS or one-time verification code', matched: '短信验证码' }
+  let answers = 0
+  const page = fakePage({
+    gate: () => {
+      answers += 1
+      return answers <= 2 ? gate : null
+    },
+  })
+  const { runtime } = runtimeWith(stateDir, { enabled: true }, { openBrowserImpl: async () => fakeLive({ page }) })
+  const open = runtime.tools.find(tool => tool.name === 'browser_open')
+  const awaitHuman = runtime.tools.find(tool => tool.name === 'browser_await_human')
+
+  assert.match(await open.execute({ url: 'http://127.0.0.1:8080/' }), /^\[attention\]/)
+  const result = await awaitHuman.execute({ timeout_ms: 3000, poll_ms: 100 })
+  assert.match(result, /^browser_await_human: ok/)
+  assert.match(result, /cleared after \d+ms/)
+
+  const { events } = await readAudit(stateDir)
+  const allowed = events.filter(event => event.action === 'await_human' && event.decision === 'allow')
+  assert.equal(allowed.length, 1)
+  assert.equal(allowed[0].meta.gate, 'cleared')
+  assert.equal(allowed[0].meta.session, 'launch')
+})
+
+test('browser_await_human hands back again when the check outlasts the timeout', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-await-timeout-'))
+  const page = fakePage({ gate: { kind: 'human-verification', label: 'a CAPTCHA', matched: 'captcha' } })
+  const { runtime } = runtimeWith(stateDir, { enabled: true }, { openBrowserImpl: async () => fakeLive({ page }) })
+  const awaitHuman = runtime.tools.find(tool => tool.name === 'browser_await_human')
+
+  // No browser yet: the tool says how to get one instead of launching one behind the caller's back.
+  assert.match(await awaitHuman.execute({}), /^\[error\] no browser is open/)
+
+  await runtime.tools.find(tool => tool.name === 'browser_open').execute({ url: 'http://127.0.0.1:8080/' })
+  const result = await awaitHuman.execute({ timeout_ms: 400, poll_ms: 100 })
+  assert.match(result, /^\[attention\]/)
+  assert.match(result, /waited: \d+ms/)
+
+  const { events } = await readAudit(stateDir)
+  const timeout = events.find(event => event.action === 'await_human' && event.decision === 'attention')
+  assert.ok(timeout)
+  assert.ok(timeout.meta.waited >= 400)
+  assert.equal(timeout.meta.gate, 'human-verification')
+})
+
+test('attach mode is audited as attach and leaves the attached window size alone', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-attach-audit-'))
+  const page = fakePage()
+  const live = fakeLive({ mode: 'attach', port: 9222, page })
+  let attachOptions = null
+  const { runtime } = runtimeWith(
+    stateDir,
+    { enabled: true, browser: { attachPort: 9222 } },
+    {
+      attachBrowserImpl: async options => {
+        attachOptions = options
+        return live
+      },
+      openBrowserImpl: async () => {
+        throw new Error('launch must not run while attachPort is set')
+      },
+    },
+  )
+  const open = runtime.tools.find(tool => tool.name === 'browser_open')
+  const result = await open.execute({ url: 'http://127.0.0.1:8080/inbox' })
+
+  assert.match(result, /^browser_open: ok/)
+  assert.deepEqual(attachOptions, { port: 9222 })
+  assert.equal(page.initCalls.at(-1).emulateViewport, false, 'an attached tab keeps its own viewport')
+
+  const { events } = await readAudit(stateDir)
+  const opened = events.find(event => event.action === 'open' && event.decision === 'allow')
+  assert.ok(opened)
+  assert.equal(opened.meta.session, 'attach')
+  assert.equal(opened.meta.port, 9222)
+  assert.equal(opened.meta.browser, 'Chrome/999.0')
+  assert.equal(opened.meta.tab, 'http://127.0.0.1:8080/inbox')
+  assert.equal(opened.meta.profile, undefined)
+})
+
+test('an attach failure names the port and the launch command, and never starts a profile', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-attach-fail-'))
+  let launches = 0
+  const { runtime } = runtimeWith(
+    stateDir,
+    { enabled: true, browser: { attachPort: 9333 } },
+    {
+      attachBrowserImpl: async () => {
+        throw new Error('fetch failed')
+      },
+      openBrowserImpl: async () => {
+        launches += 1
+        return fakeLive()
+      },
+    },
+  )
+  const result = await runtime.tools.find(tool => tool.name === 'browser_open')
+    .execute({ url: 'http://127.0.0.1:8080/' })
+
+  assert.match(result, /^\[error\] cannot attach to the browser on 127\.0\.0\.1:9333/)
+  assert.match(result, /remote-debugging-port=9333/)
+  assert.match(result, /no browser was launched in its place/)
+  assert.equal(launches, 0, 'attach must not fall back to a new profile')
+})
+
+test('the guardrails still apply on an attached connection', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-attach-gates-'))
+  const page = fakePage()
+  let attaches = 0
+  const { runtime } = runtimeWith(
+    stateDir,
+    { enabled: true, browser: { attachPort: 9222, allowedHosts: ['127.0.0.1'] } },
+    {
+      attachBrowserImpl: async () => {
+        attaches += 1
+        return fakeLive({ mode: 'attach', port: 9222, page })
+      },
+      openBrowserImpl: async () => fakeLive(),
+    },
+  )
+  const open = runtime.tools.find(tool => tool.name === 'browser_open')
+  const click = runtime.tools.find(tool => tool.name === 'browser_click')
+
+  const remote = await open.execute({ url: 'https://example.com/' })
+  assert.match(remote, /^\[error\] example\.com is not an allowed host/)
+  assert.equal(attaches, 0, 'the host gate runs before any attach')
+
+  page.setElement({ index: 0, label: 'Upload resume', type: 'file', box: { x: 0, y: 0, width: 40, height: 20 } })
+  const upload = await click.execute({ index: 0 })
+  assert.match(upload, /^\[error\].*uploads are refused/)
+
+  page.setElement({ index: 0, label: 'Delete project', type: 'submit', box: { x: 0, y: 0, width: 40, height: 20 } })
+  const held = await click.execute({ index: 0 })
+  assert.match(held, /^\[error\].*looks irreversible/)
+
+  page.setElement({ index: 0, label: 'Open settings', type: 'button', box: { x: 0, y: 0, width: 40, height: 20 } })
+  const allowed = await click.execute({ index: 0 })
+  assert.match(allowed, /^browser_click: ok/)
+
+  const { events } = await readAudit(stateDir)
+  const refused = events.filter(event => ['runtime/host-not-allowed', 'runtime/file-upload', 'runtime/irreversible'].includes(event.rule))
+  assert.deepEqual(
+    refused.map(event => event.rule).sort(),
+    ['runtime/file-upload', 'runtime/host-not-allowed', 'runtime/irreversible'],
+  )
+  const clicked = events.find(event => event.action === 'click' && event.decision === 'allow')
+  assert.equal(clicked.meta.session, 'attach')
+
+  // The stop switch is checked before the connection, attach included.
+  const stopDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-attach-stop-'))
+  const stopFile = path.join(stopDir, 'runtime', 'STOP')
+  await fsp.mkdir(path.dirname(stopFile), { recursive: true })
+  await fsp.writeFile(stopFile, 'stop\n', 'utf8')
+  let stoppedAttaches = 0
+  const stopped = runtimeWith(
+    stopDir,
+    { enabled: true, stopFile, browser: { attachPort: 9222 } },
+    {
+      attachBrowserImpl: async () => {
+        stoppedAttaches += 1
+        return fakeLive({ mode: 'attach', port: 9222 })
+      },
+    },
+  ).runtime
+  const stoppedResult = await stopped.tools.find(tool => tool.name === 'browser_open')
+    .execute({ url: 'http://127.0.0.1:8080/' })
+  assert.match(stoppedResult, /^\[error\] runtime control is stopped/)
+  assert.equal(stoppedAttaches, 0)
+})
+
+test('a configured userDataDir is passed through and audited as a persistent profile', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-profile-'))
+  let launchOptions = null
+  const live = fakeLive()
+  live.persistentProfile = true
+  live.userDataDir = 'C:/temp/kept-profile'
+  const { runtime } = runtimeWith(
+    stateDir,
+    { enabled: true, browser: { userDataDir: 'C:/temp/kept-profile' } },
+    {
+      openBrowserImpl: async options => {
+        launchOptions = options
+        return live
+      },
+    },
+  )
+  const result = await runtime.tools.find(tool => tool.name === 'browser_open')
+    .execute({ url: 'http://127.0.0.1:8080/' })
+  assert.match(result, /^browser_open: ok/)
+  assert.equal(launchOptions.userDataDir, 'C:/temp/kept-profile')
+
+  const { events } = await readAudit(stateDir)
+  const opened = events.find(event => event.action === 'open' && event.decision === 'allow')
+  assert.equal(opened.meta.session, 'launch')
+  assert.equal(opened.meta.profile, 'C:/temp/kept-profile')
+  assert.equal(opened.meta.persistentProfile, true)
 })
 
 test('a stop file refuses every action and records the refusal', async () => {
@@ -166,7 +505,8 @@ test('runtime_status reports the stop state, hosts, and halves', async () => {
   const status = runtime.tools.find(tool => tool.name === 'runtime_status')
   const text = await status.execute({})
   assert.match(text, /enabled: yes/)
-  assert.match(text, /browser tools: 8/)
+  assert.match(text, /browser tools: 9/)
+  assert.match(text, /browser mode: launch with a fresh temporary profile/)
   assert.match(text, /desktop tools: 0/)
   assert.match(text, /stop switch: clear/)
   assert.match(text, /127\.0\.0\.1/)

@@ -25,7 +25,7 @@ filesystem; this is not a sandbox.
 in the environment:
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.13.0
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.0
 ```
 
 Then ask the session for a run — a real call, not a sketch:
@@ -78,7 +78,7 @@ your `PATH`, use `npx @deepseek-ai/dsh@0.2.2-rc.1` instead.
 
 ```bash
 # 1. install the plugin into a profile (web, headless, ... whatever you run)
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.13.0
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.0
 
 # 2. confirm the bundle row exists in the merged config
 dsh --profile web --dump-config
@@ -546,7 +546,8 @@ through `powershell.exe` and `user32.dll`.
         "headless": true,
         "allowedHosts": ["localhost", "127.0.0.1"],
         "executablePath": null,
-        "attachPort": null
+        "attachPort": null,
+        "userDataDir": null
       },
       "desktop": { "enabled": false, "allowActivation": false }
     }
@@ -560,30 +561,56 @@ application on the machine. `allowedHosts` replaces the loopback default — a
 leading `*.` matches any subdomain. `stopFile` and `shotDir` default to
 `<stateDir>/runtime/STOP` and `<stateDir>/runtime/shots`.
 
+`attachPort` and `userDataDir` are the two ways to reach a page that needs a
+sign-in, and they trade differently:
+
+- **`attachPort`** (for example `9222`) borrows the browser you started
+  yourself with `--remote-debugging-port`. Element listing, clicks, typing, and
+  screenshots all run on that connection, the tab keeps its own window size, and
+  `browser_close` only detaches — it never terminates your browser. If the port
+  is not listening the call fails with the port and a start command; it never
+  falls back to a fresh profile behind your back. Because that profile is
+  already signed in to whatever you use, every action inherits that access.
+- **`userDataDir`** keeps one dedicated profile for a browser this plugin
+  launches: sign in once (QR code, SMS, whatever the site asks), and later runs
+  reuse the same cookie jar. The directory is a real credential store on disk —
+  keep it somewhere you would keep a password file, and do not point it at your
+  daily browser's profile. It is ignored while `attachPort` is set.
+
+The default remains a fresh temporary profile under
+`%TEMP%/dsh-runtime-profile-*`, so an ordinary run cannot see your daily
+browser's cookies.
+
 ### What it registers
 
 | Tool | What it does |
 | --- | --- |
-| `browser_open(url, headless?, width?, height?)` | Launches (or reuses) a Chromium-family browser with its **own profile**, opens the URL, returns URL, title, viewport, and a screenshot path. |
+| `browser_open(url, headless?, width?, height?)` | Launches a browser with its own fresh or persistent profile, or attaches to yours when `attachPort` is set; opens the URL, returns URL, title, viewport, and a screenshot path. A sign-in, CAPTCHA, SMS, or QR page comes back as `[attention]`. |
 | `browser_elements(text?, role?, limit?)` | Lists actionable elements with a stable index, accessible name, role, bounding box, and whether it is in the viewport. Matching is by visible text, ARIA name, or role — not only CSS. |
 | `browser_click(index?, css?, text?, role?, confirm?, screenshot?)` | Scrolls the element into view, dispatches a real mouse press/release at its centre, and screenshots afterwards. |
-| `browser_type(index?, css?, text?, value, submit?, screenshot?)` | Focuses the field, inserts text through the browser input pipeline, optionally presses Enter, and reports the value the page now holds. |
+| `browser_type(index?, css?, text?, value, submit?, screenshot?)` | Focuses the field, inserts text through the browser input pipeline, optionally presses Enter, and reports the value the page now holds (a password field is masked). |
 | `browser_screenshot(path?, full_page?)` | PNG of the page, with path, pixel size, and byte size. |
 | `browser_script(expression, await_promise?)` | Evaluates one expression and returns its JSON value; for reads, not for clicking. |
 | `browser_wait(text?, css?, url_contains?, milliseconds?, timeout_ms?)` | Waits for a condition or a fixed delay. |
-| `browser_close()` | Closes the browser and its isolated profile. |
+| `browser_await_human(timeout_ms?, poll_ms?, screenshot?)` | Waits for the person to clear a sign-in, CAPTCHA, SMS, two-factor, or QR check; returns ok when automation may continue, or `[attention]` if it is still pending. It never solves the check itself. |
+| `browser_close()` | Closes a browser this plugin launched. On an attach connection it only detaches and leaves your browser running. |
 | `desktop_screenshot(window?, path?)` | Whole desktop, or one window by title captured with `PrintWindow` (a covered window still yields its own pixels). |
 | `desktop_windows(filter?, limit?)` | Visible top-level windows: handle, title, pid, screen rectangle. |
 | `desktop_click(x, y, window?, activate?, right?, confirm?)` | Click at screen coordinates. Background by default; `activate` is required for a foreground click. |
 | `desktop_type(text, window?, activate?)` | Types into a window, background `WM_CHAR` by default. |
 | `desktop_keys(keys, window?, activate?)` | Presses named keys (`enter`, `tab`, `f5`, `a`, `1` …) in order. |
-| `runtime_status()` | Stop state, registered halves, allowed hosts, browser executable, session. |
+| `runtime_status()` | Stop state, registered halves, allowed hosts, browser executable, attach/launch mode, session. |
 
 Every browser and desktop call writes one line to the existing audit trail
 (`lib/audit.js`) with `source: "runtime"`, the action, the target, the decision,
 the result, and the duration. A gate that refuses an action writes
 `decision: "deny"` or `"confirm"` and `result: "blocked"`, so the log can never
-claim that a refused click succeeded.
+claim that a refused click succeeded. Browser lines also carry `meta.session` —
+`"attach"` when the action ran on the browser you started (with `meta.port` and
+the tab it reused), `"launch"` when it ran on one this plugin started (with
+`meta.profile` and `meta.persistentProfile`) — so the trail can never confuse
+your session with a throwaway profile. A page that asks for a person writes
+`kind: "attention"`, `decision: "attention"`, and `result: "needs-human"`.
 
 ### Gates
 
@@ -599,6 +626,14 @@ claim that a refused click succeeded.
 - **Irreversible actions.** A target whose label reads submit, delete, pay,
   publish, transfer, 提交, 删除, 支付 … needs `confirm: true`. Without it the
   click does not happen and the audit line records `decision: "confirm"`.
+- **Human checks.** A page asking for a sign-in, CAPTCHA, SMS code, two-factor
+  confirmation, or QR scan stops the action at that point and returns
+  `[attention]` with what the page wants and how to hand over. The check is read
+  from the page text, so an ordinary settings page with a password field but no
+  sign-in wording is not flagged; nothing here solves or types the check. In a
+  launched window or an attached tab the person finishes it in the browser, then
+  `browser_await_human` polls until it is gone and the run continues. A pending
+  check is a hand-off, not a failed run.
 - **Focus.** A background click or keystroke never brings a window forward. A
   foreground action requires `activate: true` **and**
   `runtime.desktop.allowActivation: true`, and each activation is recorded in
@@ -609,14 +644,19 @@ claim that a refused click succeeded.
 
 ### What it deliberately cannot do
 
-- **Borrow your logins.** The browser gets a fresh profile under
-  `%TEMP%/dsh-runtime-profile-*`, so your cookies, saved passwords, and signed-in
-  sessions are simply not there. If you need an authenticated page, start the
-  browser yourself with `--remote-debugging-port=9222` and set
-  `browser.attachPort: 9222` — that profile *is* yours, so every action in it now
-  has your access; the audit log is the only record of what ran.
-- **Solve human verification.** CAPTCHAs, SMS codes, and "confirm you are human"
-  interstitials stop the run. Pass the browser to the user and wait.
+- **Borrow your logins by accident.** A launched browser gets a fresh profile
+  under `%TEMP%/dsh-runtime-profile-*`, so your cookies, saved passwords, and
+  signed-in sessions are simply not there. Reaching an authenticated page is an
+  explicit choice: attach to a browser you started with
+  `--remote-debugging-port` and set `browser.attachPort`, or point
+  `browser.userDataDir` at one dedicated profile and sign in there once. Both
+  make that access available to every later action, and both are visible in
+  `meta.session` in the audit log; a wrong attach port fails with instructions
+  instead of silently starting a profile.
+- **Solve human verification for you.** CAPTCHAs, SMS codes, "confirm you are
+  human" interstitials, and QR logins stop the action and hand it back. It never
+  types a code or scans a code for you; it waits for you to do it and then
+  reports that the run may continue.
 - **Evade bot detection.** A launched Chromium is detectable through CDP
   artefacts, and sites that block automation will block this. Nothing here
   patches `navigator.webdriver` or spoofs fingerprints.
@@ -1613,7 +1653,7 @@ appears to "hang" until the ignored-abort child returns.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.13.0` and read the host log for `[dsh-superagent]` lines. |
+| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.0` and read the host log for `[dsh-superagent]` lines. |
 | `Cannot find module .../lib/control.js` (or `watch.js` / `report.js`) and the plugin never activates | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. The published package is not the cause: every version ships all thirty `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |

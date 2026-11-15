@@ -8,6 +8,48 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.14.0 — 2026-11-15
+
+### Added
+
+- **Attach mode is complete.** With `runtime.browser.attachPort` set, every
+  browser tool — listing, clicking, typing, screenshots, scripts — runs on the
+  browser the user started with `--remote-debugging-port`, on the tab that is
+  already open. The tab keeps its own window size (no viewport override), and
+  `browser_close` detaches instead of terminating the user's browser (a blank tab
+  created only because no page existed is closed). A port that is not listening
+  now fails with the port, a Chrome/Edge start command, and an explicit
+  statement that no profile was launched in its place; attach never falls back
+  to a fresh profile.
+- **Persistent profile option.** `runtime.browser.userDataDir` points a launched
+  browser at one dedicated profile, so a sign-in done once is reused on later
+  runs. The default is still a fresh temporary profile, which cannot see the
+  user's daily cookies; the README spells out the trade-off and ignores
+  `userDataDir` while `attachPort` is set.
+- **Human checks hand back instead of failing.** `lib/browser.js` classifies
+  page text for a sign-in wall, CAPTCHA / "confirm you are human", SMS or
+  one-time code, two-factor, and QR login. `browser_open`, `browser_click`, and a
+  submitting `browser_type` stop at such a page and return `[attention]` with
+  the page, the check, where the person finishes it, and the next call — never a
+  failure. New `browser_await_human` polls until the check is gone and reports
+  ok, or hands back again at its timeout. It never solves, types, or scans the
+  check. A headless launch explains that it has no window and points at
+  `headless: false` or attach.
+- **Audit distinguishes the connection.** Every browser audit line carries
+  `meta.session: "attach" | "launch"`, plus `meta.port` and the reused tab for
+  attach, or `meta.profile` / `meta.persistentProfile` / `meta.headless` for a
+  launch. Human hand-offs are recorded as `kind: "attention"`,
+  `decision: "attention"`, `result: "needs-human"`; attach failures record
+  `rule: "runtime/attach-failed"` with the actionable message rather than being
+  mistaken for a provider error.
+
+### Changed
+
+- The domain allow-list, irreversible-action confirmation, file-upload refusal,
+  stop switch, and worker-tool guard all sit in the same call path as before, so
+  they apply unchanged on an attach connection; tests cover each one there.
+- `browser_type` masks the read-back value for a password field.
+
 ## 0.13.0 — 2026-11-15
 
 ### Added
