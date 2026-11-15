@@ -442,6 +442,34 @@ test('a planner that never returns is stopped instead of burning the run budget'
   assert.ok(disposed >= 1)
 })
 
+test('the planner gets the configured preset and model route while workers keep the default', async () => {
+  const specs = []
+  const { spawnChild } = makeSpawner(async spec => {
+    specs.push(spec)
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
+    }
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner: { spawnChild },
+    config: { plannerPreset: 'planner', plannerProvider: 'strong', plannerModel: 'big-model' },
+  })
+
+  const run = await orchestrator.start({ goal: 'plan without tools', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  const planner = specs.find(spec => spec.label === 'superagent-plan')
+  const worker = specs.find(spec => spec.label !== 'superagent-plan')
+  assert.equal(planner.preset, 'planner')
+  assert.equal(planner.provider, 'strong')
+  assert.equal(planner.model, 'big-model')
+  assert.equal(worker.preset, undefined)
+  assert.ok(!worker.provider)
+  assert.ok(!worker.model)
+})
+
 test('a planner that spends its call budget is stopped and reported as unplannable', async () => {
   let disposed = 0
   let reads = 0
