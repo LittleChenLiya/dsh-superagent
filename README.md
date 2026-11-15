@@ -679,21 +679,6 @@ and captures the window.
   widens what a run may do. Built-in ids are read-only; custom ones live under
   the template directory in the state directory, and a failure there is logged
   without disabling the run tools.
-- `superagent_inject(run_id, message, subtask_index?, wait_seconds?)` delivers
-  one instruction into the workers that are running right now. It uses the
-  host's live steering channel (`subagents.sendMessage`, the same inbox the
-  agent loop drains at its next pre-step), so the message is part of the child's
-  next model request. It does not interrupt a model call already in flight: the
-  delay is the remainder of the step that is running (that model response plus
-  its tool batch). A live child that had already decided to stop runs one more
-  turn to read it, so an uncancelled child consumes it. The reply reports the
-  measured delay from acceptance to the child's next request, and marks a
-  message as `missed` — never as delivered — when the child is cancelled,
-  disposed, or finishes before another boundary. Worst case measured on a real
-  `dsh@0.2.2-rc.1` host: **6978 ms** with an 8 s child step and **2986 ms** with
-  a 4 s step, i.e. the bound tracks the step, not the plugin. With a host that
-  exposes no live channel, the tool degrades to the followup queue and says so
-  in the reply; it never calls that live.
 - `superagent_schedule(action, id?, name?, goal?, template_id?, params?, cron?,
   every_minutes?, timezone?, miss_policy?, goal_mode?, acceptance?, max_rounds?,
   max_wall_clock_minutes?, no_progress_rounds?, budget?, human_priority?)` creates,
