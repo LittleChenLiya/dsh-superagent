@@ -106,6 +106,7 @@ function orchestratorWith({
   spawner,
   config = {},
   memory = null,
+  workspace = null,
   readUsage = async () => ({
     inputTokens: 10,
     outputTokens: 2,
@@ -122,6 +123,7 @@ function orchestratorWith({
     spawnChild: spawner.spawnChild,
     readUsage,
     memory,
+    ...(workspace ? { workspace } : {}),
     notify: run => notifications.push(run.id),
     log: () => {},
     ...(sleep ? { sleep } : {}),
@@ -1528,3 +1530,159 @@ test('goals that differ after normalization still get their own runs', async () 
   await orchestrator.status(second.id, 10)
 })
 
+
+/* --- workspace isolation ------------------------------------------------ */
+
+/** A workspace manager that answers without touching git, for orchestrator tests. */
+function fakeWorkspace({ probe, mergeOutcomes = null, harvestStatus = 'committed' } = {}) {
+  const prepared = []
+  const harvested = []
+  const released = []
+  return {
+    prepared,
+    harvested,
+    released,
+    root: '/state/workspaces',
+    baseDir: '/repo',
+    async probe() {
+      return probe ?? { ok: true, base: '/repo', reason: null }
+    },
+    async prepare({ runId, index }) {
+      const dir = `/state/workspaces/${runId}/w${index}`
+      prepared.push({ runId, index, dir })
+      return { ok: true, dir, branch: `superagent/${runId}-w${index}`, base: '/repo', reused: false, reason: null }
+    },
+    async harvest(spec) {
+      harvested.push(spec)
+      return { status: harvestStatus, files: harvestStatus === 'committed' ? ['notes.txt'] : [], commit: 'abc1234', detail: null }
+    },
+    async mergeAll(workers) {
+      return workers.map(worker => (mergeOutcomes
+        ? mergeOutcomes(worker)
+        : { index: worker.index, branch: worker.branch, dir: null, status: 'merged', files: [], detail: null }))
+    },
+    async release(spec) {
+      released.push(spec)
+    },
+  }
+}
+
+/** Two independent subtasks, so a plan has something to isolate. */
+function twoTaskSpawner(handler = async () => completed('done')) {
+  return makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }] }))
+    }
+    return handler(spec)
+  })
+}
+
+test('workspace isolation is off by default and leaves the worker prompt alone', async () => {
+  const spawner = twoTaskSpawner()
+  const { orchestrator } = orchestratorWith({ spawner })
+
+  const run = await orchestrator.start({ goal: 'shared dir', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.workspace, undefined)
+  for (const call of spawner.calls.filter(call => call.label !== 'superagent-plan')) {
+    assert.doesNotMatch(call.prompt, /Isolated working directory/)
+  }
+})
+
+test('isolation on names each worker directory in its prompt and merges the branch back', async () => {
+  const spawner = twoTaskSpawner()
+  const workspace = fakeWorkspace()
+  const { orchestrator } = orchestratorWith({ spawner, workspace, config: { workspaceIsolation: true } })
+
+  const run = await orchestrator.start({ goal: 'isolated dirs', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.workspace.mode, 'git-worktree')
+  assert.equal(finished.workspace.base, '/repo')
+  assert.equal(workspace.prepared.length, 2)
+  const prompts = spawner.calls.filter(call => call.label !== 'superagent-plan').map(call => call.prompt)
+  assert.match(prompts[0], new RegExp(`Your working directory is /state/workspaces/${run.id}/w1`))
+  assert.match(prompts[1], new RegExp(`Your working directory is /state/workspaces/${run.id}/w2`))
+  // The worker is told not to merge or commit: the run owns that step.
+  assert.match(prompts[0], /do not commit, merge, rebase, or/)
+  assert.equal(workspace.harvested.length, 2)
+  assert.deepEqual(finished.workspace.merges.map(merge => merge.status), ['merged', 'merged'])
+  assert.equal(finished.workspace.conflicts, 0)
+  assert.equal(finished.subtasks[0].workspace.branch, `superagent/${run.id}-w1`)
+  assert.equal(finished.subtasks[0].workspace.merged, 'merged')
+  // A merged checkout is released by the manager; the run no longer points at it.
+  assert.equal(finished.subtasks[0].workspace.dir, null)
+})
+
+test('a merge conflict is recorded on the run and its branch is kept', async () => {
+  const spawner = twoTaskSpawner()
+  const workspace = fakeWorkspace({
+    mergeOutcomes: worker => (worker.index === 2
+      ? { index: 2, branch: worker.branch, dir: worker.dir, status: 'conflict', files: ['notes.txt'], detail: 'conflicts with work already in /repo' }
+      : { index: worker.index, branch: worker.branch, dir: null, status: 'merged', files: [], detail: null }),
+  })
+  const { orchestrator } = orchestratorWith({ spawner, workspace, config: { workspaceIsolation: true } })
+
+  const run = await orchestrator.start({ goal: 'conflicting edits', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  // The run itself still settles: a conflict is a merge outcome, not a failure.
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.workspace.conflicts, 1)
+  const conflict = finished.workspace.merges.find(merge => merge.index === 2)
+  assert.equal(conflict.status, 'conflict')
+  assert.deepEqual(conflict.files, ['notes.txt'])
+  assert.equal(finished.subtasks[1].workspace.merged, 'conflict')
+  // The kept checkout is the evidence the user merges by hand.
+  assert.equal(finished.subtasks[1].workspace.dir, `/state/workspaces/${run.id}/w2`)
+  assert.match(finished.report, /done/)
+})
+
+test('isolation falls back to the shared directory when the target is not a git repo', async () => {
+  const spawner = twoTaskSpawner()
+  const workspace = fakeWorkspace({
+    probe: { ok: false, base: null, reason: '/repo is not a git working tree, so a per-worker worktree cannot be created' },
+  })
+  const { orchestrator } = orchestratorWith({ spawner, workspace, config: { workspaceIsolation: true } })
+
+  const run = await orchestrator.start({ goal: 'plain dir', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.workspace.mode, 'unavailable')
+  assert.match(finished.workspace.reason, /not a git working tree/)
+  assert.equal(workspace.prepared.length, 0)
+  for (const call of spawner.calls.filter(call => call.label !== 'superagent-plan')) {
+    assert.doesNotMatch(call.prompt, /Isolated working directory/)
+  }
+})
+
+test('a worker that never finished keeps its checkout visible instead of disappearing', async () => {
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }] }))
+    }
+    if (spec.label === 'superagent-2') return failed('refusal')
+    return completed('ok from A')
+  })
+  const workspace = fakeWorkspace()
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    workspace,
+    config: { workspaceIsolation: true, attempts: 1, maxParallel: 2 },
+  })
+
+  const run = await orchestrator.start({ goal: 'one worker fails', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'partial')
+  const leftover = finished.workspace.merges.find(merge => merge.index === 2)
+  assert.equal(leftover.status, 'unmerged')
+  assert.equal(leftover.dir, `/state/workspaces/${run.id}/w2`)
+  assert.match(leftover.detail, /did not finish/)
+  // Only the finished worker's branch was offered to the merger.
+  assert.equal(finished.workspace.merges.filter(merge => merge.status === 'merged').length, 1)
+})
