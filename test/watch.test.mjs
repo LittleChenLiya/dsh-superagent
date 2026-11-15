@@ -246,12 +246,12 @@ test('a queued run names the slot holders, its queue position, and nothing it ca
 
   const frame = renderFrame(runs, { now: T0 + 60_000, width: 130, color: false })
   const row = frame.split('\n').find(line => line.includes('20261114T080050-dddd'))
-  assert.match(row, /waiting for a slot/)
-  assert.match(row, /← aaaa,bbbb/)
+  assert.match(row, /slot ← aaaa,bbbb/)
+  assert.match(row, /2 active/)
   assert.match(row, /#2/)
 
   const alone = waitingOf(waitingOne, { runs: [waitingOne], now: T0 + 60_000 })
-  assert.equal(alone.text, 'waiting for a slot', 'with no active run there is nobody to blame')
+  assert.equal(alone.text, 'waiting on a slot', 'with no active run there is nobody to blame')
   assert.equal(waitingOf(holderA, { runs, now: T0 + 60_000 }), null, 'a running run with a free pool is not blocked')
 })
 
