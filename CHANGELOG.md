@@ -8,6 +8,24 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## Unreleased
+
+### Added
+
+- **Run archives.** `dsh-superagent-archive` (`bin/archive.js`) adds three
+  subcommands. `prune` lists terminal runs older than `--older-than <days>`,
+  optionally filtered by `--status`, with the files and bytes it would remove;
+  it deletes nothing unless `--confirm` is given, and it never touches a run
+  that is still active or whose `.lock` another process holds. `export` writes
+  one run as a self-contained directory (README with the report, `report.md`,
+  `run.json`, per-subtask markdown and JSON, guard records, `usage.json`, and a
+  manifest with a SHA-256 per file), as one JSON bundle, or as one offline HTML
+  page with the bundle embedded. `import` reads any of those back into the
+  store and refuses to overwrite a local run with the same id. `store.js` gained
+  `planPrune`, `buildArchive`, `exportRun`, and `importRun`; `prune` gained
+  `dryRun` and `statuses` and now returns the plan alongside `removed`. No
+  runtime dependency was added.
+
 ## 0.10.0 — 2026-11-15
 
 The dispatch, progress, delivery, and memory layer. No runtime dependencies were

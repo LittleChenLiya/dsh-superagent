@@ -440,8 +440,8 @@ _Top of a report rendered from 40 real host runs. The full page — timeline,
 swimlanes, call and cost curves, failure annotations, run table — is
 [docs/report-sample.html](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/report-sample.html)._
 
-Two operator utilities ship with the package. They read the same durable run
-files as the tools, need no session, and add no runtime dependency.
+Operator utilities ship with the package. They read the same durable run files
+as the tools, need no session, and add no runtime dependency.
 
 Run them from the installed copy inside the profile:
 
@@ -454,7 +454,7 @@ node "$PKG/bin/report.js" --out report.html       # self-contained HTML page
 If the profile's linker created bin links (npm does), the same commands are
 `node_modules/.bin/dsh-superagent-watch` and `node_modules/.bin/dsh-superagent-report`.
 
-Both accept `--state-dir <path>`; it defaults to `$DSH_HOME/state/superagent`.
+All accept `--state-dir <path>`; it defaults to `$DSH_HOME/state/superagent`.
 Pass it when the plugin config sets a custom `stateDir`.
 
 **`watch`** draws one line per run — id, status, calls used against the cap,
@@ -478,6 +478,10 @@ records the command plus a zero-external-reference audit.
 
 Neither utility is the install path: the plugin is installed with
 `dsh plugin add`, never with `npm i -g`.
+
+**`archive`** is the third utility. It prunes terminal runs and exports or
+imports one run as a self-contained archive; see [Retention](#retention) and
+[Archives](#archives).
 
 ## Embedding over local HTTP
 
@@ -629,6 +633,49 @@ removed ids are logged, and the matching `reports/<runId>.md` artifact is
 removed with its run. `superagent_list` prints the current file count and size,
 so growth is visible before it becomes a problem.
 
+To clean up on demand, `dsh-superagent-archive prune` plans first and deletes
+second:
+
+```bash
+node "$PKG/bin/archive.js" prune --older-than 30                  # dry run
+node "$PKG/bin/archive.js" prune --older-than 30 --status failed  # dry run, one status
+node "$PKG/bin/archive.js" prune --older-than 30 --confirm        # delete
+```
+
+The plan prints each run id, status, finish time, and the bytes it holds; the
+summary gives the run, file, and byte totals. Without `--confirm` nothing is
+deleted. Only terminal runs (`completed`, `partial`, `failed`, `cancelled`,
+`interrupted`) are ever candidates: a run that is still active, or whose
+`.lock` is held by another process, is listed as skipped and left alone. A run
+inside the window, a run with no parsable timestamp, and a quarantined
+`*.corrupt-*` file are kept as well.
+
+## Archives
+
+`archive export` turns one run into evidence another person can open offline —
+no host, no plugin, no network:
+
+```bash
+node "$PKG/bin/archive.js" export <run-id> --out ./run-archive              # directory
+node "$PKG/bin/archive.js" export <run-id> --out ./run.html --format html   # one page
+node "$PKG/bin/archive.js" export <run-id> --out ./run.json --format bundle
+```
+
+The directory contains `README.md` (summary, the merged report, a subtask
+table, and a file index), `report.md` (the report as markdown), `run.json` (the
+full durable record), `subtasks/` (one markdown page and one JSON file per
+subtask), `guards.json` / `guards.md` (every decision a worker or the
+aggregator stopped on), `usage.json` (token totals per child plus the cost the
+operator prices produce), and `manifest.json` (archive metadata, sizes, and a
+SHA-256 per file). `--format html` writes the same content as one self-contained
+page with the bundle embedded; `--format bundle` writes only that JSON.
+
+`archive import <path>` reads any of the three back into the local store for
+review, restoring the run record and its report artifact. It never overwrites:
+when a local run has the same id, the command fails before writing anything and
+says so. An imported run is terminal, so it is listed and readable but never
+resumed.
+
 ## Cancelling from another process
 
 `superagent_cancel` works even when the run was started by a different host
@@ -701,7 +748,8 @@ A run that fails *after* it was accepted keeps its report and shows `error:`
   subtask's text under the goal heading) and falls back to a deterministic merge
   when the aggregator fails or the budget is exhausted.
 - Retention is opt-in (`keepRuns`); by default state accumulates, at up to
-  32 KB per subtask plus the report per run.
+  32 KB per subtask plus the report per run. `archive prune` removes terminal
+  runs on demand, as a dry run unless `--confirm` is given.
 - The HTTP embedding surface is loopback-only, opt-in, and token-authenticated;
   it cannot be exposed remotely, and there is no MCP server. A local process
   running as the same user can read the token, which is the same trust boundary
