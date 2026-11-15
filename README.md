@@ -25,7 +25,7 @@ filesystem; this is not a sandbox.
 in the environment:
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.12.1
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.13.0
 ```
 
 Then ask the session for a run — a real call, not a sketch:
@@ -75,7 +75,7 @@ your `PATH`, use `npx @deepseek-ai/dsh@0.2.2-rc.1` instead.
 
 ```bash
 # 1. install the plugin into a profile (web, headless, ... whatever you run)
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.12.1
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.13.0
 
 # 2. confirm the bundle row exists in the merged config
 dsh --profile web --dump-config
@@ -459,6 +459,116 @@ number you see is always a lower bound:
 ```
 cost: at least ¥0.0041 (estimate; no price for haoduo/gpt-6.1-sol)
 ```
+
+## Runtime control
+
+The plugin can drive a browser and, on Windows, the desktop. Both halves are
+**off by default**: with `runtime.enabled` false not one of these tools is
+registered, so an existing profile sees exactly the same tool list as before.
+Nothing here needs an npm dependency — the browser is spoken to over the
+DevTools protocol with Node's own `WebSocket`, and the desktop is reached
+through `powershell.exe` and `user32.dll`.
+
+```json
+{
+  "@xiangyixie/dsh-superagent": {
+    "runtime": {
+      "enabled": true,
+      "browser": {
+        "headless": true,
+        "allowedHosts": ["localhost", "127.0.0.1"],
+        "executablePath": null,
+        "attachPort": null
+      },
+      "desktop": { "enabled": false, "allowActivation": false }
+    }
+  }
+}
+```
+
+`enabled` turns the layer on. `browser.enabled` and `desktop.enabled` decide
+which halves register; desktop is separately gated because it can touch any
+application on the machine. `allowedHosts` replaces the loopback default — a
+leading `*.` matches any subdomain. `stopFile` and `shotDir` default to
+`<stateDir>/runtime/STOP` and `<stateDir>/runtime/shots`.
+
+### What it registers
+
+| Tool | What it does |
+| --- | --- |
+| `browser_open(url, headless?, width?, height?)` | Launches (or reuses) a Chromium-family browser with its **own profile**, opens the URL, returns URL, title, viewport, and a screenshot path. |
+| `browser_elements(text?, role?, limit?)` | Lists actionable elements with a stable index, accessible name, role, bounding box, and whether it is in the viewport. Matching is by visible text, ARIA name, or role — not only CSS. |
+| `browser_click(index?, css?, text?, role?, confirm?, screenshot?)` | Scrolls the element into view, dispatches a real mouse press/release at its centre, and screenshots afterwards. |
+| `browser_type(index?, css?, text?, value, submit?, screenshot?)` | Focuses the field, inserts text through the browser input pipeline, optionally presses Enter, and reports the value the page now holds. |
+| `browser_screenshot(path?, full_page?)` | PNG of the page, with path, pixel size, and byte size. |
+| `browser_script(expression, await_promise?)` | Evaluates one expression and returns its JSON value; for reads, not for clicking. |
+| `browser_wait(text?, css?, url_contains?, milliseconds?, timeout_ms?)` | Waits for a condition or a fixed delay. |
+| `browser_close()` | Closes the browser and its isolated profile. |
+| `desktop_screenshot(window?, path?)` | Whole desktop, or one window by title captured with `PrintWindow` (a covered window still yields its own pixels). |
+| `desktop_windows(filter?, limit?)` | Visible top-level windows: handle, title, pid, screen rectangle. |
+| `desktop_click(x, y, window?, activate?, right?, confirm?)` | Click at screen coordinates. Background by default; `activate` is required for a foreground click. |
+| `desktop_type(text, window?, activate?)` | Types into a window, background `WM_CHAR` by default. |
+| `desktop_keys(keys, window?, activate?)` | Presses named keys (`enter`, `tab`, `f5`, `a`, `1` …) in order. |
+| `runtime_status()` | Stop state, registered halves, allowed hosts, browser executable, session. |
+
+Every browser and desktop call writes one line to the existing audit trail
+(`lib/audit.js`) with `source: "runtime"`, the action, the target, the decision,
+the result, and the duration. A gate that refuses an action writes
+`decision: "deny"` or `"confirm"` and `result: "blocked"`, so the log can never
+claim that a refused click succeeded.
+
+### Gates
+
+- **Emergency stop.** While the stop file exists — or `DSH_RUNTIME_STOP=1` is
+  set — every action is refused and the refusal is audited. Create the file and
+  the layer stops at the next call; delete it to re-enable.
+- **Navigation.** Only `http:` and `https:` on the allowed hosts. `file://` is
+  refused because a page that could read local files would walk around the
+  workspace guard; `javascript:`, `data:`, and `chrome:` are refused too.
+- **Uploads.** `browser_click` refuses an `<input type="file">`, because the
+  native file picker that follows cannot be driven and would fall through to the
+  user's own file system.
+- **Irreversible actions.** A target whose label reads submit, delete, pay,
+  publish, transfer, 提交, 删除, 支付 … needs `confirm: true`. Without it the
+  click does not happen and the audit line records `decision: "confirm"`.
+- **Focus.** A background click or keystroke never brings a window forward. A
+  foreground action requires `activate: true` **and**
+  `runtime.desktop.allowActivation: true`, and each activation is recorded in
+  `meta.activated`.
+- **Worker agents.** `browser_*` and `desktop_*` belong to the session that
+  mounted the plugin. The guard blocks them for bound child agents with rule
+  `guard/runtime-tool` unless `guard.allowRuntimeTools` is true.
+
+### What it deliberately cannot do
+
+- **Borrow your logins.** The browser gets a fresh profile under
+  `%TEMP%/dsh-runtime-profile-*`, so your cookies, saved passwords, and signed-in
+  sessions are simply not there. If you need an authenticated page, start the
+  browser yourself with `--remote-debugging-port=9222` and set
+  `browser.attachPort: 9222` — that profile *is* yours, so every action in it now
+  has your access; the audit log is the only record of what ran.
+- **Solve human verification.** CAPTCHAs, SMS codes, and "confirm you are human"
+  interstitials stop the run. Pass the browser to the user and wait.
+- **Evade bot detection.** A launched Chromium is detectable through CDP
+  artefacts, and sites that block automation will block this. Nothing here
+  patches `navigator.webdriver` or spoofs fingerprints.
+- **Type into every application.** Background `WM_CHAR` reaches classic Win32
+  controls; Chromium, Electron, Qt, and most games ignore posted messages. For
+  those, either `activate: true` and accept the focus change, or drive the page
+  through `browser_*` instead.
+- **Guess coordinates.** `desktop_*` takes physical screen pixels. With mixed
+  DPI scaling, take a `desktop_screenshot` first and read the rectangle from
+  `desktop_windows` rather than computing it.
+- **Control macOS or Linux desktops.** The desktop half is Windows-only. The
+  browser half works anywhere a Chromium-family binary exists.
+
+Two runnable proofs ship with the repository. `node scripts/runtime-demo.mjs`
+starts a local page, clicks a button, reads the counter back out of the DOM,
+types into a field, is refused on an irreversible button and on a file input,
+flips the stop switch, and prints the audit lines and screenshot paths.
+`node scripts/runtime-desktop-demo.mjs` opens a no-activate test window, posts a
+click and text into it, verifies both from the target process's own state file,
+and captures the window.
 
 ## Tools
 
@@ -1186,7 +1296,7 @@ appears to "hang" until the ignored-abort child returns.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.12.1` and read the host log for `[dsh-superagent]` lines. |
+| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.13.0` and read the host log for `[dsh-superagent]` lines. |
 | `Cannot find module .../lib/control.js` (or `watch.js` / `report.js`) and the plugin never activates | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. The published package is not the cause: every version ships all twenty-two `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |

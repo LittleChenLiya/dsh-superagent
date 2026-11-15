@@ -8,6 +8,49 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.13.0 — 2026-11-15
+
+### Added
+
+- **Runtime control: a real browser and, on Windows, the real desktop.** New
+  opt-in layer (`lib/browser.js`, `lib/desktop.js`, `lib/runtime-control.js`)
+  that registers `browser_*` and `desktop_*` tools only when
+  `runtime.enabled` is true. The browser is driven over the DevTools protocol
+  through Node's built-in `WebSocket` and gets its own `--user-data-dir`, so
+  there is no npm dependency and no access to the user's cookies or logins. The
+  desktop half compiles a `user32.dll` helper with `Add-Type` inside
+  `powershell.exe`, posts input without activating the target window by default,
+  and only goes foreground on `activate: true` when the config allows it.
+  Element lookup accepts visible text, ARIA name, role, CSS selector, or the
+  index a previous `browser_elements` returned, and every click and typing call
+  screenshots afterwards.
+- **Gates and audit.** An emergency stop file refuses every action while it
+  exists; `file://`, other non-HTTP schemes, and hosts outside the allowlist are
+  refused; file inputs are refused; labels that read submit/delete/pay (or 提交/
+  删除/支付) need `confirm: true`. Every attempt writes one audit event with
+  action, target, decision, result, rule, and duration — including refusals,
+  which used to be indistinguishable from failures.
+- **Guard coverage for worker agents.** `lib/guard.js` refuses `browser_*` and
+  `desktop_*` calls from bound child agents with rule `guard/runtime-tool`,
+  unless `guard.allowRuntimeTools` is set. Runtime control belongs to the
+  session that mounted the plugin; a worker driving the user's screen is not
+  something to allow by default.
+- **Two runnable proofs.** `scripts/runtime-demo.mjs` and
+  `scripts/runtime-desktop-demo.mjs` assert against the target's own state (a
+  DOM counter, a window's click counter and received characters) rather than
+  against the tool's own report.
+
+### Notes
+
+- `README.md` gained a "Runtime control" section that lists the tools, the
+  gates, and the boundaries that are real: no borrowing of existing browser
+  logins, no CAPTCHA solving, no anti-detection, and no background typing into
+  Chromium or Electron content.
+- `Add-Type` needs a writable `%TEMP%`. The desktop helper points `TEMP`/`TMP`
+  at `%LOCALAPPDATA%/Temp/dsh-runtime-control`, because a restricted token that
+  can read `C:\Windows\TEMP` but not write there makes the C# compiler report a
+  misleading "source file not found".
+
 ## 0.12.1 — 2026-11-15
 
 ### Fixed

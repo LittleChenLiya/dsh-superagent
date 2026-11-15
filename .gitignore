@@ -25,3 +25,6 @@ state/
 Thumbs.db
 .idea/
 .vscode/
+
+# runtime-control demo output (screenshots, audit tail, stop file)
+.runtime-demo/
