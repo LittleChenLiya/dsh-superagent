@@ -8,6 +8,18 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.12.1 — 2026-11-15
+
+### Fixed
+
+- **Line endings in `bin/` and `lib/`.** Added `.gitattributes` with
+  `*.js text eol=lf` for both directories and normalized the tracked files to
+  LF. npm rewrites the shebang line of bin scripts during install (CRLF → LF,
+  one byte per file), which made `doctor`'s registry checksum comparison report
+  a false `Registry match` failure for `bin/*.js` on npm-installed copies. With
+  the tarball now shipping LF, installed files match the published package
+  byte-for-byte.
+
 ## 0.12.0 — 2026-11-15
 
 ### Added
