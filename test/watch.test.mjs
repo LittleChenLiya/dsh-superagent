@@ -8,9 +8,12 @@ import {
   activityOf,
   callsOf,
   elapsedOf,
+  groupingOf,
   orderRuns,
+  overlapGroups,
   renderFrame,
   signatureOf,
+  waitingOf,
   watch,
 } from '../lib/watch.js'
 import { createStore } from '../lib/store.js'
@@ -177,4 +180,168 @@ test('Ctrl-C ends a live panel and still restores the terminal', async () => {
   assert.match(out.text, /\u001b\[\?25h\u001b\[\?1049l$/, 'cleanup is the last write')
   assert.equal(out.frames > 0, true)
   await fsp.rm(dir, { recursive: true, force: true })
+})
+
+/** Every line of a frame, painted or not, must fit the terminal. */
+function widthsOf(frame) {
+  return frame.split('\n').map(line => line.replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, '').length)
+}
+
+function assertFits(frame, width, label) {
+  const widest = Math.max(...widthsOf(frame))
+  assert.ok(widest <= width, `${label}: widest line is ${widest} > ${width}`)
+}
+
+test('runs alive at the same moment share a gutter group; sequential runs do not', () => {
+  const first = run({ id: '20261114T080000-aaaa', createdAt: '2026-11-14T08:00:00.000Z' })
+  const second = run({ id: '20261114T080010-bbbb', createdAt: '2026-11-14T08:00:10.000Z' })
+  const earlier = run({
+    id: '20261114T070000-cccc',
+    status: 'completed',
+    createdAt: '2026-11-14T07:00:00.000Z',
+    startedAt: '2026-11-14T07:00:00.000Z',
+    finishedAt: '2026-11-14T07:10:00.000Z',
+  })
+  const groups = overlapGroups([earlier, first, second], T0 + 60_000)
+  assert.deepEqual(groups.map(group => group.map(entry => entry.id)), [
+    ['20261114T070000-cccc'],
+    ['20261114T080000-aaaa', '20261114T080010-bbbb'],
+  ], 'the two live runs overlap; the finished one is alone')
+
+  const labels = groupingOf([earlier, first, second], T0 + 60_000)
+  assert.equal(labels.get(first.id).label, labels.get(second.id).label)
+  assert.equal(labels.get(first.id).size, 2)
+  assert.equal(labels.has(earlier.id), false, 'a lone run wastes no gutter cells')
+
+  const frame = renderFrame([first, second, earlier], { now: T0 + 60_000, width: 110, color: false })
+  assert.equal(frame.split('▐1').length - 1, 2, 'both members of the group carry the same marker')
+  assert.match(frame, /overlapping/)
+})
+
+test('a queued run names the slot holders, its queue position, and nothing it cannot see', () => {
+  const holderA = run({ id: '20261114T080000-aaaa' })
+  const holderB = run({ id: '20261114T080020-bbbb', createdAt: '2026-11-14T08:00:20.000Z' })
+  const waitingOne = run({
+    id: '20261114T080040-cccc',
+    status: 'queued',
+    createdAt: '2026-11-14T08:00:40.000Z',
+    startedAt: '2026-11-14T08:00:40.000Z',
+    subtasks: [],
+  })
+  const waitingTwo = run({
+    id: '20261114T080050-dddd',
+    status: 'queued',
+    createdAt: '2026-11-14T08:00:50.000Z',
+    startedAt: '2026-11-14T08:00:50.000Z',
+    subtasks: [],
+  })
+  const runs = [holderA, holderB, waitingOne, waitingTwo]
+  const first = waitingOf(waitingOne, { runs, now: T0 + 60_000 })
+  const second = waitingOf(waitingTwo, { runs, now: T0 + 60_000 })
+  assert.equal(first.kind, 'slot')
+  assert.match(first.text, /2 active/)
+  assert.match(first.text, /aaaa,bbbb/)
+  assert.equal(first.text.includes('#1'), false, 'the head of the queue is not given a position number')
+  assert.match(second.text, /#2/)
+
+  const frame = renderFrame(runs, { now: T0 + 60_000, width: 130, color: false })
+  const row = frame.split('\n').find(line => line.includes('20261114T080050-dddd'))
+  assert.match(row, /slot ← aaaa,bbbb/)
+  assert.match(row, /2 active/)
+  assert.match(row, /#2/)
+
+  const alone = waitingOf(waitingOne, { runs: [waitingOne], now: T0 + 60_000 })
+  assert.equal(alone.text, 'waiting on a slot', 'with no active run there is nobody to blame')
+  assert.equal(waitingOf(holderA, { runs, now: T0 + 60_000 }), null, 'a running run with a free pool is not blocked')
+})
+
+test('the panel separates a retry backoff from a full worker pool', () => {
+  const backingOff = run({
+    limits: { maxModelCalls: 80, maxParallel: 2, attempts: 3 },
+    subtasks: [
+      { title: 'collect pricing', status: 'pending', attempts: 2 },
+      { title: 'benchmark queries', status: 'running', attempts: 1 },
+    ],
+  })
+  assert.deepEqual(waitingOf(backingOff, { now: T0 }), { kind: 'retry', text: 'retry 2/3 backoff' })
+
+  const poolFull = run({
+    limits: { maxModelCalls: 80, maxParallel: 1, attempts: 3 },
+    subtasks: [
+      { title: 'collect pricing', status: 'running', attempts: 1 },
+      { title: 'benchmark queries', status: 'pending', attempts: 0 },
+    ],
+  })
+  const reason = waitingOf(poolFull, { now: T0 })
+  assert.equal(reason.kind, 'parallel')
+  assert.match(reason.text, /1\/1/)
+  assert.match(reason.text, /1 waiting/)
+
+  const frame = renderFrame([poolFull], { now: T0 + 30_000, width: 160, color: false })
+  const row = frame.split('\n').find(line => line.includes('20261114T080000-aaaa'))
+  assert.match(row, /worker pool full 1\/1 · 1 waiting · 1 running · collect pricing/)
+})
+
+test('no run, one run, and many runs all fit a narrow terminal', () => {
+  const many = Array.from({ length: 60 }, (_, index) => run({
+    id: `20261114T08${String(index).padStart(4, '0')}-m${String(index).padStart(3, '0')}`,
+    status: index % 9 === 0 ? 'failed' : index % 5 === 0 ? 'queued' : 'completed',
+    createdAt: new Date(T0 + index * 1000).toISOString(),
+    startedAt: new Date(T0 + index * 1000).toISOString(),
+    finishedAt: new Date(T0 + index * 1000 + 4000).toISOString(),
+    error: index % 9 === 0 ? 'child stopped with reason "refused"' : null,
+    subtasks: [{ title: `worker ${index} with a deliberately long title`, status: 'completed' }],
+  }))
+
+  const cases = [
+    ['no runs', []],
+    ['one run', [run()]],
+    ['many runs', many],
+  ]
+  for (const [label, runs] of cases) {
+    for (const width of [24, 32, 40, 48, 60, 72, 88, 96, 100, 120, 160]) {
+      for (const color of [false, true]) {
+        assertFits(renderFrame(runs, { now: T0 + 300_000, width, color }), width, `${label} at ${width}`)
+      }
+    }
+  }
+})
+
+test('a terminal too narrow for a table stacks activity under each run', () => {
+  const frame = renderFrame([run()], { now: T0 + 42_000, width: 30, color: false })
+  const lines = frame.split('\n')
+  assert.equal(lines.some(line => line.includes('ACTIVITY')), false, 'no header survives at 30 cells')
+  assert.ok(lines.some(line => /└ 1 running · collect/.test(line)), 'the reason sits on its own line')
+  assert.ok(lines.some(line => /aaaa/.test(line)), 'the id tail survives, so rows stay distinguishable')
+  assertFits(frame, 30, 'single run at 30')
+})
+
+test('a live panel stops at the terminal height while a one-shot frame keeps every row', () => {
+  const many = Array.from({ length: 80 }, (_, index) => run({
+    id: `20261114T0800${String(index).padStart(2, '0')}-x${String(index).padStart(3, '0')}`,
+    status: 'completed',
+    createdAt: new Date(T0 + index * 1000).toISOString(),
+    finishedAt: new Date(T0 + index * 1000 + 500).toISOString(),
+  }))
+  const capped = renderFrame(many, { now: T0 + 300_000, width: 100, rows: 20, color: false })
+  assert.ok(capped.split('\n').length <= 20, `live frame is ${capped.split('\n').length} lines`)
+  assert.match(capped, /more run\(s\)/)
+  assert.match(capped, /66 more/, 'six lines of chrome leave 14 of the 80 runs')
+
+  const full = renderFrame(many, { now: T0 + 300_000, width: 100, color: false })
+  assert.equal(full.includes('more run(s)'), false)
+  assert.equal(full.split('\n').filter(line => line.includes('20261114T0800')).length, 80)
+})
+
+test('the empty panel and its state path are clipped, not wrapped', () => {
+  const frame = renderFrame([], {
+    now: T0,
+    width: 34,
+    color: false,
+    stateRoot: 'C:\\Users\\someone-with-a-long-name\\.dsh\\state\\superagent',
+  })
+  assertFits(frame, 34, 'empty state at 34')
+  assert.match(frame, /no runs recorded yet/)
+  assert.match(frame, /state: C:/)
+  assert.equal(frame.endsWith('\n'), false)
 })
