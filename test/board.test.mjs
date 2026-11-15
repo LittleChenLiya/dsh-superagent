@@ -92,6 +92,32 @@ function fixtureRun() {
   }
 }
 
+function questionRun() {
+  return {
+    id: 'run-4',
+    goal: '整理一份发布说明',
+    status: 'failed',
+    mode: 'planned',
+    createdAt: iso(-20_000),
+    finishedAt: iso(-18_000),
+    parentSessionId: 'session-owner',
+    error: 'planner stopped and asked for input',
+    attention: {
+      at: iso(-19_000),
+      items: [
+        {
+          id: 'q1',
+          source: 'planner',
+          question: '这次发布的版本号用哪个？',
+          options: ['0.15.0', '继续用 0.14.2'],
+          reason: '目标里没有写版本号',
+        },
+      ],
+    },
+    subtasks: [],
+  }
+}
+
 function activeRun() {
   return {
     id: 'run-2',
@@ -157,6 +183,7 @@ function fakeHost({ extras = [] } = {}) {
     ['run-1', fixtureRun()],
     ['run-2', activeRun()],
     ['run-3', unverifiedRun()],
+    ['run-4', questionRun()],
   ])
   const calls = []
   const host = {
@@ -327,7 +354,7 @@ test('board state turns runs into Chinese subtask cards and an inbox', async t =
 
   const state = (await request(panel, 'GET', '/api/board/state')).json.data
   assert.equal(state.service, 'dsh-superagent-board')
-  assert.equal(state.runs.length, 3)
+  assert.equal(state.runs.length, 4)
   assert.equal(state.templates.length, 4)
 
   const failed = state.runs.find(run => run.id === 'run-1')
@@ -343,10 +370,13 @@ test('board state turns runs into Chinese subtask cards and an inbox', async t =
   assert.equal(running.canCancel, true)
   assert.equal(running.canRerun, false)
 
-  const question = state.inbox.find(item => item.id === 'question:run-1:q1')
+  // run-1 already failed with subtasks, so its leftover question is history:
+  // answering it moves nothing, and it must not pose as a task.
+  assert.equal(state.inbox.find(item => item.id === 'question:run-1:q1'), undefined)
+  const question = state.inbox.find(item => item.id === 'question:run-4:q1')
   assert.ok(question)
-  assert.match(question.title, /旧版 Node 18/)
-  assert.deepEqual(question.options, ['继续支持', '只支持 Node 20+'])
+  assert.match(question.title, /版本号/)
+  assert.deepEqual(question.options, ['0.15.0', '继续用 0.14.2'])
 
   const review = state.inbox.find(item => item.id === 'review:run-3:w1')
   assert.ok(review)
@@ -357,13 +387,13 @@ test('the inbox routes an answer to the right host action', async t => {
   const { panel, calls } = await startBoard()
   t.after(() => panel.stop())
 
-  const answered = await request(panel, 'POST', '/api/board/inbox/question:run-1:q1/answer', {
+  const answered = await request(panel, 'POST', '/api/board/inbox/question:run-4:q1/answer', {
     body: { answer: '只支持 Node 20+' },
   })
   assert.equal(answered.status, 200)
   assert.match(answered.json.data.message, /回答/)
   const questionCall = calls.find(call => call[0] === 'answer')
-  assert.deepEqual(questionCall[1], { runId: 'run-1', attentionId: 'q1', answer: '只支持 Node 20+' })
+  assert.deepEqual(questionCall[1], { runId: 'run-4', attentionId: 'q1', answer: '只支持 Node 20+' })
 
   const reviewed = await request(panel, 'POST', '/api/board/inbox/review:run-3:w1/answer', {
     body: { answer: '确认通过' },
@@ -372,7 +402,7 @@ test('the inbox routes an answer to the right host action', async t => {
   const reviewCall = calls.find(call => call[0] === 'reviewSubtask')
   assert.equal(reviewCall[1].verdict, 'accept')
 
-  const missing = await request(panel, 'POST', '/api/board/inbox/question:run-1:q1/answer', { body: {} })
+  const missing = await request(panel, 'POST', '/api/board/inbox/question:run-4:q1/answer', { body: {} })
   assert.equal(missing.status, 400)
 })
 
@@ -477,7 +507,7 @@ test('the event stream opens with a full snapshot, so a reconnect restores the b
   assert.match(response.headers.get('content-type'), /text\/event-stream/)
   const frames = await collectFrames(response, { count: 1 })
   assert.equal(frames[0].type, 'snapshot')
-  assert.equal(frames[0].data.runs.length, 3)
+  assert.equal(frames[0].data.runs.length, 4)
   assert.ok(frames[0].seq > 0)
 })
 
