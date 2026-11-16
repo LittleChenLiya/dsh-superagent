@@ -10,7 +10,7 @@
 
 **以下情况不要用它**：一次模型调用就能答完的时候——那样你只是在为 planner 和 aggregator 额外付钱。必须在一轮之内结束的工作、中间需要人工审批的步骤、需要嵌套委派的任务（子 agent 深度上限为 1）、以及想要宿主内嵌面板的人，也不适合；下文那个可选的工作区面板是回环地址上的网页，不是宿主 UI。子 agent 运行时用的是宿主的凭据和文件系统，这里不是沙箱。
 
-它不添加宿主内 UI（工作区面板和对话控制台都是回环页面），也不修改宿主代码：对外的接口就是十三个 `superagent_*` 工具，另外还有六个可选的运维工具（终端面板、HTML 报告、安装自检、run 归档、git 同步、工作区面板），它们读的是同一批 run 文件。浏览器与桌面控制是独立的一层：设置 `runtime.enabled` 后会再注册十四个工具；默认值是 `false`，此时这些工具一个都不存在。
+它不添加宿主内 UI（工作区面板和对话控制台都是回环页面），也不修改宿主代码：对外的接口就是十四个 `superagent_*` 工具（默认只声明其中 8 个，其余 6 个按需展开），另外还有六个可选的运维工具（终端面板、HTML 报告、安装自检、run 归档、git 同步、工作区面板），它们读的是同一批 run 文件。浏览器与桌面控制是独立的一层：设置 `runtime.enabled` 后会再注册十四个工具；默认值是 `false`，此时这些工具一个都不存在。
 
 个人项目，与 DeepSeek 及 harness 维护方无关。MIT 许可，© 2026 Admire (LittleChenLiya)；详见[许可证](#许可证)。
 
@@ -18,14 +18,14 @@
 
 三种安装方式，`dsh plugin add` 和桌面应用的 **Add plugin** 对话框都接受：
 
-- **npm 包名**：`@xiangyixie/dsh-superagent@0.14.4`，从 npm 安装。请写明版本号，原因见下文。
-- **GitHub 仓库**：`https://github.com/LittleChenLiya/dsh-superagent`，从仓库安装。需要固定版本时加 `#v0.14.4`。
+- **npm 包名**：`@xiangyixie/dsh-superagent@0.14.5`，从 npm 安装。请写明版本号，原因见下文。
+- **GitHub 仓库**：`https://github.com/LittleChenLiya/dsh-superagent`，从仓库安装。需要固定版本时加 `#v0.14.5`。
 - **本地目录**：`file:/absolute/path/to/dsh-superagent`，拷贝本地 checkout。改过源码之后要重新 add 一次。
 
 最常用的一条命令：
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.4
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.5
 ```
 
 ### 从插件索引安装（可选）
@@ -85,7 +85,7 @@ npx @deepseek-ai/dsh@0.2.2-rc.1 --version
 
 ```bash
 # 1. install the plugin into a profile (web, headless, ... whatever you run)
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.4
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.5
 
 # 2. confirm the bundle row exists in the merged config
 dsh --profile web --dump-config
@@ -95,8 +95,8 @@ dsh --profile web --dump-config
 
 | 对话框中的栏目 | 填写值 | 作用 |
 | --- | --- | --- |
-| 包名（Package name） | `@xiangyixie/dsh-superagent@0.14.4` | 从 npm 安装。要写明版本号（见上文）。 |
-| GitHub 仓库（GitHub repository） | `https://github.com/LittleChenLiya/dsh-superagent` | 从仓库安装。需要固定版本时加 `#v0.14.4`。 |
+| 包名（Package name） | `@xiangyixie/dsh-superagent@0.14.5` | 从 npm 安装。要写明版本号（见上文）。 |
+| GitHub 仓库（GitHub repository） | `https://github.com/LittleChenLiya/dsh-superagent` | 从仓库安装。需要固定版本时加 `#v0.14.5`。 |
 | 本地目录（Local directory） | `file:/absolute/path/to/dsh-superagent` | 拷贝本地 checkout。改过源码后需重新 add 一次。 |
 
 安装的三种形式和升级方式见上文的[安装](#安装)一节。查一下 dump 里有没有下面这一段。如果没有，说明插件装了但没挂载，任何 `superagent_*` 工具都不会存在：
@@ -493,8 +493,11 @@ cost: ¥0.0952 + $0.0248 (estimate; all models priced)
 
 ## 工具
 
-如果目标有两个及以上可独立交付的产物，或含“先做 A 才能做 B”的前置依赖，就用 `superagent_start`，不要用宿主自带的 `subagent` 自己编排：只有 run 会留下计划、并行时序和一份合并报告。顶层会话的第一步会收到一条同样意思的简短提示，子会话不会重复收到。单一动作（一次查询、一次编辑、一条命令、一段短文本）不必起 run，直接做。
+如果目标有两个及以上可独立交付的产物，或含“先做 A 才能做 B”的前置依赖，就用 `superagent_start`，不要用宿主自带的 `subagent` 自己编排：只有 run 会留下计划、并行时序和一份合并报告。每个会话开始时只会收到一次同样意思的简短提示（不再每个 turn 重复），子会话不会收到。单一动作（一次查询、一次编辑、一条命令、一段短文本）不必起 run，直接做。
 
+默认只声明 8 个常用工具（`superagent_start` / `status` / `list` / `cancel` / `resume` / `followup` / `answer` / `help`），这样每次请求固定带的工具说明很小。长期目标、定时任务、实时插话、跨 run 笔记、模板、审计这 6 个工具按需展开：先调用一次 `superagent_help`，它们会在下一步自动出现在工具列表里，本会话之后一直可用。
+
+- `superagent_help()` 列出另外 6 个按需工具以及各自适用的场景，并为本会话展开它们。需要定时、长期目标、记忆、模板、审计或实时插话时先调用它。
 - `superagent_start(goal, mode?, queue?, max_subtasks?, max_parallel?, deadline_minutes?, allow_duplicate?, wait_seconds?)`
   启动一次 run 并立刻返回 run id。`mode: "direct"` 让一个 worker 直接跑这个 goal，不要 planner 也不要 aggregator，并把该 worker 的回复原样作为报告返回——适合一次自成一体的查询、修改、检索或短写作，不适合可以并行拆开的目标。默认的 `mode: "planned"` 走完整的 planner → worker → 合并报告流程。计划中的子任务可以声明 `dependsOn` 另一个子任务：依赖方会等它，并在自己的 prompt 里拿到它的报告，而彼此独立的子任务仍然并行。依赖成环会在任何工作开始前否掉整个计划，依赖一个计划从未声明的任务则以原因跳过。两种模式产出相同的 run 记录、配额、deadline、取消和用量记账。`goal_mode: true` 增加一步验收，并在失败的轮次重新规划；见 [Goal 模式](#goal-模式)。
   `queue: true` 让 `maxActiveRuns` 占满时的启动改为等空位而不是失败：它返回 `status: "queued"` 以及
@@ -1149,7 +1152,7 @@ SHA-256）。`--format html` 把同样的内容写成一个自包含
 
 | 你看到的 | 含义 | 怎么办 |
 | --- | --- | --- |
-| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.4` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
+| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.5` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
 | `Cannot find module .../lib/control.js`（或 `watch.js` / `report.js` / `wizard.js`），或宿主日志里的 `[dsh-superagent] dsh-superagent failed to load because a file it imports is missing: ...` | 那个 profile 里的副本不完整——被中断的 `add` 会留下残缺的解包结果。0.14.3 起的入口会直接点名缺哪个文件。已发布的包不是原因：每个版本都带全部三十四个 `lib/` 文件。 | 删掉 profile 的 `node_modules` 下该插件的目录（带 scope 的 `@xiangyixie/dsh-superagent`，或旧 tarball 安装留下的无 scope 的 `dsh-superagent`），再用同一条 `add` 命令重装，并带上版本号。不要手工拷贝文件进去。 |
 | `[error] the model provider rejected the API key` | 启动宿主的那个进程里缺 key 环境变量。 | 导出 `DEEPSEEK_API_KEY`（默认路由）或你那条路由声明的变量，然后重启 `dsh`。 |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | profile 的路由在环境里没有凭据。 | 设置该路由对应的环境变量并重启。错误行里写了路由名，以它为准，不要照本文。 |

@@ -1,6 +1,6 @@
 {
   "name": "@xiangyixie/dsh-superagent",
-  "version": "0.14.4",
+  "version": "0.14.5",
   "description": "长周期自主执行插件：一个目标拆成可并行的子任务，交付一份合并报告，重启后仍可继续。",
   "author": "Admire (LittleChenLiya)",
   "type": "module",
@@ -98,7 +98,7 @@
     "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "scripts": {
-    "test": "node --test test/orchestrator.test.mjs test/direct-and-queue.test.mjs test/dialog.test.mjs test/workspace.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/guard.test.mjs test/goal.test.mjs test/cron.test.mjs test/schedule.test.mjs test/audit.test.mjs test/inject.test.mjs test/sync.test.mjs test/workbench.test.mjs test/usage.test.mjs test/cost.test.mjs test/ledger.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/user-memory.test.mjs test/notify.test.mjs test/templates.test.mjs test/archive.test.mjs test/doctor.test.mjs test/pack.test.mjs test/runtime-control.test.mjs test/console.test.mjs test/client-bundle.test.mjs test/wizard.test.mjs test/board.test.mjs test/long-goal.test.mjs",
+    "test": "node --test test/orchestrator.test.mjs test/direct-and-queue.test.mjs test/dialog.test.mjs test/workspace.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/overhead.test.mjs test/guard.test.mjs test/goal.test.mjs test/cron.test.mjs test/schedule.test.mjs test/audit.test.mjs test/inject.test.mjs test/sync.test.mjs test/workbench.test.mjs test/usage.test.mjs test/cost.test.mjs test/ledger.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/user-memory.test.mjs test/notify.test.mjs test/templates.test.mjs test/archive.test.mjs test/doctor.test.mjs test/pack.test.mjs test/runtime-control.test.mjs test/console.test.mjs test/client-bundle.test.mjs test/wizard.test.mjs test/board.test.mjs test/long-goal.test.mjs",
     "check-pack": "node scripts/check-pack.mjs"
   },
   "keywords": [

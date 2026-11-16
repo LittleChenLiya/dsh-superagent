@@ -8,6 +8,31 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.14.5 — 2026-11-16
+
+这次只做一件事：把插件自己占的地方变小，能力一个不少。
+
+### 变化
+
+- **常驻开销降了 77%。** 每次请求都会带上插件的工具说明和一句引导语，这部分
+  从约 4,923 token 降到约 1,139 token（同一宿主、同一模型实测）。工具描述不再
+  写长篇使用手册，只留"什么时候该用它"；详细说明放到工具真正被调用时返回。
+- **常用工具直接可见，冷门能力按需展开。** 默认只声明 8 个常用工具：起 run、
+  查状态、列表、取消、恢复、追加指令、回答提问，以及 `superagent_help`。长期
+  目标、定时任务、实时插话、跨 run 笔记、模板、审计这 6 个不常用工具不会一
+  直占着上下文；需要时先调一次 `superagent_help`，它们在下一步自动出现在工具
+  列表里，会话按需记住这个状态。
+- **引导语每个会话只出现一次。** 以前每个 turn 都会再塞一份，长会话里越来越
+  占地方；现在只在会话开始时注入一次，内容也缩短了。
+
+### 对使用者的影响
+
+- 工具名、参数、行为都没有变；已经在用的工作流照常跑。
+- 需要定时任务、长期目标这类能力时，模型会自己先调 `superagent_help`，不需要
+  你额外提示；展开后用法与之前一致。
+- 新增回归测试钉住"一次请求固定带上的工具定义 + 引导语"的上限，超了测试就
+  失败，避免以后又把开销涨回去。
+
 ## 0.14.4 — 2026-11-16
 
 This release gives a goal a life longer than one run, and fixes a check that
