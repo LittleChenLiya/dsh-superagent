@@ -27,6 +27,18 @@
       },
       "versions": [
         {
+          "version": "0.15.0",
+          "publishTimestamp": 1794842521,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/LittleChenLiya/dsh-superagent",
+            "commit": "15c770b94da134f88759f4a520a5cabddaf73674"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1 <0.3.0-0"
+          }
+        },
+        {
           "version": "0.14.9",
           "publishTimestamp": 1794835906,
           "source": {
