@@ -893,6 +893,78 @@ test('a remembered conversation that had no saved words still records the next t
   }
 })
 
+test('closing the last page cancels a pending approval instead of approving it', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    panel = await startConsole(state, fakeHost().host)
+    await request(panel, 'POST', '/api/console/session', {})
+    const response = await fetch(`${panel.url}/api/console/events?sessionId=session-console`, {
+      headers: { authorization: `Bearer ${panel.token}` },
+    })
+    const reader = response.body.getReader()
+    await reader.read() // hello
+    const answer = panel.askApproval({ toolName: 'write_file', reason: 'outside every allowed root' })
+    await new Promise(resolve => setTimeout(resolve, 60))
+    const before = await request(panel, 'GET', '/api/console/state')
+    assert.equal(before.json.data.approvals.length, 1)
+
+    await reader.cancel()
+    const settled = await Promise.race([
+      answer,
+      new Promise(resolve => setTimeout(() => resolve('still-waiting'), 2000)),
+    ])
+    assert.equal(settled, 'cancelled')
+    const after = await request(panel, 'GET', '/api/console/state')
+    assert.deepEqual(after.json.data.approvals, [])
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('two pending approvals keep their own identity and decisions', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    panel = await startConsole(state, fakeHost().host)
+    await request(panel, 'POST', '/api/console/session', {})
+    const response = await fetch(`${panel.url}/api/console/events?sessionId=session-console`, {
+      headers: { authorization: `Bearer ${panel.token}` },
+    })
+    const reader = response.body.getReader()
+    await reader.read() // hello
+    const first = panel.askApproval({ toolName: 'write_file', callId: 'call-a', reason: 'first outside write' })
+    const second = panel.askApproval({ toolName: 'write_file', callId: 'call-b', reason: 'second outside write' })
+    await new Promise(resolve => setTimeout(resolve, 60))
+
+    const view = await request(panel, 'GET', '/api/console/state')
+    assert.equal(view.json.data.approvals.length, 2)
+    const [a, b] = view.json.data.approvals
+    assert.notEqual(a.id, b.id)
+    assert.equal(a.callId, 'call-a')
+    assert.equal(b.callId, 'call-b')
+    assert.equal(a.reason, 'first outside write')
+    assert.equal(b.reason, 'second outside write')
+
+    const allow = await request(panel, 'POST', '/api/console/approval', { id: a.id, decision: 'allow' })
+    assert.equal(allow.status, 200)
+    assert.equal(await first, 'allowed-once')
+    const duplicate = await request(panel, 'POST', '/api/console/approval', { id: a.id, decision: 'reject' })
+    assert.equal(duplicate.status, 409)
+    const remaining = await request(panel, 'GET', '/api/console/state')
+    assert.deepEqual(remaining.json.data.approvals.map(entry => entry.id), [b.id])
+
+    const reject = await request(panel, 'POST', '/api/console/approval', { id: b.id, decision: 'reject' })
+    assert.equal(reject.status, 200)
+    assert.equal(await second, 'rejected')
+    await reader.cancel().catch(() => {})
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
 test('an approval never resolves without a page, and refuses stray answers', async () => {
   const { base, state } = await fixture()
   let panel = null

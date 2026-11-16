@@ -408,6 +408,40 @@ test('an unusable state directory is reported instead of an empty run list', asy
   }
 })
 
+test('console mode mounts on a cordis context that has no plain root property', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-console-mount-'))
+  const disposers = []
+  const ctx = {
+    tools: { register: () => {} },
+    effect: execute => {
+      disposers.push(execute())
+    },
+    get: () => undefined,
+  }
+  // Cordis resolves an unknown property as a service and throws when that
+  // service was not injected; reading `ctx.root` is exactly that trap, and it
+  // used to abort the whole plugin before the console bridge was registered.
+  Object.defineProperty(ctx, 'root', {
+    get() {
+      throw new Error('cannot get property "root" without inject')
+    },
+  })
+  try {
+    assert.doesNotThrow(() => apply(ctx, { stateDir, notifyOnComplete: false, consolePort: 0 }))
+    const discovery = await waitForJson(path.join(stateDir, 'console.json'), 5000)
+    assert.match(discovery.url, /^http:\/\/127\.0\.0\.1:\d+$/)
+  } finally {
+    for (const dispose of disposers.reverse()) {
+      try {
+        await dispose()
+      } catch {
+        // the fake context has no lifecycle of its own
+      }
+    }
+    await fsp.rm(stateDir, { recursive: true, force: true })
+  }
+})
+
 /** Await a file that another async task is creating, without a fixed sleep. */
 async function waitForJson(file, timeoutMs = 3000) {
   const endsAt = Date.now() + timeoutMs
