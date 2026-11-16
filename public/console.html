@@ -481,6 +481,41 @@
   }
   .toast.err { border-color: rgba(255, 123, 114, .4); color: #ffc0bb; }
   .toast.ok { border-color: rgba(99, 214, 164, .35); }
+  .toast.warn { border-color: rgba(246, 193, 119, .4); color: #ffd8a1; }
+
+  .notice-btn { position: relative; }
+  .notice-btn.has-unread { border-color: rgba(246, 193, 119, .5); color: var(--amber); }
+  .notice-btn .count {
+    display: inline-block; min-width: 16px; margin-left: 6px; padding: 0 4px;
+    border-radius: 8px; background: rgba(246, 193, 119, .18); color: var(--amber);
+    font-size: 11px; text-align: center;
+  }
+  .notice-panel {
+    position: fixed; top: 58px; right: 14px; z-index: 26; width: 322px; max-height: 62vh;
+    display: flex; flex-direction: column; padding: 10px 10px 8px;
+    border: 1px solid var(--line); border-radius: 12px; background: #111a1f;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, .45);
+  }
+  .notice-panel[hidden] { display: none; }
+  .notice-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 8px; }
+  .notice-head .kicker { color: var(--accent); font: 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+  .notice-list { display: flex; flex-direction: column; gap: 6px; overflow: auto; }
+  .notice-item {
+    display: flex; gap: 8px; align-items: flex-start; padding: 8px 9px; border-radius: 9px;
+    border: 1px solid var(--line-soft); background: #0e1418; font-size: 12px; cursor: pointer;
+  }
+  .notice-item.unread { border-color: rgba(246, 193, 119, .35); background: rgba(246, 193, 119, .06); }
+  .notice-item .dot { width: 6px; height: 6px; margin-top: 5px; border-radius: 50%; background: var(--faint); flex: none; }
+  .notice-item.unread .dot { background: var(--amber); }
+  .notice-item .body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .notice-item .title { font-weight: 600; color: var(--text); }
+  .notice-item .detail { color: var(--faint); line-height: 1.4; word-break: break-word; }
+  .notice-item .when { color: var(--faint); font-size: 11px; }
+  .notice-empty { padding: 14px 6px; color: var(--faint); font-size: 12px; text-align: center; }
+  .composer.dragover .composer-box {
+    border-color: rgba(94, 234, 212, .7); background: rgba(94, 234, 212, .06);
+    box-shadow: 0 0 0 4px rgba(94, 234, 212, .12);
+  }
 
   .gate {
     position: fixed; inset: 0; z-index: 40; display: grid; place-items: center;
@@ -682,6 +717,7 @@
     <div class="topbar-actions">
       <span id="conn" class="conn"><i></i><span id="connText">连接中</span></span>
       <button id="stopAll" class="btn danger" type="button" hidden>停止这一轮</button>
+      <button id="noticeOpen" class="btn notice-btn" type="button" hidden>提醒<span id="noticeCount" class="count">0</span></button>
       <button id="newChatTop" class="btn" type="button" disabled>新对话</button>
       <button id="historyOpen" class="btn" type="button">历史</button>
       <button id="advancedOpen" class="btn" type="button">高级</button>
@@ -718,6 +754,14 @@
 </div>
 
 <div id="scrim" class="scrim" hidden></div>
+
+<div id="noticePanel" class="notice-panel" hidden>
+  <div class="notice-head">
+    <span class="kicker">提醒</span>
+    <button id="noticeReadAll" class="btn tiny" type="button">全部已读</button>
+  </div>
+  <div id="noticeList" class="notice-list"></div>
+</div>
 
 <aside id="historyDrawer" class="drawer" hidden aria-label="历史">
   <div class="drawer-head">
@@ -846,6 +890,23 @@
   const advancedDrawerEl = $('advancedDrawer')
   const advSessionEl = $('advSession')
   const advRunsEl = $('advRuns')
+  const noticeOpenEl = $('noticeOpen')
+  const noticeCountEl = $('noticeCount')
+  const noticePanelEl = $('noticePanel')
+  const noticeListEl = $('noticeList')
+
+  // Upload rules mirror the server's: the page refuses early with a readable
+  // sentence, and the server refuses again because a page is not a gate.
+  const UPLOAD_MAX = 8 * 1024 * 1024
+  const UPLOAD_EXTS = new Set([
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp',
+    '.pdf', '.md', '.markdown', '.txt', '.log', '.csv', '.tsv', '.json', '.yml', '.yaml', '.xml',
+    '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.rtf',
+    '.zip', '.tar', '.gz', '.7z',
+    '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.css', '.html', '.htm', '.sql', '.sh',
+    '.ps1', '.toml', '.ini', '.ipynb',
+  ])
+  const UPLOAD_HINT = '图片、PDF、Markdown/文本、CSV/JSON、Office 文档、压缩包或代码文件'
 
   const STATE = {
     token: '',
@@ -879,6 +940,11 @@
     sessionNote: null,
     cancelRequested: new Set(),
     stopAllBusy: false,
+    notices: [],
+    readNotices: new Set(),
+    noticeOpen: false,
+    noticesPrimed: false,
+    dragDepth: 0,
   }
 
   const WIZ = {
@@ -1258,6 +1324,225 @@
   function autoGrow() {
     inputEl.style.height = 'auto'
     inputEl.style.height = `${Math.min(180, Math.max(46, inputEl.scrollHeight))}px`
+  }
+
+  // ---------- notices ----------
+  //
+  // A finished run, a failure and a pending decision are all durable on the
+  // host. The page turns them into the same short list every time it loads, so
+  // closing the tab loses nothing: reopening shows "跑完了" or "要你批准" again.
+  // Only the ids a person has already read travel back to the server.
+
+  function noticeWhen(at) {
+    const ms = typeof at === 'number' ? at : Date.parse(at)
+    if (!Number.isFinite(ms)) return ''
+    const diff = Date.now() - ms
+    if (diff < 60_000) return '刚刚'
+    if (diff < 3_600_000) return `${Math.max(1, Math.floor(diff / 60000))} 分钟前`
+    return timeLabel(ms)
+  }
+
+  function collectNotices() {
+    const out = []
+    for (const run of Array.isArray(STATE.runs) ? STATE.runs : []) {
+      if (!run || typeof run.id !== 'string') continue
+      const goal = String(run.goal || '这条任务线').replace(/\s+/g, ' ').slice(0, 64)
+      const question = Array.isArray(run.attention) && run.attention.length > 0 ? run.attention[0] : null
+      if (question) {
+        out.push({
+          id: `run:${run.id}:attention`,
+          kind: 'approval',
+          runId: run.id,
+          title: '要你批准',
+          detail: `${goal} · ${question.question || '在等一个决定'}`,
+          at: question.askedAt || run.finishedAt || run.createdAt,
+        })
+      }
+      if (!isTerminal(run.status)) continue
+      const failed = run.status !== 'completed'
+      out.push({
+        id: `run:${run.id}:${run.status}`,
+        kind: failed ? 'failed' : 'done',
+        runId: run.id,
+        title: failed ? (run.status === 'cancelled' ? '已取消' : '没走通') : '跑完了',
+        detail: `${goal} · ${statusText(run.status)}`,
+        at: run.finishedAt || run.createdAt,
+      })
+    }
+    for (const entry of STATE.approvals.values()) {
+      const approval = entry.approval || {}
+      if (!approval.id) continue
+      out.push({
+        id: `approval:${approval.id}`,
+        kind: 'approval',
+        title: '要你批准',
+        detail: `工具 ${approval.toolName || 'tool'} 在等你决定`,
+        at: approval.askedAt,
+      })
+    }
+    out.sort((left, right) => (Date.parse(right.at) || 0) - (Date.parse(left.at) || 0))
+    return out.slice(0, 30)
+  }
+
+  function unreadNotices() {
+    return STATE.notices.filter(notice => !STATE.readNotices.has(notice.id))
+  }
+
+  function renderNoticeBadge() {
+    const unread = unreadNotices().length
+    noticeOpenEl.hidden = STATE.notices.length === 0
+    noticeCountEl.textContent = unread > 99 ? '99+' : String(unread)
+    noticeOpenEl.classList.toggle('has-unread', unread > 0)
+    noticeOpenEl.title = unread > 0 ? `${unread} 条没看过的提醒` : '提醒'
+    const base = 'Superagent 专属空间'
+    document.title = unread > 0 ? `(${unread}) ${base}` : base
+    if (!noticePanelEl.hidden) renderNoticeList()
+  }
+
+  function renderNoticeList() {
+    noticeListEl.textContent = ''
+    if (STATE.notices.length === 0) {
+      noticeListEl.append(el('div', 'notice-empty', '还没有提醒。任务跑完、没走通或等你批准时会出现在这里。'))
+      return
+    }
+    for (const notice of STATE.notices) {
+      const unread = !STATE.readNotices.has(notice.id)
+      const item = el('div', `notice-item${unread ? ' unread' : ''}`)
+      item.dataset.id = notice.id
+      item.append(el('span', 'dot'))
+      const body = el('div', 'body')
+      body.append(el('div', 'title', notice.title))
+      body.append(el('div', 'detail', notice.detail))
+      body.append(el('div', 'when', noticeWhen(notice.at)))
+      item.append(body)
+      item.addEventListener('click', () => {
+        markNoticesRead([notice.id])
+        if (notice.runId) openReport(notice.runId)
+        closeNoticePanel()
+      })
+      noticeListEl.append(item)
+    }
+  }
+
+  function refreshNotices({ toastNew = false } = {}) {
+    const previous = new Set(STATE.notices.map(notice => notice.id))
+    // The first pass only paints what already happened; a toast is for a
+    // change that arrives while the page is open.
+    const primed = STATE.noticesPrimed === true
+    STATE.notices = collectNotices()
+    STATE.noticesPrimed = true
+    if (toastNew && primed) {
+      for (const notice of STATE.notices) {
+        if (previous.has(notice.id)) continue
+        if (notice.kind === 'done') pushToast(`跑完了：${notice.detail}`, 'ok')
+        else if (notice.kind === 'failed') pushToast(`${notice.title}：${notice.detail}`, 'err')
+        else if (notice.kind === 'approval') pushToast(`要你批准：${notice.detail}`, 'warn')
+      }
+    }
+    renderNoticeBadge()
+  }
+
+  function markNoticesRead(ids) {
+    const fresh = (Array.isArray(ids) ? ids : []).filter(id => id && !STATE.readNotices.has(id))
+    if (fresh.length === 0) return
+    for (const id of fresh) STATE.readNotices.add(id)
+    renderNoticeBadge()
+    api('/api/console/notices/read', { method: 'POST', body: { ids: fresh } }).catch(() => {})
+  }
+
+  function openNoticePanel() {
+    STATE.noticeOpen = true
+    noticePanelEl.hidden = false
+    renderNoticeList()
+    // Opening the list is reading it: the badge clears, the lines stay.
+    markNoticesRead(STATE.notices.map(notice => notice.id))
+  }
+
+  function closeNoticePanel() {
+    STATE.noticeOpen = false
+    noticePanelEl.hidden = true
+  }
+
+  // ---------- files ----------
+  //
+  // A dropped or pasted file is copied into the conversation's workspace by
+  // the host, and the path it returns is what the message carries. Nothing is
+  // uploaded to a third party, and nothing outside the workspace is written.
+
+  function uploadExtOf(name) {
+    const text = typeof name === 'string' ? name : ''
+    const dot = text.lastIndexOf('.')
+    return dot >= 0 ? text.slice(dot).toLowerCase() : ''
+  }
+
+  function uploadSizeText(bytes) {
+    const size = Number(bytes) || 0
+    if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)}MB`
+    if (size >= 1024) return `${Math.round(size / 1024)}KB`
+    return `${size}B`
+  }
+
+  function base64OfBytes(bytes) {
+    let binary = ''
+    const chunk = 0x8000
+    for (let index = 0; index < bytes.length; index += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(index, index + chunk))
+    }
+    return btoa(binary)
+  }
+
+  function insertUploadPath(filePath) {
+    if (!filePath) return
+    const current = inputEl.value
+    const separator = current.length === 0 || current.endsWith('\n') ? '' : '\n'
+    inputEl.value = `${current}${separator}${filePath}\n`
+    autoGrow()
+    updateSend()
+    inputEl.focus()
+    try { inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length) } catch { /* not focusable yet */ }
+  }
+
+  async function uploadFiles(files) {
+    const list = Array.from(files || []).filter(Boolean)
+    if (list.length === 0) return
+    if (STATE.mode !== 'chat') {
+      pushToast('还没连上，等对话就绪再放文件。', 'err')
+      return
+    }
+    for (const file of list) {
+      const ext = uploadExtOf(file.name)
+      if (!UPLOAD_EXTS.has(ext)) {
+        pushToast(`不能放 ${ext || '没有扩展名的'} 文件；可以放：${UPLOAD_HINT}。`, 'err')
+        continue
+      }
+      if (file.size > UPLOAD_MAX) {
+        pushToast(`${file.name} 有 ${uploadSizeText(file.size)}，超过 ${uploadSizeText(UPLOAD_MAX)} 的上限。`, 'err')
+        continue
+      }
+      if (file.size === 0) {
+        pushToast(`${file.name} 是空文件，没有放进去。`, 'err')
+        continue
+      }
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        const data = await api('/api/console/upload', {
+          method: 'POST',
+          body: { sessionId: STATE.sessionId, name: file.name, data: base64OfBytes(bytes) },
+        })
+        insertUploadPath(data.path)
+        pushToast(`已放进工作区：${data.name}（路径已写进消息）。`, 'ok')
+      } catch (error) {
+        const hint = error.hint ? `。${error.hint}` : ''
+        pushToast(`放不进去：${messageOf(error)}${hint}`, 'err')
+      }
+    }
+  }
+
+  function dragHasFiles(event) {
+    const transfer = event.dataTransfer
+    if (!transfer) return false
+    if (transfer.files && transfer.files.length > 0) return true
+    return Array.from(transfer.types || []).includes('Files')
   }
 
   // ---------- task lanes ----------
@@ -2285,6 +2570,7 @@
         const approval = frame.approval
         if (frame.action === 'asked' && approval && approval.id) {
           seatApproval(approval)
+          refreshNotices({ toastNew: true })
           pushToast('有一个工具调用在等你决定。', 'warn')
         } else if (frame.action === 'auto') {
           pushToast(`已按本会话的许可放行 ${frame.toolName || '这个工具'}，没有再打断你。`, 'ok')
@@ -2297,6 +2583,7 @@
                 : frame.outcome === 'allowed-once' ? 'allow'
                   : frame.outcome === 'rejected' ? 'reject' : 'cancelled'
             settleApprovalNode(entry)
+            refreshNotices()
           }
         }
         break
@@ -2304,6 +2591,7 @@
       case 'runs':
         STATE.runs = Array.isArray(frame.runs) ? frame.runs : []
         renderLanes()
+        refreshNotices({ toastNew: true })
         break
       case 'answered':
         pushToast(`已提交 ${frame.attentionId || '决定'}。`, 'ok')
@@ -2539,8 +2827,10 @@
     if (data.sessionId) setSession(data.sessionId)
     if (data.preset) STATE.preset = data.preset
     STATE.runs = Array.isArray(data.runs) ? data.runs : []
+    STATE.readNotices = new Set(Array.isArray(data.readNoticeIds) ? data.readNoticeIds : [])
     renderLanes()
     for (const approval of Array.isArray(data.approvals) ? data.approvals : []) seatApproval(approval)
+    refreshNotices()
     if (STATE.messages.length === 0) renderEmpty()
     loadTools()
     wizardLoad({ probe: false, auto: true })
@@ -3262,6 +3552,7 @@
       clearMessages()
       STATE.runs = []
       renderLanes()
+      refreshNotices()
       renderEmpty()
       renderTools(null)
       loadTools()
@@ -3350,6 +3641,50 @@
   composerEl.addEventListener('submit', event => {
     event.preventDefault()
     sendMessage()
+  })
+
+  // A file can be dropped anywhere on the composer, or pasted into the text
+  // box; both end up copied into the conversation's workspace, with the path
+  // written into the message so the agent can read it.
+  for (const type of ['dragenter', 'dragover']) {
+    composerEl.addEventListener(type, event => {
+      if (!dragHasFiles(event)) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+      STATE.dragDepth += 1
+      composerEl.classList.add('dragover')
+    })
+  }
+  composerEl.addEventListener('dragleave', () => {
+    STATE.dragDepth = Math.max(0, STATE.dragDepth - 1)
+    if (STATE.dragDepth === 0) composerEl.classList.remove('dragover')
+  })
+  composerEl.addEventListener('drop', event => {
+    if (!dragHasFiles(event)) return
+    event.preventDefault()
+    STATE.dragDepth = 0
+    composerEl.classList.remove('dragover')
+    uploadFiles(event.dataTransfer ? event.dataTransfer.files : null)
+  })
+  inputEl.addEventListener('paste', event => {
+    const files = event.clipboardData ? event.clipboardData.files : null
+    if (!files || files.length === 0) return
+    event.preventDefault()
+    uploadFiles(files)
+  })
+
+  noticeOpenEl.addEventListener('click', event => {
+    event.stopPropagation()
+    if (STATE.noticeOpen) closeNoticePanel()
+    else openNoticePanel()
+  })
+  $('noticeReadAll').addEventListener('click', event => {
+    event.stopPropagation()
+    markNoticesRead(STATE.notices.map(notice => notice.id))
+  })
+  noticePanelEl.addEventListener('click', event => event.stopPropagation())
+  document.addEventListener('click', () => {
+    if (STATE.noticeOpen) closeNoticePanel()
   })
 
   for (const button of document.querySelectorAll('.segmented button')) {

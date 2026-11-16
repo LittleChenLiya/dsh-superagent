@@ -31,13 +31,14 @@ async function fixture() {
   return { base, state }
 }
 
-async function startConsole(state, host) {
+async function startConsole(state, host, options = {}) {
   const panel = createConsole({
     port: 0,
     stateRoot: state,
     host,
     version: 'test',
     log: () => {},
+    ...options,
   })
   await panel.start()
   return panel
@@ -1148,6 +1149,86 @@ test('an approval shows what it will do, when it expires, and can be allowed for
     assert.ok(toolDecision, 'the page must hear that the whole tool was allowed')
     const auto = frames.find(frame => frame.type === 'approval' && frame.action === 'auto')
     assert.equal(auto?.toolName, 'write_file', 'a skipped ask must still be announced')
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('a dropped file lands inside the conversation workspace and unsafe ones are refused', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    const workspace = path.join(base, 'workspace')
+    await fsp.mkdir(workspace, { recursive: true })
+    const fake = fakeHost({ sessionId: 'session-upload' })
+    fake.host.sessionWorkspace = async () => workspace
+    panel = await startConsole(state, fake.host, { maxUploadBytes: 1024 })
+    assert.equal((await request(panel, 'POST', '/api/console/session', {})).status, 200)
+
+    const text = '# 需求\n\n把这张图放进消息。\n'
+    const body = Buffer.from(text, 'utf8').toString('base64')
+    const saved = await request(panel, 'POST', '/api/console/upload', { name: '需求.md', data: body })
+    assert.equal(saved.status, 200)
+    const file = saved.json.data.path
+    assert.ok(path.resolve(file).startsWith(path.resolve(workspace) + path.sep), `${file} must stay in ${workspace}`)
+    assert.equal(await fsp.readFile(file, 'utf8'), text)
+    assert.equal(saved.json.data.size, Buffer.byteLength(text))
+
+    // A name that tries to climb out is reduced to a bare file name.
+    const climb = await request(panel, 'POST', '/api/console/upload', { name: '../../../逃出去.md', data: body })
+    assert.equal(climb.status, 200)
+    assert.equal(path.dirname(path.resolve(climb.json.data.path)), path.dirname(path.resolve(file)))
+    assert.ok(!(await fsp.readdir(base)).includes('逃出去.md'), 'nothing may be written beside the workspace')
+
+    // A second drop with the same name does not overwrite the first.
+    const again = await request(panel, 'POST', '/api/console/upload', { name: '需求.md', data: body })
+    assert.equal(again.status, 200)
+    assert.notEqual(again.json.data.path, file)
+
+    const exe = await request(panel, 'POST', '/api/console/upload', { name: 'setup.exe', data: body })
+    assert.equal(exe.status, 415)
+    assert.ok(exe.json.error.hint.includes('图片'), 'the failure names what can be dropped')
+
+    const big = Buffer.alloc(2048, 0x61).toString('base64')
+    const tooLarge = await request(panel, 'POST', '/api/console/upload', { name: '大文件.md', data: big })
+    assert.equal(tooLarge.status, 413)
+    assert.ok(tooLarge.json.error.summary.includes('超过'), tooLarge.json.error.summary)
+
+    const anonymous = await request(panel, 'POST', '/api/console/upload', { name: '需求.md', data: body }, null)
+    assert.equal(anonymous.status, 401)
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('notices stay read after the page is closed and the console restarts', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    const fake = fakeHost({ sessionId: 'session-notice' })
+    panel = await startConsole(state, fake.host)
+    assert.equal((await request(panel, 'POST', '/api/console/session', {})).status, 200)
+    const boot = await request(panel, 'GET', '/api/console/state')
+    assert.deepEqual(boot.json.data.readNoticeIds, [])
+
+    const ids = ['run:r1:completed', 'run:r2:attention']
+    const marked = await request(panel, 'POST', '/api/console/notices/read', { ids })
+    assert.equal(marked.status, 200)
+    assert.equal(marked.json.data.added, 2)
+    const twice = await request(panel, 'POST', '/api/console/notices/read', { ids })
+    assert.equal(twice.json.data.added, 0)
+
+    const empty = await request(panel, 'POST', '/api/console/notices/read', { ids: [] })
+    assert.equal(empty.status, 400)
+    const anonymous = await request(panel, 'POST', '/api/console/notices/read', { ids }, null)
+    assert.equal(anonymous.status, 401)
+
+    await panel.stop()
+    panel = await startConsole(state, fake.host)
+    const reopened = await request(panel, 'GET', '/api/console/state')
+    assert.deepEqual([...reopened.json.data.readNoticeIds].sort(), [...ids].sort())
   } finally {
     if (panel) await panel.stop()
     await fsp.rm(base, { recursive: true, force: true })
