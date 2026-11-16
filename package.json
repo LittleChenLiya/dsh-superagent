@@ -1,6 +1,6 @@
 {
   "name": "@xiangyixie/dsh-superagent",
-  "version": "0.14.5",
+  "version": "0.14.6",
   "description": "长周期自主执行插件：一个目标拆成可并行的子任务，交付一份合并报告，重启后仍可继续。",
   "author": "Admire (LittleChenLiya)",
   "type": "module",
@@ -87,6 +87,7 @@
     "docs/DETAIL.md",
     "docs/DETAIL.zh.md",
     "docs/LONG-GOAL.md",
+    "docs/images/*.png",
     "CHANGELOG.md",
     "README.md",
     "README.en.md",

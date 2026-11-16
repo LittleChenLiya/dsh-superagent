@@ -8,6 +8,24 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.14.6 — 2026-11-16
+
+### 修复
+
+- **配了控制台端口后插件不再整个不加载。** 审批桥在真实宿主上读取 `ctx.root`
+  会抛错，导致插件启动时只留下 `1 entry did not activate`。改为用 Cordis 的根
+  上下文符号取根，取不到就回退到插件自己的上下文。
+- **关闭页面或断线后，挂起的审批立即取消。** 以前最后一个控制台页面关闭、SSE
+  流断开后，工具调用仍会停在那里等满 10 分钟才按超时处理；现在最后一个客户端
+  断开就结算为 `cancelled`，既不自动批准，也不再占着会话。
+- **启动期停止不再报时间线 ENOENT。** 状态目录还没建好时刷新时间线会写失败；
+  现在先建目录再写临时文件。
+
+### 文档
+
+- 首屏改成真实界面截图（任务线卡、汇总与产物、审批卡、侧边栏入口）加三步快速
+  开始，并补了三条常见问题；中文默认，英文同步。
+
 ## 0.14.5 — 2026-11-16
 
 这次只做一件事：把插件自己占的地方变小，能力一个不少。
