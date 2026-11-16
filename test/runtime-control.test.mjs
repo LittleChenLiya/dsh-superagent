@@ -134,9 +134,9 @@ test('runtime control is not registered unless a profile opts in', async () => {
     [...tools.keys()].sort(),
     [
       'superagent_answer', 'superagent_audit', 'superagent_cancel', 'superagent_followup',
-      'superagent_goal', 'superagent_inject', 'superagent_list', 'superagent_memory',
-      'superagent_resume', 'superagent_schedule', 'superagent_start', 'superagent_status',
-      'superagent_template',
+      'superagent_goal', 'superagent_help', 'superagent_inject', 'superagent_list',
+      'superagent_memory', 'superagent_resume', 'superagent_schedule', 'superagent_start',
+      'superagent_status', 'superagent_template',
     ],
   )
   assert.equal(tools.has('browser_open'), false)

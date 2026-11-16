@@ -20,7 +20,7 @@ function gate() {
  * Mount the plugin against a fake host: only `tools.register`, `subagents`, and
  * `agents` are provided, which is the whole injected surface.
  */
-test('the plugin mounts, registers the thirteen tools, and runs a goal end to end', async () => {
+test('the plugin mounts, registers the fourteen tools, and runs a goal end to end', async () => {
   const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
   const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
   const previousHome = process.env.DSH_HOME
@@ -53,9 +53,9 @@ test('the plugin mounts, registers the thirteen tools, and runs a goal end to en
       [...tools.keys()].sort(),
       [
         'superagent_answer', 'superagent_audit', 'superagent_cancel', 'superagent_followup',
-        'superagent_goal', 'superagent_inject', 'superagent_list', 'superagent_memory',
-        'superagent_resume', 'superagent_schedule', 'superagent_start', 'superagent_status',
-        'superagent_template',
+        'superagent_goal', 'superagent_help', 'superagent_inject', 'superagent_list',
+        'superagent_memory', 'superagent_resume', 'superagent_schedule', 'superagent_start',
+        'superagent_status', 'superagent_template',
       ],
     )
 
@@ -377,7 +377,7 @@ test('without a subagents service the tools still mount and explain what is miss
 
   try {
     apply(ctx, { stateDir })
-    assert.equal(tools.size, 13, 'the tools must not vanish when the service is optional')
+    assert.equal(tools.size, 14, 'the tools must not vanish when the service is optional')
 
     const started = await tools.get('superagent_start').execute({ goal: 'needs workers' }, { agent: { id: 'session-1' } })
     assert.match(started, /subagent service is unavailable/)
