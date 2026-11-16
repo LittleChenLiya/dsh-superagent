@@ -2,215 +2,91 @@
 
 # dsh-superagent
 
-Long-horizon runs for [DeepSeek Harness](https://dshai.org): one goal in,
-model-planned parallel subtasks, one merged report — and the run survives a host
-restart.
+Give it one goal. It splits the work into parallel task lines, runs them, and reports back in a single conversation — interrupting you only for the decisions that matter.
 
-A single agent loop is one context and one sequence. Goals that need several
-independent lines of work stall in it, and a crash ends the turn with nothing to
-resume. This plugin takes one goal, asks the model to split it into subtasks, runs
-up to three child agents at a time, and merges their reports into one answer. Run
-state and spend are written to disk, so after a host restart `superagent_status`
-still finds the run and `superagent_resume` finishes only the unfinished part.
-Every run has a hard call and token budget, prints the usage it measured, and
-prints the cost once you give it a price for the route.
+![The Superagent entry in the desktop sidebar](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/docs/images/sidebar-entry.png)
 
-**Don't use it when** one model call can answer: you would only be paying for a
-planner and an aggregator on top. It is also the wrong tool for work that must
-finish inside a single turn, for a step that needs human approval in the middle,
-for anything that needs nested delegation (child depth is capped at 1), and for
-anyone who wants an in-host panel — the optional workspace panel below is a
-loopback page, not host UI. Children run with the host's credentials and
-filesystem; this is not a sandbox.
+## The problem you have now
 
-**Install and run.** Node `>= 24.9.0`, a tool-calling route, and that route's key
-in the environment:
+When work from several areas lands at once, the hard part is rarely the work itself. It is managing the sessions: a launch note for product, a feedback triage for support, a numbers check for the data team. Three sessions, constant tab-switching, and you have to remember what each one is doing and what comes next. One stuck session pulls your attention away from the other two.
 
-```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.5
-```
+dsh-superagent takes that over. You state the goal once; it splits the work, runs it, keeps an eye on it, and gathers the result into one conversation.
 
-Then ask the session for a run — a real call, not a sketch:
+## What it takes off your plate
 
-> Use superagent_start with goal "Explain the difference between process and thread in 300 words, with one concrete example" and wait_seconds 120.
+- **Give orders.** Describe the outcome in one sentence. It plans parallel subtasks itself — four at a time by default — so you do not have to break the work down.
+- **Wait for the handoff.** Progress and artifacts for every task line live in the same conversation; when everything finishes you get one summary, with artifacts you can open directly.
+- **Only pulled in for real decisions.** Writing outside the workspace or asking for elevated permissions stops the run and raises a card with the source, tool, path, and reason. It continues only after you allow it; if you do not, the action is cancelled — never approved on your behalf.
 
-The reply ends `completed` with the merged report, or with
-`next: superagent_status run_id="..."` if the wait ran out. [Quickstart](#quickstart)
-covers the path from an empty machine, including the reason not to install npm's
-unrelated `dsh` package by name.
+### Task-line cards: several jobs at once
 
-It adds no in-host UI (the workspace panel and the conversation console are
-loopback pages) and patches no host code: the fourteen `superagent_*` tools are the
-surface (eight declared by default, six more expanded on demand), plus six optional operator utilities (a terminal panel, an HTML report,
-an install doctor, a run archive, git sync, and the workspace panel) that read the
-same run files. Browser and desktop control is a separate layer: with
-`runtime.enabled` set, fourteen more tools are registered, and with the default
-`false` none of them exist.
+![Task-line cards in the console conversation](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/docs/images/console-task-lines.png)
 
-Personal project, not affiliated with DeepSeek or the harness maintainers. MIT
-licensed, © 2026 Admire (LittleChenLiya); details in [License](#license).
+### All done: summary and artifacts
 
-## Requirements
+![The completion summary and artifacts](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/docs/images/console-summary.png)
 
-- Node `>= 24.9.0`. DeepSeek Harness refuses to start below that, so this
-  plugin does too.
-- DeepSeek Harness `>= 0.2.2-rc.1 < 0.3.0` with the base bundle (the `tools`,
-  `agents`, and `subagents` services).
-- A model route that can call tools, and that route's API key in the
-  environment. The default profile uses `deepseek-official` / `deepseek-flash`
-  and reads `DEEPSEEK_API_KEY`.
+### A card appears only when you need to decide
+
+![An approval card waiting for a decision](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/docs/images/approval-card.png)
 
 ## Quickstart
 
-Five minutes, from nothing to a finished run. Every command below runs on a
-clean machine.
+Three steps. The desktop app and the CLI install the same plugin; each step says where to click.
 
-### 0. Do not install `dsh` from npm by name
+### 1. Install
 
-```bash
-# WRONG: npm's `dsh` is unrelated ("a shell written in JavaScript")
-npm i -g dsh
+Desktop: **Plugins** → **Add plugin** → enter `@xiangyixie/dsh-superagent@0.14.6` → install.
 
-# RIGHT: run the DeepSeek Harness by its scoped package, pinned
-npx @deepseek-ai/dsh@0.2.2-rc.1 --version
-```
-
-The rest of this page writes `dsh` for that command; if the binary is not on
-your `PATH`, use `npx @deepseek-ai/dsh@0.2.2-rc.1` instead.
+CLI:
 
 ```bash
-# 1. install the plugin into a profile (web, headless, ... whatever you run)
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.5
-
-# 2. confirm the bundle row exists in the merged config
-dsh --profile web --dump-config
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.6
 ```
 
-### Install from the plugin index (optional)
+**Restart DSH** afterwards — plugins are loaded once at host startup. You can also add the [plugin index](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/plugin-index.json) on the **Discover** page for one-click installs; upgrades are always remove-then-add.
 
-The plugin index pins the package name, the release version, and the exact commit
-in one JSON file, which the desktop app's **Discover** page can read directly:
+### 2. Point it at a model
 
-1. Open **Discover**, choose **Add index**, and enter `https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/plugin-index.json`.
-2. Find "Superagent" in the list and install it; later releases update from the same entry.
-
-Every version entry points at a full 40-hex commit, so a one-click update lands on
-a known revision instead of a moving branch head.
-
-The desktop app's **Add plugin** dialog accepts the same three forms:
-
-| Dialog input | Value | What it does |
-| --- | --- | --- |
-| Package name | `@xiangyixie/dsh-superagent@0.14.5` | Installs from npm. Name the version (see below). |
-| GitHub repository | `https://github.com/LittleChenLiya/dsh-superagent` | Installs from the repository. Add `#v0.14.5` if you need a fixed release. |
-| Local directory | `file:/absolute/path/to/dsh-superagent` | Copies the checkout. Re-add after changing the source. |
-
-Upgrading is remove-then-add, not in-place: remove the old copy
-(`dsh plugin --profile web remove @xiangyixie/dsh-superagent`) before adding
-the new version. The same applies to any other plugin already in that profile —
-remove and re-add it rather than expecting the dialog or `add` to replace it.
-
-Name the version. Without one, pnpm's minimum release age policy skips releases
-published in the last few hours and installs the newest older one, so a bare
-`add` succeeds while giving you a version that is not current. If you would
-rather track the newest release, add it to `minimumReleaseAgeExclude` in the
-profile's `pnpm-workspace.yaml`; otherwise bump the number above. Check what
-actually landed with:
+The default profile uses `deepseek-official` / `deepseek-flash`. Put its key in the environment that starts the host:
 
 ```bash
-npm ls --prefix <DSH_HOME>/profiles/web @xiangyixie/dsh-superagent
+export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 ```
 
-A new or updated plugin takes effect only after **restarting DSH**: quit the
-desktop app completely and reopen it, or stop and start the `dsh web` host.
-Code is loaded once at host startup, so replacing files on disk does not change
-the process that is already running. `superagent_status` appends a
-`note: ... restart DSH` line when the version on disk differs from the one the
-host loaded; that check itself only exists in the newer code, so after an
-upgrade the restart is still what makes it real.
+If your profile already holds a working conversation, you are done. For DashScope, a self-hosted gateway, or another route, see [Other routes](#other-routes).
 
-For an offline machine or a pinned artifact, install a packed tarball instead —
-it is byte-identical to what the registry serves:
+### 3. Run it once
 
-```bash
-npm pack                                  # writes xiangyixie-dsh-superagent-<version>.tgz
-dsh plugin --profile web add ./xiangyixie-dsh-superagent-<version>.tgz
-```
+After the restart, open **Superagent** in the sidebar (CLI host: open the local console address it prints) and send:
 
-Look for this block in the dump. If it is missing, the plugin is installed but
-not mounted, and no `superagent_*` tool will exist:
+> Wrap up this week: group the feedback in feedback.csv into three recurring themes, then write a one-page 0.8.0 release note. Put both in deliverables/.
 
-```yaml
-# == @xiangyixie/dsh-superagent
-- id: superagent
-  name: @xiangyixie/dsh-superagent
-```
+Task lines start immediately; progress, the summary, and the artifacts all stay in that one conversation. Workers that need to run commands such as `npm test` need [per-worker command permissions](#per-worker-command-permissions) first.
 
-```bash
-# 3. start the host with the key in the environment that starts it
-export DEEPSEEK_API_KEY=sk-...          # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
-dsh --profile web
-```
+## FAQ
 
-The key must be the one for the route the profile actually uses. A profile
-pointing at DashScope uses `DASHSCOPE_API_KEY`; a profile pointing at a
-self-hosted gateway uses whatever that route names. See
-[Other routes](#other-routes) if you want to add one.
+**Why does it ask me questions?**
 
-In the session, ask for a run:
+Only for actions that cross the workspace boundary or need elevated permissions. The card names the source (which task line, which subtask), the tool, the target path, and the reason. If nobody answers within 10 minutes, the action is cancelled — it is never approved automatically.
 
-> Use superagent_start with goal "Explain the difference between process and thread in 300 words, with one concrete example" and wait_seconds 120.
+**Can I use it without the desktop app?**
 
-Shape of the reply (numbers illustrative — a full transcript of a real run is
-in [docs/e2e-2026-11-14.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/e2e-2026-11-14.md)):
+Yes. The plugin runs on DeepSeek Harness; a local host started with `dsh --profile web` gives you the same console, task lines, and approval cards. The desktop app only adds the sidebar entry, so you do not have to remember the address.
 
-```
-run 20261114T051233-a1b2 — completed
-goal: Explain the difference between process and thread in 300 words, with one concrete example
-plan: planned; subtasks 2/2 completed; max 3 in parallel; 2 attempt(s) each
-elapsed: 18.4s
-usage: input 4120 (+980 prompt tokens served from cache), output 455, calls 4 (deepseek-official/deepseek-flash: 4 call(s) 4120 in / 455 out)
-cost: not computed — no price configured for deepseek-official/deepseek-flash; add a pricing entry in cordis.patch.yml to get an estimate
-  [1] completed (attempts 1) Processes vs threads
-  [2] completed (attempts 1) Concrete example
+**What does it cost?**
 
-report:
-...
-```
+Every run pays for at least one planning call, several model calls per subtask, and one aggregation. The sample run in this document with two subtasks used 4 calls and about 4.6k input / 0.5k output tokens; longer work costs more. No prices are built in; configure `pricing` and each run prints its cost. Hard caps are `maxModelCallsPerRun` (default 80) and `maxTokensPerRun` (default 2,000,000).
 
-There is no built-in price for the default DeepSeek route; see
-[Spending limits and prices](#spending-limits-and-prices) to add one, after
-which the next run (or a resume of this one) prints `cost: ...`. `cost` is
-computed when a run settles, so an already-finished run keeps the "not
-computed" line. `usage: not recorded` only appears on a finished run whose
-child logs cannot be read at all — see [Troubleshooting](#troubleshooting).
+## When not to use it
 
-If `wait_seconds` runs out before the run finishes, the reply ends with
-`next: superagent_status run_id="..." wait_seconds=120`. Call it again; the run
-keeps going either way.
+Work that one model call can answer, tasks that need sub-agents to delegate further (depth is capped at 1), and cases that need separate credentials or stronger isolation for children are not worth it. Every run also pays for one planning and one aggregation pass, so latency-sensitive single-step work is a poor fit.
 
-To check recovery without a real crash: kill the host while a run is active,
-start it again, then `superagent_status` shows `interrupted` and
-`superagent_resume` finishes it. A run is only `interrupted` when no live
-process owns it: while the original host is still running, its run is left
-alone and the next mount reports it as active, not as interrupted.
+## Requirements
 
-Two shutdown paths behave differently, and both are covered by the E2E record:
-
-- **Hard kill (or crash).** The heartbeat is a few seconds old, but on the
-  machine that wrote the run the dead pid is checked first, so the next mount
-  reclaims it immediately and prints
-  `reclaimed: owner pid … is not running and this state directory is local`.
-  A shared state directory written by another machine trusts the heartbeat
-  instead, so reclamation there waits up to 90 s.
-- **Graceful shutdown.** If the host disappears while a run is in flight (for
-  example a one-shot headless turn that ends after `wait_seconds: 0`), the
-  plugin notices that the `subagents` service is gone, leaves the unfinished
-  subtasks `pending`, and settles the run as `interrupted` with
-  `note: the host shut down while this run was active`. No attempts are burned
-  on a service that cannot answer. In that case the host process itself may
-  linger until a child that ignores abort exits; that wait is the host's, not
-  the plugin's.
+- Node `>= 24.9.0`.
+- DeepSeek Harness `>= 0.2.2-rc.1 < 0.3.0`, with the base bundle (`tools`, `agents`, `subagents`).
+- A model route that can call tools, with its key in the environment.
 
 ## Configuration
 
@@ -1790,7 +1666,7 @@ appears to "hang" until the ignored-abort child returns.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.5` and read the host log for `[dsh-superagent]` lines. |
+| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.6` and read the host log for `[dsh-superagent]` lines. |
 | `Cannot find module .../lib/control.js` (or `watch.js` / `report.js` / `wizard.js`), or `[dsh-superagent] dsh-superagent failed to load because a file it imports is missing: ...` in the host log | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. From 0.14.3 the entry point names the missing file itself. The published package is not the cause: every version ships all thirty-four `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |

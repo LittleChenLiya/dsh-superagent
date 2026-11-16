@@ -2,153 +2,91 @@
 
 # dsh-superagent
 
-[DeepSeek Harness](https://dshai.org) 的长程运行插件：输入一个 goal，由模型规划出可并行的 subtask，最后合成一份报告——而且宿主重启之后，这次 run 还能接着跑完。
+把一句目标交给它，它自己拆成几条并行的任务线，跑完在一条对话里汇总；你只在关键判断时被叫一次。
 
-## 这是什么，解决什么问题
+![桌面端侧边栏的「超级智能体」入口](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/docs/images/sidebar-entry.png)
 
-单个 agent 循环只有一个上下文、一条执行序列。需要几条独立工作线的目标会在里面卡住，一次崩溃就会让这一轮什么都留不下、无从续跑。这个插件接收一个 goal，让模型把它拆成若干 subtask，最多同时跑三个子 agent，再把它们的报告合并成一个回答。run 的状态和花费都写到磁盘上，所以宿主重启之后 `superagent_status` 仍然能找到这个 run，`superagent_resume` 只把没做完的部分补完。每个 run 都有硬性的调用次数与 token 预算，会打印实测用量；一旦你为对应路由配好了价格，它还会打印花费。
+## 你现在的麻烦
 
-**以下情况不要用它**：一次模型调用就能答完的时候——那样你只是在为 planner 和 aggregator 额外付钱。必须在一轮之内结束的工作、中间需要人工审批的步骤、需要嵌套委派的任务（子 agent 深度上限为 1）、以及想要宿主内嵌面板的人，也不适合；下文那个可选的工作区面板是回环地址上的网页，不是宿主 UI。子 agent 运行时用的是宿主的凭据和文件系统，这里不是沙箱。
+手上的活一起来的时候，最累的往往不是干活，而是管会话：产品那边要一页发布说明，客服那边要一份反馈归类，数据那边还等着你核对。开三个会话，来回切，每个都得记住跑到哪了、下一步是什么；一个会话卡住，另外两个也跟着分心。
 
-它不添加宿主内 UI（工作区面板和对话控制台都是回环页面），也不修改宿主代码：对外的接口就是十四个 `superagent_*` 工具（默认只声明其中 8 个，其余 6 个按需展开），另外还有六个可选的运维工具（终端面板、HTML 报告、安装自检、run 归档、git 同步、工作区面板），它们读的是同一批 run 文件。浏览器与桌面控制是独立的一层：设置 `runtime.enabled` 后会再注册十四个工具；默认值是 `false`，此时这些工具一个都不存在。
+dsh-superagent 把这件事接过去：你说一句目标，它负责拆、负责跑、负责盯，最后把结果收拢到一条对话里。
 
-个人项目，与 DeepSeek 及 harness 维护方无关。MIT 许可，© 2026 Admire (LittleChenLiya)；详见[许可证](#许可证)。
+## 它替你管什么
 
-## 安装
+- **下命令。** 一句话说清要什么，它自己规划成可并行的子任务，默认同时跑四条，不用你拆步骤。
+- **等验收。** 每条任务线的进度和产物都落在同一条对话里；全部完成后给一份汇总，产物可以直接点开。
+- **只在关键判断时被打断。** 写工作区外的文件、需要提权这类动作，它会停下来放一张卡，写清来源、工具、路径和理由；你点头才继续，不点头就取消，不会替你做主。
 
-三种安装方式，`dsh plugin add` 和桌面应用的 **Add plugin** 对话框都接受：
+### 任务线卡：几条活一起跑
 
-- **npm 包名**：`@xiangyixie/dsh-superagent@0.14.5`，从 npm 安装。请写明版本号，原因见下文。
-- **GitHub 仓库**：`https://github.com/LittleChenLiya/dsh-superagent`，从仓库安装。需要固定版本时加 `#v0.14.5`。
-- **本地目录**：`file:/absolute/path/to/dsh-superagent`，拷贝本地 checkout。改过源码之后要重新 add 一次。
+![控制台对话里的任务线卡](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/docs/images/console-task-lines.png)
 
-最常用的一条命令：
+### 全部完成：汇总与产物
 
-```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.5
-```
+![全部完成的汇总与产物](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/docs/images/console-summary.png)
 
-### 从插件索引安装（可选）
+### 需要你点头时，才出现一张卡
 
-插件索引把包名、版本和固定的 commit 写在一个 JSON 里，桌面应用的「发现」页可以直接读取：
-
-1. 打开「发现」页，点「添加索引」，填入 `https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/plugin-index.json`。
-2. 在列表里找到「超级智能体」并安装；之后有新版本也在这里一键更新。
-
-索引里的每个版本都绑定完整的 40 位 commit，所以一键更新拿到的是确定的那一份代码，而不是浮动的分支头。
-
-### 升级：先卸载，再装新版
-
-升级是 remove-then-add，不是原地覆盖：先卸掉旧的那份
-（`dsh plugin --profile web remove @xiangyixie/dsh-superagent`），再装新版本。同一个 profile 里已有的其他插件也是同样的规则——要先卸载再重新安装，不要指望对话框或 `add` 会替你替换掉它们。
-
-版本号要写清。不写的话，pnpm 的 minimum release age 策略会跳过最近几小时才发布的版本，装上一个"次新"的版本，结果是 `add` 成功了，但拿到的不是当前版本。如果你更想跟最新发布，就把它加进该 profile 的 `pnpm-workspace.yaml` 里的 `minimumReleaseAgeExclude`；否则请把上面的版本号改掉。用下面这条命令确认实际装上的是哪个版本：
-
-```bash
-npm ls --prefix <DSH_HOME>/profiles/web @xiangyixie/dsh-superagent
-```
-
-装完或更新完，必须**重启 DSH** 才生效：桌面端完全退出应用再打开，命令行宿主停掉 `dsh web` 再启动。插件只在宿主启动时加载一次，替换磁盘上的文件不会改变已经在跑的进程。`superagent_status` 会在「磁盘版本 ≠ 宿主已加载版本」时多打一行 `note: ... restart DSH`；但这个检查本身也要新版本代码在运行才存在，所以升级之后仍以重启为准。
-
-离线机器或需要固定制品时，改装打好的 tarball——它与 registry 提供的内容逐字节一致：
-
-```bash
-npm pack                                  # writes xiangyixie-dsh-superagent-<version>.tgz
-dsh plugin --profile web add ./xiangyixie-dsh-superagent-<version>.tgz
-```
-
-## 需要执行命令时开启 commandWorkerPermission
-
-在默认的 `inherit` 权限下，worker 跑不了 `npm test` 这类命令：宿主以管道 stdio 启动子进程时会被 `workspace-write` 沙箱拒绝（`EPERM`）。要让计划里声明了命令能力的 worker 真正执行命令，就打开 `commandWorkerPermission`（例如设为 `danger-full-access`）。它只影响声明了该能力的 worker，planner、aggregator、验收判定和其他子 agent 仍然继承原权限。完整的机制、边界和风险见[按 worker 设置命令权限](#按-worker-设置命令权限)。
-
-## 环境要求
-
-- Node `>= 24.9.0`。DeepSeek Harness 低于这个版本拒绝启动，所以本插件也一样。
-- DeepSeek Harness `>= 0.2.2-rc.1 < 0.3.0`，并带 base bundle（即 `tools`、`agents`、`subagents` 三个服务）。
-- 一条能调用工具的模型路由，且该路由的 API key 已放进环境。默认 profile 使用 `deepseek-official` / `deepseek-flash`，读取 `DEEPSEEK_API_KEY`。
+![等待决定的审批卡](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/docs/images/approval-card.png)
 
 ## 快速开始
 
-五分钟，从空机器做到一次跑完的 run。下面每条命令都能在干净机器上执行——这里也是从零起步的完整路径，包括为什么不要按名字安装 npm 上那个无关的 `dsh` 包。
+三步。桌面端和命令行走的是同一套插件，下面每一步都写清在哪里点。
 
-### 0. 不要按名字从 npm 安装 `dsh`
+### 1. 装
 
-```bash
-# WRONG: npm's `dsh` is unrelated ("a shell written in JavaScript")
-npm i -g dsh
+桌面端：侧边栏 **插件** → **Add plugin** → 输入 `@xiangyixie/dsh-superagent@0.14.6` → 安装。
 
-# RIGHT: run the DeepSeek Harness by its scoped package, pinned
-npx @deepseek-ai/dsh@0.2.2-rc.1 --version
-```
-
-本文其余部分直接用 `dsh` 指代那条命令；如果二进制不在你的 `PATH` 里，就换成 `npx @deepseek-ai/dsh@0.2.2-rc.1`。
+命令行：
 
 ```bash
-# 1. install the plugin into a profile (web, headless, ... whatever you run)
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.5
-
-# 2. confirm the bundle row exists in the merged config
-dsh --profile web --dump-config
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.6
 ```
 
-桌面应用的 **Add plugin** 对话框接受同样这三种形式：
+装完**重启 DSH**（插件只在宿主启动时加载一次）。也可以从「发现」页添加[插件索引](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/plugin-index.json)一键安装；升级一律先 `remove` 再 `add`。
 
-| 对话框中的栏目 | 填写值 | 作用 |
-| --- | --- | --- |
-| 包名（Package name） | `@xiangyixie/dsh-superagent@0.14.5` | 从 npm 安装。要写明版本号（见上文）。 |
-| GitHub 仓库（GitHub repository） | `https://github.com/LittleChenLiya/dsh-superagent` | 从仓库安装。需要固定版本时加 `#v0.14.5`。 |
-| 本地目录（Local directory） | `file:/absolute/path/to/dsh-superagent` | 拷贝本地 checkout。改过源码后需重新 add 一次。 |
+### 2. 配一个模型
 
-安装的三种形式和升级方式见上文的[安装](#安装)一节。查一下 dump 里有没有下面这一段。如果没有，说明插件装了但没挂载，任何 `superagent_*` 工具都不会存在：
-
-```yaml
-# == @xiangyixie/dsh-superagent
-- id: superagent
-  name: @xiangyixie/dsh-superagent
-```
+默认 profile 用 `deepseek-official` / `deepseek-flash`，把 key 放进启动宿主的那个环境：
 
 ```bash
-# 3. start the host with the key in the environment that starts it
-export DEEPSEEK_API_KEY=sk-...          # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
-dsh --profile web
+export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 ```
 
-这个 key 必须是该 profile 实际使用的那条路由的 key。指向 DashScope 的 profile 用 `DASHSCOPE_API_KEY`；指向自建网关的 profile 用它自己声明的变量。想新增一条路由，看[其他路由](#其他路由)。
+已经能正常对话的 profile 不用改。想换 DashScope、自建网关等其他路由，见[其他路由](#其他路由)。
 
-在会话里发起一次 run：
+### 3. 第一次跑起来
 
-> Use superagent_start with goal "Explain the difference between process and thread in 300 words, with one concrete example" and wait_seconds 120.
+重启后点侧边栏 **超级智能体**（命令行宿主：打开它打印的本地控制台地址），在输入框里发一句：
 
-回复长这样（数字仅作示意——一次真实 run 的完整记录在 [docs/e2e-2026-11-14.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/e2e-2026-11-14.md)）：
+> 这周的活一起收一下：把 feedback.csv 的反馈归成三类高频问题，再写一页 0.8.0 的发布说明，两份都放到 deliverables/。
 
-```
-run 20261114T051233-a1b2 — completed
-goal: Explain the difference between process and thread in 300 words, with one concrete example
-plan: planned; subtasks 2/2 completed; max 3 in parallel; 2 attempt(s) each
-elapsed: 18.4s
-usage: input 4120 (+980 prompt tokens served from cache), output 455, calls 4 (deepseek-official/deepseek-flash: 4 call(s) 4120 in / 455 out)
-cost: not computed — no price configured for deepseek-official/deepseek-flash; add a pricing entry in cordis.patch.yml to get an estimate
-  [1] completed (attempts 1) Processes vs threads
-  [2] completed (attempts 1) Concrete example
+任务线会立刻开始跑，进度、汇总和产物都在这一条对话里。需要跑 `npm test` 这类命令的 worker，要先打开[按 worker 设置命令权限](#按-worker-设置命令权限)。
 
-report:
-...
-```
+## 常见问题
 
-默认的 DeepSeek 路由没有内置价格；想加上就参见[花费上限与价格](#花费上限与价格)，之后下一次 run（或者对这次 run 的 resume）就会打印 `cost: ...`。`cost` 是在 run 落定时计算的，所以已经结束的 run 会一直保留 "not computed" 那一行。`usage: not recorded` 只会出现在一种已结束的 run 上：它的子 session 日志完全读不到——见[故障排查](#故障排查)。
+**为什么它会问我？**
 
-如果 `wait_seconds` 用完时 run 还没结束，回复会以
-`next: superagent_status run_id="..." wait_seconds=120` 结尾。再调一次就行；无论哪种情况，run 都在继续跑。
+只有越过工作区边界、需要提权一类的动作才会问。卡片会写明来源（哪条任务线、哪个子任务）、工具名、目标路径和理由；不回答超过 10 分钟就按取消处理，不会自动批准。
 
-想验证恢复能力又不想真的崩一次：在 run 活跃时杀掉宿主，再启动它，`superagent_status` 会显示 `interrupted`，`superagent_resume` 会把它跑完。只有当没有任何活着的进程拥有这个 run 时，它才会是 `interrupted`：原宿主还在跑的时候，它拥有的 run 不会被动，下一次挂载会把它报成活跃，而不是 interrupted。
+**能不能不装桌面端？**
 
-两条关闭路径行为不同，E2E 记录里都有：
+能。插件挂在 DeepSeek Harness 上，`dsh --profile web` 起的本地宿主同样有控制台、任务线和审批卡；桌面端只是多了侧边栏入口，省去记地址。
 
-- **硬杀（或崩溃）。** 心跳只有几秒旧，但在写下这个 run 的那台机器上会先检查那个 pid 是否已死，所以下一次挂载会立即回收，并打印
-  `reclaimed: owner pid … is not running and this state directory is local`。
-  如果状态目录是另一台机器写的共享目录，就改为信任心跳，那里的回收最多要等 90 秒。
-- **优雅关闭。** 如果 run 还在飞的时候宿主消失（例如一次 `wait_seconds: 0` 之后结束的无头单次运行），插件会发现 `subagents` 服务不在了，把没做完的 subtask 留在 `pending`，并以 `interrupted` 落定这次 run，附上
-  `note: the host shut down while this run was active`。不会把 attempt 浪费在一个已经无法应答的服务上。这种情况下宿主进程本身可能还会滞留，直到某个无视 abort 的子进程退出；那段等待属于宿主，不属于插件。
+**开销大概多少？**
+
+一次 run 至少包含一次规划、每个子任务若干次模型调用，以及一次汇总。文档里那条两个子任务的样例是 4 次调用、约 4.6k 输入 / 0.5k 输出 token；活越长，调用越多。默认不内置价格，在 `pricing` 里配好之后每个 run 会打印金额；另有 `maxModelCallsPerRun`（默认 80）和 `maxTokensPerRun`（默认 2,000,000）两道硬上限。
+
+## 什么时候不要用它
+
+一次模型调用就能答完的活、需要子 agent 继续往下委派的任务（深度上限为 1）、需要给子 agent 单独凭据或更强隔离的场景，都不划算。它对每个 run 额外收一次规划和汇总的费用，对延迟极敏感的单步任务也不合适。
+
+## 环境要求
+
+- Node `>= 24.9.0`。
+- DeepSeek Harness `>= 0.2.2-rc.1 < 0.3.0`，并带 base bundle（`tools`、`agents`、`subagents`）。
+- 一条能调用工具的模型路由，且 key 已放进环境。
 
 ## 配置
 
@@ -1152,7 +1090,7 @@ SHA-256）。`--format html` 把同样的内容写成一个自包含
 
 | 你看到的 | 含义 | 怎么办 |
 | --- | --- | --- |
-| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.5` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
+| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.6` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
 | `Cannot find module .../lib/control.js`（或 `watch.js` / `report.js` / `wizard.js`），或宿主日志里的 `[dsh-superagent] dsh-superagent failed to load because a file it imports is missing: ...` | 那个 profile 里的副本不完整——被中断的 `add` 会留下残缺的解包结果。0.14.3 起的入口会直接点名缺哪个文件。已发布的包不是原因：每个版本都带全部三十四个 `lib/` 文件。 | 删掉 profile 的 `node_modules` 下该插件的目录（带 scope 的 `@xiangyixie/dsh-superagent`，或旧 tarball 安装留下的无 scope 的 `dsh-superagent`），再用同一条 `add` 命令重装，并带上版本号。不要手工拷贝文件进去。 |
 | `[error] the model provider rejected the API key` | 启动宿主的那个进程里缺 key 环境变量。 | 导出 `DEEPSEEK_API_KEY`（默认路由）或你那条路由声明的变量，然后重启 `dsh`。 |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | profile 的路由在环境里没有凭据。 | 设置该路由对应的环境变量并重启。错误行里写了路由名，以它为准，不要照本文。 |
