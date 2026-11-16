@@ -193,11 +193,13 @@ test('the console page and every API refuse a request without the token', async 
     assert.equal(page.status, 200)
     const html = await page.text()
     assert.match(html, /说一句要做什么；它自己决定一步做完还是拆开并行/)
-    // The page must keep the schedule board and its narrow-screen fallback:
-    // the board is how several parallel lines stay readable at ~720px.
-    assert.match(html, /sched-track/)
-    assert.match(html, /tickSchedule/)
-    assert.match(html, /@media \(max-width: 720px\)[\s\S]*\.sched-row \{ grid-template-columns: minmax\(0, 1fr\);/)
+    // The page keeps the right-side rail: one square card per conversation,
+    // a remembered collapsed state, and an overlay instead of a squeeze at 720px.
+    assert.match(html, /id="schedRail"/)
+    assert.match(html, /rail-grid/)
+    assert.match(html, /dsh-superagent-rail-collapsed/)
+    assert.match(html, /@media \(max-width: 720px\)[\s\S]*\.sched-rail \{ width: min\(320px/)
+    assert.doesNotMatch(html, /sched-track/)
     // Copy guard: marketing filler must not creep back into user-visible text.
     assert.doesNotMatch(html, /一键|赋能|无缝|让我们|为您/)
     assert.match(page.headers.get('content-security-policy') ?? '', /default-src 'none'/)
@@ -875,9 +877,22 @@ test('the console stops a run, lists conversations and refuses a foreign one', a
         title: null,
       }]),
       openSession: async id => (id === 'session-console' ? { sessionId: id } : null),
+      // The rail route groups the host's own run rows per conversation.
+      listSchedules: async () => ([{
+        sessionId: 'session-console',
+        updatedAt: Date.UTC(2026, 10, 15, 16, 18),
+        running: true,
+        blank: false,
+        rows: [{ id: 'run-1', status: 'running', subtasks: [{ key: 's1', status: 'running' }] }],
+      }]),
     }
     panel = await startConsole(state, host)
     await request(panel, 'POST', '/api/console/session', {})
+
+    const schedules = await request(panel, 'GET', '/api/console/schedules')
+    assert.equal(schedules.status, 200)
+    assert.equal(schedules.json.data.sessions[0].rows[0].id, 'run-1')
+    assert.equal(schedules.json.data.sessions[0].rows[0].subtasks[0].status, 'running')
 
     const sessions = await request(panel, 'GET', '/api/console/sessions')
     assert.equal(sessions.status, 200)

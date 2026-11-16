@@ -8,6 +8,19 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.15.1 — 2026-11-16
+
+### 变化
+
+- **调度板挪到右侧，收得起来。** 会话调度从对话正文里搬出来，成了右侧常驻栏，点栏
+  上箭头收起、再点展开。收起状态记在浏览器里，刷新或重开页面还是你上次选的样子；窄
+  到 720px 时默认收起，展开是浮在对话上方，不会把正文挤成一条缝。
+- **一个会话一张方卡。** 卡片按网格排列，一张卡就是一个会话：上面写这个会话现在是
+  在跑、排队、等你决定、等审批，还是完成、失败、空闲；下面直接写跑了几条任务线、
+  并行几路、有没有排队，以及现在在跑什么工具。点卡片进入详情，能看到这个会话里的
+  每条任务线、每个步骤的状态、耗时，以及哪一步在等哪一步。数据仍只读宿主的会话列表
+  和现有 run 记录，没有另造状态或第二套队列。
+
 ## 0.15.0 — 2026-11-16
 
 ### 变化
