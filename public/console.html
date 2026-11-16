@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Superagent 专属空间</title>
+<title>Superagent 控制台</title>
 <style>
   :root {
     color-scheme: dark;
@@ -627,6 +627,56 @@
   .step.failed .sdot { background: var(--red); }
   .lane-progress-text { margin-top: 5px; color: var(--faint); font-size: 10.5px; }
 
+  /* ---- schedule board: what runs now, what waits, on one time axis ---- */
+  .schedule-wrap { flex: none; padding: 0 22px 10px; max-height: 38vh; overflow: auto; }
+  .schedule-wrap[hidden] { display: none; }
+  .sched {
+    margin: 0 0 10px; padding: 9px 10px 10px;
+    border: 1px solid var(--line-soft); border-radius: 10px; background: #0c1217;
+  }
+  .sched-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 10px; margin-bottom: 7px; }
+  .sched-title { color: var(--muted); font-size: 11px; font-weight: 600; }
+  .sched-facts { color: var(--faint); font-size: 10.5px; }
+  .sched-axis { margin-left: auto; color: var(--faint); font: 10px var(--mono); white-space: nowrap; }
+  .sched-run { min-width: 0; padding: 6px 0 2px; border-top: 1px dashed var(--line-soft); }
+  .sched-run:first-of-type { border-top: 0; padding-top: 0; }
+  .sched-run-head { display: flex; align-items: center; gap: 7px; min-width: 0; margin-bottom: 4px; }
+  .sched-goal {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--muted); font-size: 11.5px;
+  }
+  .sched-time { flex: none; color: var(--faint); font: 10px var(--mono); white-space: nowrap; }
+  .sched-row {
+    display: grid; grid-template-columns: minmax(0, 180px) minmax(0, 1fr);
+    gap: 8px; align-items: center; min-width: 0; padding: 2px 0;
+  }
+  .sched-label {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--muted); font-size: 10.5px;
+  }
+  .sched-label .n { color: var(--faint); font-family: var(--mono); margin-right: 4px; }
+  .sched-note { color: var(--faint); font-size: 10px; }
+  .sched-track {
+    position: relative; height: 9px; min-width: 0;
+    border-radius: 999px; background: #131c22; overflow: hidden;
+  }
+  .sched-bar {
+    position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 999px;
+    background: #3a4a55;
+  }
+  .sched-bar.running { background: var(--amber); }
+  .sched-bar.completed { background: var(--green); }
+  .sched-bar.failed, .sched-bar.cancelled { background: var(--red); }
+  .sched-bar.waiting {
+    left: 0; right: 0; background: transparent;
+    border: 1px dashed rgba(246, 193, 119, .45);
+  }
+  .sched-bar.pending { left: 0; right: 0; background: #1d272e; }
+  .sched-bar.skipped { left: 0; right: 0; background: repeating-linear-gradient(90deg, #2a3740 0 6px, transparent 6px 11px); }
+  .sched-empty { color: var(--faint); font-size: 10.5px; padding: 2px 0 3px; }
+  .sched-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; color: var(--faint); font-size: 10px; }
+  .sched-legend i { display: inline-block; width: 7px; height: 7px; margin-right: 3px; border-radius: 2px; vertical-align: -1px; }
+
   .summary {
     margin-top: 10px; padding: 10px 11px; border-radius: 10px;
     border: 1px solid rgba(99, 214, 164, .28); background: rgba(99, 214, 164, .05);
@@ -700,6 +750,13 @@
     .brand div span { display: none; }
     .hint { display: none; }
     .messages { padding: 16px 14px 22px; }
+    .schedule-wrap { padding: 0 14px 10px; max-height: 44vh; }
+    /* One column per step: the label sits above its bar, so a narrow screen
+       keeps the order and the durations instead of squeezing both sideways. */
+    .sched-row { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+    .sched-label { white-space: normal; overflow: visible; text-overflow: clip; }
+    .sched-axis { margin-left: 0; }
+    .sched-goal { white-space: normal; }
   }
 </style>
 </head>
@@ -708,7 +765,7 @@
   <header class="topbar">
     <div class="brand">
       <div class="mark">S</div>
-      <div><strong>Superagent</strong><span>专属空间</span></div>
+      <div><strong>Superagent</strong><span>控制台</span></div>
     </div>
     <div class="topbar-mid">
       <span id="modeBadge" class="badge"><span class="pulse"></span><span id="modeText">连接中</span></span>
@@ -735,14 +792,14 @@
       <div class="chat-head">
         <div>
           <h1>Superagent</h1>
-          <p>说一句就行 · 自动拆成任务线并行推进 · 跑完在这一条对话里汇总</p>
+          <p>说一句要做什么；它自己决定一步做完还是拆开并行，跑完在这里汇总</p>
         </div>
         <div id="typing" class="typing" hidden><span></span><span></span><span></span><em id="typingText" style="font-style:normal;margin-left:3px">运行中</em></div>
       </div>
-      <div id="messages" class="messages" aria-live="polite"></div>
-      <form id="composer" class="composer" autocomplete="off">
+      <section id="scheduleWrap" class="schedule-wrap" aria-label="调度" hidden></section>
+      <div id="messages" class="messages" aria-live="polite"></div>      <form id="composer" class="composer" autocomplete="off">
         <div class="composer-box">
-          <textarea id="input" rows="1" placeholder="直接说你想让它做什么…" disabled></textarea>
+          <textarea id="input" rows="1" placeholder="要做什么…" disabled></textarea>
           <div class="composer-bar">
             <span class="hint">Enter 发送 · Shift+Enter 换行</span>
             <button id="send" class="send" type="submit" aria-label="发送" disabled>↑</button>
@@ -787,7 +844,7 @@
       <h3>会话</h3>
       <div id="advSession" class="adv-kv"></div>
       <div class="adv-actions">
-        <button id="wizardOpen" class="btn tiny" type="button">首次使用向导</button>
+        <button id="wizardOpen" class="btn tiny" type="button">配置向导</button>
       </div>
     </section>
     <section class="adv-sec">
@@ -813,9 +870,9 @@
 <div id="gate" class="gate" hidden>
   <form id="gateForm" class="gate-card">
     <div class="mark">S</div>
-    <h1>连接 Superagent Console</h1>
-    <p>从宿主状态目录的 <code>console.json</code> 读取一次性 token。控制台只监听 127.0.0.1，token 每次启动都会重新生成。</p>
-    <label for="tokenInput">访问令牌</label>
+    <h1>连接 Superagent 控制台</h1>
+    <p>token 在宿主状态目录的 <code>console.json</code> 里，每次启动都会换。控制台只监听 127.0.0.1。</p>
+    <label for="tokenInput">token</label>
     <input id="tokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 token">
     <button type="submit">连接</button>
     <p id="gateError" class="error"></p>
@@ -827,8 +884,8 @@
 <dialog id="wizardDialog">
   <div class="wiz-head">
     <div>
-      <span class="kicker">首次使用向导</span>
-      <h2>用鼠标完成配置，并当场试跑</h2>
+      <span class="kicker">首次配置</span>
+      <h2>填好配置，当场试跑</h2>
     </div>
     <button id="wizardClose" type="button" aria-label="关闭">×</button>
   </div>
@@ -856,6 +913,7 @@
   const TOKEN_KEY = 'dsh-superagent-console-token'
   const $ = id => document.getElementById(id)
   const messagesEl = $('messages')
+  const scheduleWrapEl = $('scheduleWrap')
   const inputEl = $('input')
   const sendEl = $('send')
   const composerEl = $('composer')
@@ -932,6 +990,7 @@
     preset: null,
     laneEls: new Map(),
     runAnchors: new Map(),
+    scheduleSig: '',
     attentionSeen: new Set(),
     approvals: new Map(),
     sessions: [],
@@ -999,7 +1058,7 @@
 
   function statusText(status) {
     const map = {
-      queued: '排队中', planning: '规划中', running: '运行中', aggregating: '汇总中',
+      queued: '排队中', planning: '拆步骤中', running: '运行中', aggregating: '汇总中',
       completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断',
       blocked: '已阻塞',
     }
@@ -1063,8 +1122,8 @@
 
   function setSession(sessionId) {
     STATE.sessionId = sessionId
-    sessionLabelEl.textContent = sessionId ? `session ${shortId(sessionId)}` : 'no session'
-    sessionLabelEl.title = sessionId || 'Host Session id'
+    sessionLabelEl.textContent = sessionId ? `session ${shortId(sessionId)}` : '没有会话'
+    sessionLabelEl.title = sessionId || '宿主会话 id'
   }
 
   function scrollToEnd() {
@@ -1131,13 +1190,13 @@
     if (message.role === 'assistant') {
       const copy = el('button', '', '复制')
       copy.type = 'button'
-      copy.title = '复制这条回复的完整文本'
+      copy.title = '复制这条回复的全文'
       copy.addEventListener('click', () => copyMessage(message, copy))
       actions.append(copy)
     } else {
       const edit = el('button', '', '编辑并重发')
       edit.type = 'button'
-      edit.title = '把这条原文放回输入框，改完再发送'
+      edit.title = '把原文放回输入框，改完再发'
       edit.addEventListener('click', () => editMessage(message))
       actions.append(edit)
     }
@@ -1183,10 +1242,10 @@
   async function copyMessage(message, button) {
     const copied = await copyText(formatTextOf(message))
     if (!copied) {
-      pushToast('复制失败，可以手动选中文字。', 'err')
+      pushToast('复制失败。手动选中文字再复制。', 'err')
       return
     }
-    pushToast('已复制这条回复。', 'ok')
+    pushToast('已复制。', 'ok')
     button.textContent = '已复制'
     setTimeout(() => { button.textContent = '复制' }, 1600)
   }
@@ -1199,7 +1258,7 @@
     inputEl.dispatchEvent(new Event('input'))
     inputEl.focus()
     try { inputEl.setSelectionRange(text.length, text.length) } catch { /* not focusable yet */ }
-    pushToast('原文已放回输入框，改完点发送。', 'ok')
+    pushToast('已放回输入框，改完点发送。', 'ok')
   }
 
   function summarizeArgs(value) {
@@ -1227,7 +1286,7 @@
     if (tool.done) {
       const details = el('details')
       details.append(el('summary', failed ? 'err-mark' : '', failed ? '失败原因' : '结果'))
-      details.append(el('pre', '', tool.result || (failed ? '工具没有返回错误文本。' : '')))
+      details.append(el('pre', '', tool.result || (failed ? '工具没有给出错误说明。' : '')))
       chip.append(details)
     }
     return chip
@@ -1286,15 +1345,15 @@
     if (STATE.mode !== 'chat') {
       wrap.classList.add('unavailable')
       wrap.append(el('div', 'orb', '!'))
-      wrap.append(el('h1', '', '对话不可用'))
-      wrap.append(el('p', '', '这个宿主没有提供可对话的 Session。控制台不会画一个假聊天框。'))
+      wrap.append(el('h1', '', '这里不能对话'))
+      wrap.append(el('p', '', '宿主没有可用的会话，所以这里不能开始对话。'))
       if (STATE.capabilities?.reason) wrap.append(el('div', 'reason', STATE.capabilities.reason))
       messagesEl.append(wrap)
       return
     }
     wrap.append(el('div', 'orb', 'S'))
-    wrap.append(el('h1', '', '今天想推进什么？'))
-    wrap.append(el('p', '', '这里是 Superagent 的专属空间，和宿主的普通会话分开。直接说一句就行：它会自己判断是一步做完，还是拆成几条任务线并行推进；跑完在这一条对话里汇总，并把可以点开的产物放在这里。'))
+    wrap.append(el('h1', '', '要做什么？'))
+    wrap.append(el('p', '', '写下要做的事。它自己决定一步做完，还是拆成几条同时做；跑完在这里汇总，能点开的产物也放在这里。'))
     const examples = el('div', 'examples')
     const samples = [
       '把这周的项目进度整理成一页 HTML 报告',
@@ -1394,7 +1453,7 @@
     noticeCountEl.textContent = unread > 99 ? '99+' : String(unread)
     noticeOpenEl.classList.toggle('has-unread', unread > 0)
     noticeOpenEl.title = unread > 0 ? `${unread} 条没看过的提醒` : '提醒'
-    const base = 'Superagent 专属空间'
+    const base = 'Superagent 控制台'
     document.title = unread > 0 ? `(${unread}) ${base}` : base
     if (!noticePanelEl.hidden) renderNoticeList()
   }
@@ -1402,7 +1461,7 @@
   function renderNoticeList() {
     noticeListEl.textContent = ''
     if (STATE.notices.length === 0) {
-      noticeListEl.append(el('div', 'notice-empty', '还没有提醒。任务跑完、没走通或等你批准时会出现在这里。'))
+      noticeListEl.append(el('div', 'notice-empty', '没有提醒。任务跑完、失败或等你批准时会出现在这里。'))
       return
     }
     for (const notice of STATE.notices) {
@@ -1506,21 +1565,21 @@
     const list = Array.from(files || []).filter(Boolean)
     if (list.length === 0) return
     if (STATE.mode !== 'chat') {
-      pushToast('还没连上，等对话就绪再放文件。', 'err')
+      pushToast('还没连上，等对话准备好再放文件。', 'err')
       return
     }
     for (const file of list) {
       const ext = uploadExtOf(file.name)
       if (!UPLOAD_EXTS.has(ext)) {
-        pushToast(`不能放 ${ext || '没有扩展名的'} 文件；可以放：${UPLOAD_HINT}。`, 'err')
+        pushToast(`不能放 ${ext || '没有扩展名的'} 文件。可以放：${UPLOAD_HINT}。`, 'err')
         continue
       }
       if (file.size > UPLOAD_MAX) {
-        pushToast(`${file.name} 有 ${uploadSizeText(file.size)}，超过 ${uploadSizeText(UPLOAD_MAX)} 的上限。`, 'err')
+        pushToast(`${file.name} 有 ${uploadSizeText(file.size)}，超过 ${uploadSizeText(UPLOAD_MAX)} 上限。`, 'err')
         continue
       }
       if (file.size === 0) {
-        pushToast(`${file.name} 是空文件，没有放进去。`, 'err')
+        pushToast(`${file.name} 是空文件，没放进去。`, 'err')
         continue
       }
       try {
@@ -1530,7 +1589,7 @@
           body: { sessionId: STATE.sessionId, name: file.name, data: base64OfBytes(bytes) },
         })
         insertUploadPath(data.path)
-        pushToast(`已放进工作区：${data.name}（路径已写进消息）。`, 'ok')
+        pushToast(`已放进工作区：${data.name}。路径写进了消息。`, 'ok')
       } catch (error) {
         const hint = error.hint ? `。${error.hint}` : ''
         pushToast(`放不进去：${messageOf(error)}${hint}`, 'err')
@@ -1596,11 +1655,214 @@
     }
   }
 
+  // ---------- schedule board ----------
+  //
+  // The board is a projection of the run records the host already writes: run
+  // status, each step's status/startedAt/finishedAt, the waitingOn keys the
+  // graph scheduler sets, and the run's own maxParallel/queue. Nothing here
+  // invents a second queue or recomputes progress.
+
+  function timeOf(value) {
+    const ms = typeof value === 'number' ? value : Date.parse(value)
+    return Number.isFinite(ms) ? ms : null
+  }
+
+  function scheduleAxis(runs) {
+    let start = Infinity
+    let end = 0
+    for (const run of runs) {
+      const created = timeOf(run.createdAt)
+      if (created !== null) {
+        start = Math.min(start, created)
+        end = Math.max(end, created)
+      }
+      for (const subtask of Array.isArray(run.subtasks) ? run.subtasks : []) {
+        const began = timeOf(subtask.startedAt)
+        if (began !== null) {
+          start = Math.min(start, began)
+          end = Math.max(end, began)
+        }
+        const ended = timeOf(subtask.finishedAt)
+        if (ended !== null) end = Math.max(end, ended)
+      }
+      const finished = timeOf(run.finishedAt)
+      if (finished !== null) end = Math.max(end, finished)
+    }
+    if (!Number.isFinite(start)) start = Date.now()
+    const live = runs.some(run => !isTerminal(run.status))
+    const right = Math.max(end, live ? Date.now() : 0, start + 1000)
+    return { start, end: right, live }
+  }
+
+  function scheduleStats(runs) {
+    const active = runs.filter(run => !isTerminal(run.status) && run.status !== 'queued')
+    const queued = runs.filter(run => run.status === 'queued')
+    const steps = runs.flatMap(run => (Array.isArray(run.subtasks) ? run.subtasks : []))
+    const running = steps.filter(subtask => subtask.status === 'running').length
+    const waiting = steps.filter(subtask => subtask.status === 'waiting').length
+    const cap = runs.reduce((best, run) => Math.max(best, Number(run.limits?.maxParallel) || 0), 0)
+    return { active, queued, running, waiting, cap }
+  }
+
+  function stepTitleOf(run, key) {
+    const hit = (Array.isArray(run.subtasks) ? run.subtasks : []).find(subtask => subtask.key === key)
+    return hit ? stepLabel(hit) : String(key)
+  }
+
+  function scheduleBar(subtask, run, axis) {
+    const began = timeOf(subtask.startedAt) ?? timeOf(run.startedAt) ?? timeOf(run.createdAt)
+    if (began === null) return null
+    const ended = timeOf(subtask.finishedAt) ?? (subtask.status === 'running' ? Date.now() : null)
+    if (ended === null) return null
+    const span = Math.max(1000, axis.end - axis.start)
+    const left = Math.max(0, Math.min(99, ((began - axis.start) / span) * 100))
+    const width = Math.max(1.2, Math.min(100 - left, ((ended - began) / span) * 100))
+    return { left, width }
+  }
+
+  function scheduleRow(run, subtask, axis) {
+    const row = el('div', 'sched-row')
+    const label = el('div', 'sched-label')
+    label.title = stepLabel(subtask)
+    label.append(el('span', 'n', subtask.key || String(subtask.index ?? '·')))
+    label.append(document.createTextNode(stepLabel(subtask)))
+    const notes = []
+    if (subtask.status === 'running' && subtask.tool) notes.push(`工具 ${subtask.tool}`)
+    const waits = Array.isArray(subtask.waitingOn) ? subtask.waitingOn : []
+    if (waits.length > 0) notes.push(`等「${waits.map(key => stepTitleOf(run, key)).join('」「')}」`)
+    else if (subtask.status === 'waiting') notes.push('等前一步')
+    if (subtask.status === 'skipped') notes.push('跳过')
+    if (notes.length > 0) label.append(el('span', 'sched-note', ` · ${notes.join(' · ')}`))
+    row.append(label)
+
+    const track = el('div', 'sched-track')
+    const range = scheduleBar(subtask, run, axis)
+    const status = subtask.status || 'pending'
+    const bar = el('i', `sched-bar ${status}`)
+    if (range) {
+      bar.style.left = `${range.left}%`
+      bar.style.width = `${range.width}%`
+      if (status === 'running') {
+        const began = timeOf(subtask.startedAt) ?? timeOf(run.startedAt) ?? timeOf(run.createdAt)
+        if (began !== null) bar.dataset.start = String(began)
+      }
+    }
+    track.append(bar)
+    row.append(track)
+    return row
+  }
+
+  function scheduleElement(runs) {
+    const stats = scheduleStats(runs)
+    const axis = scheduleAxis(runs)
+    const box = el('div', 'sched')
+    box.dataset.axisStart = String(axis.start)
+    box.dataset.live = axis.live ? '1' : ''
+
+    const head = el('div', 'sched-head')
+    head.append(el('span', 'sched-title', '调度'))
+    const facts = []
+    if (stats.running > 0) facts.push(`并行 ${stats.running}${stats.cap > 0 ? `/${stats.cap}` : ''} 步`)
+    if (stats.active.length > 0) facts.push(`${stats.active.length} 条任务线在跑`)
+    if (stats.waiting > 0) facts.push(`${stats.waiting} 步等前一步`)
+    if (stats.queued.length > 0) facts.push(`${stats.queued.length} 条排队`)
+    if (facts.length === 0) facts.push(runs.every(run => isTerminal(run.status)) ? '这一轮已结束' : '还没有步骤在跑')
+    head.append(el('span', 'sched-facts', facts.join(' · ')))
+    head.append(el('span', 'sched-axis', formatClock(axis.end - axis.start)))
+    box.append(head)
+
+    for (const run of runs) {
+      const section = el('div', 'sched-run')
+      const runHead = el('div', 'sched-run-head')
+      runHead.append(el('span', 'sched-goal', run.goal || '这条任务线'))
+      runHead.append(el('span', `status-pill ${statusClass(run.status)}`, laneStatusText(run)))
+      if (run.status === 'queued') {
+        const queue = run.queue || {}
+        runHead.append(el('span', 'sched-time', queue.position
+          ? `排第 ${queue.position}${queue.of ? ` / ${queue.of}` : ''}`
+          : '排队中'))
+      } else {
+        runHead.append(el('span', 'sched-time', laneElapsed(run)))
+      }
+      section.append(runHead)
+
+      const subtasks = Array.isArray(run.subtasks) ? run.subtasks : []
+      if (subtasks.length === 0) {
+        section.append(el('div', 'sched-empty', run.status === 'queued'
+          ? '等前面的任务线跑完再开始'
+          : run.status === 'planning' ? '拆步骤中，还没有步骤时间' : '还没有步骤记录'))
+      } else {
+        for (const subtask of subtasks.slice(0, 10)) section.append(scheduleRow(run, subtask, axis))
+        if (subtasks.length > 10) section.append(el('div', 'sched-empty', `还有 ${subtasks.length - 10} 个步骤`))
+      }
+      box.append(section)
+    }
+
+    const legend = el('div', 'sched-legend')
+    for (const [kind, text] of [
+      ['running', '在跑'],
+      ['waiting', '等前一步'],
+      ['completed', '完成'],
+      ['failed', '失败'],
+    ]) {
+      const item = el('span')
+      const dot = el('i')
+      dot.style.background = kind === 'running' ? 'var(--amber)'
+        : kind === 'completed' ? 'var(--green)'
+          : kind === 'failed' ? 'var(--red)' : 'transparent'
+      if (kind === 'waiting') dot.style.border = '1px dashed rgba(246, 193, 119, .55)'
+      item.append(dot, document.createTextNode(text))
+      legend.append(item)
+    }
+    box.append(legend)
+    return box
+  }
+
+  /** One board for every line the host is still working on. */
+  function renderSchedule() {
+    const runs = STATE.runs.filter(run => !isTerminal(run.status))
+    if (runs.length === 0) {
+      scheduleWrapEl.hidden = true
+      if (STATE.scheduleSig !== '') {
+        STATE.scheduleSig = ''
+        scheduleWrapEl.replaceChildren()
+      }
+      return
+    }
+    const signature = runs.map(run => [
+      run.id, laneSignature(run), run.queue?.position ?? '', run.queue?.waiting ? 'queued' : '',
+    ].join(':')).join('#')
+    if (signature === STATE.scheduleSig) return
+    STATE.scheduleSig = signature
+    scheduleWrapEl.hidden = false
+    scheduleWrapEl.replaceChildren(scheduleElement(runs))
+  }
+
+  /** Running bars grow with the clock between run frames. */
+  function tickSchedule() {
+    const now = Date.now()
+    for (const box of document.querySelectorAll('.sched')) {
+      const start = Number(box.dataset.axisStart)
+      if (!Number.isFinite(start)) continue
+      for (const bar of box.querySelectorAll('.sched-bar[data-start]')) {
+        const began = Number(bar.dataset.start)
+        if (!Number.isFinite(began)) continue
+        const span = Math.max(1000, now - start)
+        const left = Math.max(0, Math.min(99, ((began - start) / span) * 100))
+        const width = Math.max(1.2, Math.min(100 - left, ((now - began) / span) * 100))
+        bar.style.left = `${left}%`
+        bar.style.width = `${width}%`
+      }
+      const label = box.querySelector('.sched-axis')
+      if (label && box.dataset.live === '1') label.textContent = formatClock(now - start)
+    }
+  }
+
   function syncStopAll() {
     const active = STATE.runs.filter(run => !isTerminal(run.status))
     stopAllEl.hidden = active.length === 0
     stopAllEl.disabled = STATE.mode !== 'chat' || active.length === 0 || STATE.stopAllBusy
-    stopAllEl.textContent = STATE.stopAllBusy ? '正在停止…' : '停止这一轮'
+    stopAllEl.textContent = STATE.stopAllBusy ? '停止中…' : '停止这一轮'
   }
 
   async function stopRun(runId) {
@@ -1645,17 +1907,17 @@
   function currentAction(run) {
     const subtasks = Array.isArray(run.subtasks) ? run.subtasks : []
     if (STATE.cancelRequested.has(run.id) && !isTerminal(run.status)) return '已请求停止，等宿主确认'
-    if (run.status === 'queued') return '排队，等前一条任务线让出位置'
-    if (run.status === 'planning') return '正在拆步骤'
-    if (run.status === 'aggregating') return '正在汇总各步骤的结果'
+    if (run.status === 'queued') return '排队，等前面的任务线跑完'
+    if (run.status === 'planning') return '拆分步骤中'
+    if (run.status === 'aggregating') return '汇总各步骤的结果'
     if (run.status === 'completed') return '已交付，产物见汇总'
     if (isTerminal(run.status)) return run.status === 'cancelled' ? '已取消' : '没走通，原因见汇总'
     const running = subtasks.filter(subtask => subtask.status === 'running')
     if (running.length > 1) return `同时推进 ${running.length} 个步骤`
-    if (running.length === 1) return `正在做：${stepLabel(running[0])}`
+    if (running.length === 1) return `正在做 ${stepLabel(running[0])}`
     const next = subtasks.find(subtask => subtask.status !== 'completed' && subtask.status !== 'failed')
-    if (next) return `准备：${stepLabel(next)}`
-    return '正在推进'
+    if (next) return `接下来 ${stepLabel(next)}`
+    return '进行中'
   }
 
   /** Tools the running steps report right now; empty when unknown, never guessed. */
@@ -1668,12 +1930,20 @@
 
   function laneSignature(run) {
     const steps = Array.isArray(run.subtasks)
-      ? run.subtasks.map(subtask => `${subtask.status}:${subtask.title}:${subtask.tool || ''}`).join(',')
+      ? run.subtasks.map(subtask => [
+        subtask.status, subtask.key || '', subtask.title, subtask.tool || '',
+        subtask.startedAt || '', subtask.finishedAt || '',
+        (subtask.waitingOn || []).join('.'), (subtask.dependsOn || []).join('.'),
+      ].join(':')).join(',')
       : ''
     const attention = Array.isArray(run.attention)
       ? run.attention.map(item => `${item.id}:${item.question}`).join(',')
       : ''
-    return [run.status, steps, attention, run.report ? run.report.length : 0, run.finishedAt || '', STATE.cancelRequested.has(run.id) ? 'stopping' : ''].join('|')
+    return [
+      run.status, steps, attention, run.report ? run.report.length : 0, run.finishedAt || '',
+      STATE.cancelRequested.has(run.id) ? 'stopping' : '',
+      run.limits?.maxParallel ?? '', run.queue?.position ?? '', run.queue?.waiting ? 'queued' : '',
+    ].join('|')
   }
 
   /**
@@ -1945,7 +2215,7 @@
       const done = runs.every(run => isTerminal(run.status))
       const head = el('div', `lane-group-head${done ? ' done' : ''}`)
       head.append(el('span', 'dot'))
-      head.append(el('span', '', done ? `这一轮完成 · ${runs.length} 条任务线` : `推进中 · ${runs.length} 条任务线`))
+      head.append(el('span', '', done ? `这一轮完成 · ${runs.length} 条任务线` : `进行中 · ${runs.length} 条任务线`))
       node.append(head)
       for (const run of runs) node.append(laneElement(run))
       if (done) node.append(summaryElement(runs))
@@ -1987,6 +2257,7 @@
       if (!run || isTerminal(run.status)) STATE.cancelRequested.delete(id)
     }
     syncStopAll()
+    renderSchedule()
     renderHistory()
   }
 
@@ -2030,7 +2301,7 @@
     if (historyDrawerEl.hidden) return
     historyListEl.replaceChildren()
     if (STATE.sessionsBusy && STATE.sessions.length === 0) {
-      historyListEl.append(el('p', 'adv-note', '正在读取对话…'))
+      historyListEl.append(el('p', 'adv-note', '读取中…'))
       return
     }
     if (STATE.sessionNote) {
@@ -2172,7 +2443,7 @@
     const failed = runs.filter(run => isTerminal(run.status) && run.status !== 'completed')
     const box = el('div', `summary${failed.length > 0 ? ' bad' : ''}`)
     box.append(el('div', 'st', failed.length > 0
-      ? `完成，${failed.length} 条任务线没走通`
+      ? `完成 · ${failed.length} 条任务线失败`
       : `全部完成 · ${runs.length} 条任务线`))
 
     const first = runs.map(run => Date.parse(run.createdAt)).filter(Number.isFinite).sort((a, b) => a - b)[0]
@@ -2196,7 +2467,7 @@
       for (const item of artifacts) list.append(artifactElement(item))
       box.append(list)
     } else {
-      box.append(el('div', 'sd', '这次没有可以点开的产物；完整汇总在下面。'))
+      box.append(el('div', 'sd', '这次没有能点开的产物，完整汇总在下面。'))
     }
 
     const details = el('details', 'report')
@@ -2204,7 +2475,7 @@
     for (const run of runs) {
       const block = el('div', 'sum-run')
       block.append(el('div', 'sum-run-title', `${run.goal || '任务线'} · ${laneStatusText(run)}`))
-      block.append(el('pre', '', run.report || '(这条任务线没有返回报告)'))
+      block.append(el('pre', '', run.report || '（这条任务线没有报告）'))
       details.append(block)
     }
     box.append(details)
@@ -2218,7 +2489,7 @@
   function attentionElement(run, item) {
     const card = el('div', 'attention-card')
     card.append(el('div', 'kicker', '需要你决定'))
-    card.append(el('p', '', item.question || '运行中的任务在等一个决定'))
+    card.append(el('p', '', item.question || '任务在等一个决定'))
     if (item.reason) card.append(el('p', 'reason', item.reason))
 
     const key = draftKey(run.id, item.id)
@@ -2274,7 +2545,7 @@
         body: { sessionId: STATE.sessionId, runId, attentionId, answer },
       })
       STATE.drafts.delete(key)
-      pushToast('决定已提交，任务线会在下一个边界应用。', 'ok')
+      pushToast('已提交。任务线会在下一步用上这个决定。', 'ok')
     } catch (error) {
       pushToast(`提交失败：${messageOf(error)}`, 'err')
     } finally {
@@ -2353,7 +2624,7 @@
     }
     const tool = `${approval.toolName || ''}`.toLowerCase()
     const clip = value => (value.length > CALL_PREVIEW_LIMIT
-      ? { text: `${value.slice(0, CALL_PREVIEW_LIMIT)}\n…`, note: `共 ${value.length} 字符，这里先看前 ${CALL_PREVIEW_LIMIT} 字符。` }
+      ? { text: `${value.slice(0, CALL_PREVIEW_LIMIT)}\n…`, note: `共 ${value.length} 字符，这里显示前 ${CALL_PREVIEW_LIMIT} 字符。` }
       : { text: value, note: '' })
     if (/write|edit|patch|apply|create|append/.test(tool)) {
       const body = pick('content', 'contents', 'text', 'new_string', 'newText', 'patch', 'diff')
@@ -2378,7 +2649,7 @@
     const target = approvalTarget(approval)
     if (target) card.append(el('div', 'where', `要动的位置：${target}`))
     const reason = approval.displayReason?.zh || approval.reason
-    card.append(el('p', 'why', reason || '宿主的工具调用被拦住了，需要你明确决定这一次。'))
+    card.append(el('p', 'why', reason || '宿主拦住了这次工具调用，需要你决定。'))
     const preview = approvalCallPreview(approval)
     if (preview) {
       const details = el('details', 'call')
@@ -2418,8 +2689,8 @@
     const left = expiresAt - Date.now()
     node.classList.toggle('soon', left > 0 && left <= 60_000)
     node.classList.toggle('over', left <= 0)
-    if (left <= 0) node.textContent = `已超过有效期（${timeLabel(expiresAt)}），宿主会按拒绝处理；再发起会重新询问。`
-    else node.textContent = `剩余有效时间 ${formatClock(left)}（约到 ${timeLabel(expiresAt)}）`
+    if (left <= 0) node.textContent = `已过有效期（${timeLabel(expiresAt)}），宿主按拒绝处理。再发起会重新询问。`
+    else node.textContent = `还剩 ${formatClock(left)}（约到 ${timeLabel(expiresAt)}）`
   }
 
   function updateApprovalClocks() {
@@ -2431,8 +2702,8 @@
     entry.node.querySelector('.options')?.remove()
     const state = entry.node.querySelector('.state')
     if (!state) return
-    if (entry.decided === 'allow') state.textContent = '已允许这一次（只对这一条调用生效）'
-    else if (entry.decided === 'allow-tool') state.textContent = `已允许，并在本会话内放行 ${entry.approval?.toolName || '这个工具'}（换对话后恢复询问）`
+    if (entry.decided === 'allow') state.textContent = '已允许这一次。只对这一条调用生效。'
+    else if (entry.decided === 'allow-tool') state.textContent = `已允许，本会话内 ${entry.approval?.toolName || '这个工具'} 不再询问；换对话后恢复。`
     else if (entry.decided === 'reject') state.textContent = '已拒绝'
     else if (entry.decided === 'expired') state.textContent = '已过有效期，宿主按拒绝处理'
     else if (entry.decided === 'cancelled') state.textContent = '没有回答，按拒绝处理'
@@ -2474,22 +2745,22 @@
     if (!entry || entry.decided) return
     const state = entry.node.querySelector('.state')
     for (const button of entry.node.querySelectorAll('button')) button.disabled = true
-    const pending = { allow: '正在允许这一次…', 'allow-tool': '正在允许这个工具…', reject: '正在拒绝…' }
-    if (state) state.textContent = pending[decision] || '正在提交…'
+    const pending = { allow: '允许中…', 'allow-tool': '放行中…', reject: '拒绝中…' }
+    if (state) state.textContent = pending[decision] || '提交中…'
     try {
       await api('/api/console/approval', { method: 'POST', body: { id, decision } })
       entry.decided = decision
       settleApprovalNode(entry)
       const done = {
-        allow: '已允许这一次；只对这一条调用生效。',
-        'allow-tool': '已允许：本会话内同一个工具不再询问（换对话后恢复）。',
+        allow: '已允许这一次，只对这一条调用生效。',
+        'allow-tool': '已允许。本会话内这个工具不再询问，换对话后恢复。',
         reject: '已拒绝这一条调用。',
       }
       pushToast(done[decision] || '已提交。', 'ok')
     } catch (error) {
       for (const button of entry.node.querySelectorAll('button')) button.disabled = false
-      if (state) state.textContent = `没有提交成功：${messageOf(error)}`
-      pushToast(`审批没有提交成功：${messageOf(error)}`, 'err')
+      if (state) state.textContent = `提交失败：${messageOf(error)}`
+      pushToast(`审批没提交上：${messageOf(error)}`, 'err')
     }
   }
 
@@ -2509,7 +2780,7 @@
       if (data.report) renderMarkdownInto(dialogReportEl, data.report)
       else {
         dialogReportEl.textContent = ''
-        dialogReportEl.append(el('p', '', '(这个 run 还没有报告)'))
+        dialogReportEl.append(el('p', '', '（这条任务线还没有报告）'))
       }
       reportDialogEl.showModal()
     } catch (error) {
@@ -2571,9 +2842,9 @@
         if (frame.action === 'asked' && approval && approval.id) {
           seatApproval(approval)
           refreshNotices({ toastNew: true })
-          pushToast('有一个工具调用在等你决定。', 'warn')
+          pushToast('有工具调用等你决定。', 'warn')
         } else if (frame.action === 'auto') {
-          pushToast(`已按本会话的许可放行 ${frame.toolName || '这个工具'}，没有再打断你。`, 'ok')
+          pushToast(`已放行 ${frame.toolName || '这个工具'}，本会话内不再询问。`, 'ok')
         } else if ((frame.action === 'decided' || frame.action === 'expired') && frame.id) {
           const entry = STATE.approvals.get(frame.id)
           if (entry) {
@@ -2606,10 +2877,10 @@
         if (frame.code === 'follow-failed' || frame.code === 'state-failed') {
           setConn('warn', '流中断')
         }
-        pushToast(frame.message || '控制台流发生错误', 'err')
+        pushToast(frame.message || '控制台连接出错', 'err')
         break
       case 'truncated':
-        pushToast('有一段历史过大，已截断显示。', 'err')
+        pushToast('历史太长，只显示了一部分。', 'err')
         break
       case 'closed':
         setConn('warn', '已关闭')
@@ -2923,7 +3194,7 @@
       chip.append(el('span', 'dot'))
       chip.append(el('span', '', item.label))
       chip.append(el('span', 'env-value', item.value || ''))
-      chip.append(el('span', 'env-action', '点这里处理'))
+      chip.append(el('span', 'env-action', '去处理'))
       chip.addEventListener('click', () => wizardOpen(item.action?.step || 1))
       envItemsEl.append(chip)
     }
@@ -3037,9 +3308,9 @@
   }
 
   function renderWizardStep1() {
-    wizardBodyEl.append(el('p', 'wiz-lead', '先看看宿主和环境是否准备好了。不通过的项可以直接点“点这里处理”，不需要读错误码。'))
+    wizardBodyEl.append(el('p', 'wiz-lead', '先检查宿主和环境。没通过的项直接点“去处理”。'))
     if (!WIZ.status) {
-      wizardBodyEl.append(WIZ.statusPending > 0 ? wizardBusyNode('正在检查环境…') : el('p', 'wiz-note', '还没有读到检查结果。'))
+      wizardBodyEl.append(WIZ.statusPending > 0 ? wizardBusyNode('检查中…') : el('p', 'wiz-note', '还没有读到检查结果。'))
     } else {
       const list = el('div', 'wiz-checks')
       for (const item of WIZ.status.environment || []) {
@@ -3052,7 +3323,7 @@
         if (item.hint) body.append(el('div', 'hint', item.hint))
         row.append(body)
         if (!item.ok && item.action) {
-          const button = el('button', '', '点这里处理')
+          const button = el('button', '', '去处理')
           button.type = 'button'
           button.addEventListener('click', () => wizardHandleAction(item.action))
           row.append(button)
@@ -3061,7 +3332,7 @@
       }
       wizardBodyEl.append(list)
       if (WIZ.status.profile?.patchPath) {
-        wizardBodyEl.append(el('p', 'wiz-note', `配置文件：${WIZ.status.profile.patchPath}。写入前会自动备份，失败可以一键回滚。`))
+        wizardBodyEl.append(el('p', 'wiz-note', `配置文件：${WIZ.status.profile.patchPath}。写入前会备份，出问题可以回滚。`))
       }
     }
     const error = wizardErrorNode()
@@ -3103,7 +3374,7 @@
 
   function renderWizardStep2() {
     const status = WIZ.status
-    wizardBodyEl.append(el('p', 'wiz-lead', '填你的 OpenAI 兼容端点。默认值已经填好，通常只需要粘贴 key。'))
+    wizardBodyEl.append(el('p', 'wiz-lead', '填 OpenAI 兼容端点。默认值已经填好，一般只要粘贴 key。'))
     const form = el('div', 'wiz-form')
     form.append(wizardField('provider', '提供商名', 'text', 'haoduo', '小写字母、数字、短横线，会作为配置里的提供方 id。'))
     form.append(wizardField('baseURL', 'Base URL', 'text', 'https://byte.haoduotoken.com/v1', 'OpenAI 兼容端点，通常以 /v1 结尾。'))
@@ -3121,7 +3392,7 @@
     input.value = WIZ.form.apiKey ?? ''
     input.placeholder = status?.key?.configured
       ? `已保存 ${status.key.mask || '（内容不可回读）'}，留空则沿用`
-      : '粘贴你的 API key'
+      : '粘贴 API key'
     input.addEventListener('input', () => {
       WIZ.form.apiKey = input.value
       WIZ.formTouched = true
@@ -3132,7 +3403,7 @@
     badge.id = 'wizKeyBadge'
     row.append(input, badge)
     keyWrap.append(labelEl, row)
-    keyWrap.append(el('div', 'wiz-note', 'key 只写入宿主凭据库（或你已有的用户环境变量）；不会写进仓库、配置或日志，页面不显示完整值。'))
+    keyWrap.append(el('div', 'wiz-note', 'key 只写入宿主凭据库（或你已有的用户环境变量），不写进仓库、配置和日志，页面也不显示完整值。'))
     form.append(keyWrap)
     wizardBodyEl.append(form)
 
@@ -3176,7 +3447,7 @@
   function renderWizardStep3() {
     const preview = WIZ.preview
     if (!preview) {
-      wizardBodyEl.append(el('p', 'wiz-note', '先回到上一步做一次检查。'))
+      wizardBodyEl.append(el('p', 'wiz-note', '回到上一步检查一次。'))
       wizardFootEl.replaceChildren()
       const back = el('button', 'wiz-secondary', '返回')
       back.type = 'button'
@@ -3184,7 +3455,7 @@
       wizardFootEl.append(back)
       return
     }
-    wizardBodyEl.append(el('p', 'wiz-lead', '这是将要写入的摘要。你不需要看 YAML；写入前会自动备份，失败可以一键回滚。'))
+    wizardBodyEl.append(el('p', 'wiz-lead', '这是要写入的内容。不用看 YAML；写入前会备份，出问题可以回滚。'))
     const list = el('ul', 'wiz-summary')
     for (const line of preview.summary || []) list.append(el('li', '', line))
     wizardBodyEl.append(list)
@@ -3200,12 +3471,12 @@
     add('模型', preview.model)
     add('key', `${preview.key.mask || '沿用已保存的 key'}（引用 ${preview.key.ref}）`)
     add('配置文件', preview.target.patchPath)
-    add('备份', '写入前保存；可在下一步点“回滚上次写入”恢复')
+    add('备份', '写入前保存，下一步可以回滚')
     wizardBodyEl.append(kv)
 
     const error = wizardErrorNode()
     if (error) wizardBodyEl.append(error)
-    if (WIZ.busy === 'save') wizardBodyEl.append(wizardBusyNode('正在写入配置并保存 key…'))
+    if (WIZ.busy === 'save') wizardBodyEl.append(wizardBusyNode('写入中…'))
     wizardBodyEl.append(el('p', 'wiz-note', preview.note || ''))
 
     wizardFootEl.replaceChildren()
@@ -3258,7 +3529,7 @@
   function renderWizardStep4() {
     const trial = WIZ.trial
     if (WIZ.busy === 'trial') {
-      wizardBodyEl.append(wizardBusyNode('正在临时目录里跑一个小任务（建文件并读回）…'))
+      wizardBodyEl.append(wizardBusyNode('在临时目录建一个文件再读回来…'))
       wizardBodyEl.append(el('p', 'wiz-note', '不会碰你的项目目录。模型回复和工具调用会显示在下面。'))
       wizardFootEl.replaceChildren()
       const again = el('button', 'wiz-secondary', '试跑中…')
@@ -3269,7 +3540,7 @@
     }
 
     if (!trial) {
-      wizardBodyEl.append(el('p', 'wiz-lead', '最后一步：在系统临时目录里建一个文件并读回。它不会碰你的真实项目。'))
+      wizardBodyEl.append(el('p', 'wiz-lead', '最后一步：在系统临时目录建一个文件再读回来，不碰你的项目。'))
       if (WIZ.saved) {
         const kv = el('div', 'wiz-kv')
         const add = (label, value) => {
@@ -3299,12 +3570,12 @@
     verdict.append(el('span', 'big', trial.ok ? '✓' : '!'))
     const text = el('div')
     text.append(el('div', 't', trial.ok
-      ? '试跑成功：它真的在临时目录里干了活。'
+      ? '试跑通过：文件建好，也读回来了。'
       : (emptyRun ? '试跑没有跑起来' : '试跑没有完全成功')))
     text.append(el('div', 'd', trial.ok
       ? `用时 ${(trial.elapsedMs / 1000).toFixed(1)} 秒 · 会话 ${shortId(trial.sessionId)}`
       : (emptyRun
-        ? '这一轮没有模型回复。宿主可能还没切换到新模型，点“重新试跑”再来一次。'
+        ? '这一轮没有模型回复。宿主可能还没换到新模型，点“重新试跑”再试。'
         : (trial.hint || '看下面的步骤和提示。'))))
     verdict.append(text)
     wizardBodyEl.append(verdict)
@@ -3387,13 +3658,13 @@
     try {
       const data = await api('/api/console/wizard/trial', { method: 'POST', body: {} })
       WIZ.trial = data
-      if (data.ok) pushToast('试跑成功：它真的在临时目录里干了活。', 'ok')
+      if (data.ok) pushToast('试跑通过：文件建好，也读回来了。', 'ok')
       else pushToast('试跑没成功，按提示处理。', 'err')
       await wizardLoad({ probe: false })
     } catch (error) {
       WIZ.error = {
         message: messageOf(error),
-        hint: error.hint || (!error.status ? '宿主可能正在热加载配置，等两秒再点一次“开始试跑”。' : null),
+        hint: error.hint || (!error.status ? '宿主可能在热加载配置，等两秒再点“开始试跑”。' : null),
         code: error.code,
       }
     } finally {
@@ -3435,7 +3706,7 @@
       else setConn('warn', '未连接')
     } catch (error) {
       if (error.status === 401) {
-        showGate('令牌无效或已轮换，请重新读取 console.json。')
+        showGate('token 无效或已换新，重新读一次 console.json。')
         return
       }
       setMode('unavailable', { chat: false, reason: `${messageOf(error)}${error.hint ? `\n${error.hint}` : ''}` })
@@ -3494,7 +3765,7 @@
     } catch (error) {
       if (controller.signal.aborted) return
       if (error.status === 401) {
-        showGate('令牌无效或已轮换，请重新读取 console.json。')
+        showGate('token 无效或已换新，重新读一次 console.json。')
         return
       }
       setConn('warn', '重连中')
@@ -3700,6 +3971,7 @@
   stopAllEl.addEventListener('click', stopAllRuns)
   setInterval(() => {
     tickLaneClocks()
+    tickSchedule()
     updateApprovalClocks()
   }, 1000)
   $('historyOpen').addEventListener('click', () => drawerOpen('history'))

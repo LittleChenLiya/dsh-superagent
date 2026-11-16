@@ -192,7 +192,14 @@ test('the console page and every API refuse a request without the token', async 
     const page = await fetch(`${panel.url}/?token=${encodeURIComponent(panel.token)}`)
     assert.equal(page.status, 200)
     const html = await page.text()
-    assert.match(html, /自动拆成任务线并行推进/)
+    assert.match(html, /说一句要做什么；它自己决定一步做完还是拆开并行/)
+    // The page must keep the schedule board and its narrow-screen fallback:
+    // the board is how several parallel lines stay readable at ~720px.
+    assert.match(html, /sched-track/)
+    assert.match(html, /tickSchedule/)
+    assert.match(html, /@media \(max-width: 720px\)[\s\S]*\.sched-row \{ grid-template-columns: minmax\(0, 1fr\);/)
+    // Copy guard: marketing filler must not creep back into user-visible text.
+    assert.doesNotMatch(html, /一键|赋能|无缝|让我们|为您/)
     assert.match(page.headers.get('content-security-policy') ?? '', /default-src 'none'/)
 
     const discovery = JSON.parse(await fsp.readFile(path.join(state, 'console.json'), 'utf8'))

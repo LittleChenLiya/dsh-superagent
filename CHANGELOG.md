@@ -8,6 +8,21 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.15.0 — 2026-11-16
+
+### 变化
+
+- **界面上的字改成人话。** 空状态、按钮、提醒、审批卡、报错和向导都按你当下要做的事
+  写一句话：具体名词代替抽象名词，不用「一键」「赋能」这类词，不排比，不客套，也不堆
+  感叹号。文案分两处：页面里的固定句子在 `public/console.html`，服务端回给你的错误说明
+  在 `lib/console.js`；状态词、耗时、提醒标题这些跟着 run 记录自动生成。
+- **调度板：一眼看到几条线在跑。** 有任务在跑时，对话上方出现一块调度板：每一步一条
+  时间条，按真实的开始、结束时间画；板头写清同时跑几条任务线、并行几步、几步在等前
+  一步、几条在排队，每行的任务线标题旁是状态和耗时。数据全部读现有 run 记录（含
+  `subtasks` 的 `startedAt`/`finishedAt`/`waitingOn` 和 `limits.maxParallel`、
+  `queue.position`），没有第二套状态。窗口窄到 720px 时每一步改成上下两行，时间条
+  占满宽度，不会挤在一起。
+
 ## 0.14.9 — 2026-11-16
 
 ### 变化
