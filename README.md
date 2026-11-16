@@ -1,4 +1,4 @@
-中文 | [English](README.en.md)
+﻿中文 | [English](README.en.md)
 
 # dsh-superagent
 
@@ -36,12 +36,12 @@ dsh-superagent 把这件事接过去：你说一句目标，它负责拆、负�
 
 ### 1. 装
 
-桌面端：侧边栏 **插件** → **Add plugin** → 输入 `@xiangyixie/dsh-superagent@0.14.6` → 安装。
+桌面端：侧边栏 **插件** → **Add plugin** → 输入 `@xiangyixie/dsh-superagent@0.14.7` → 安装。
 
 命令行：
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.6
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.14.7
 ```
 
 装完**重启 DSH**（插件只在宿主启动时加载一次）。也可以从「发现」页添加[插件索引](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/plugin-index.json)一键安装；升级一律先 `remove` 再 `add`。
@@ -1090,7 +1090,7 @@ SHA-256）。`--format html` 把同样的内容写成一个自包含
 
 | 你看到的 | 含义 | 怎么办 |
 | --- | --- | --- |
-| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.6` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
+| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.14.7` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
 | `Cannot find module .../lib/control.js`（或 `watch.js` / `report.js` / `wizard.js`），或宿主日志里的 `[dsh-superagent] dsh-superagent failed to load because a file it imports is missing: ...` | 那个 profile 里的副本不完整——被中断的 `add` 会留下残缺的解包结果。0.14.3 起的入口会直接点名缺哪个文件。已发布的包不是原因：每个版本都带全部三十四个 `lib/` 文件。 | 删掉 profile 的 `node_modules` 下该插件的目录（带 scope 的 `@xiangyixie/dsh-superagent`，或旧 tarball 安装留下的无 scope 的 `dsh-superagent`），再用同一条 `add` 命令重装，并带上版本号。不要手工拷贝文件进去。 |
 | `[error] the model provider rejected the API key` | 启动宿主的那个进程里缺 key 环境变量。 | 导出 `DEEPSEEK_API_KEY`（默认路由）或你那条路由声明的变量，然后重启 `dsh`。 |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | profile 的路由在环境里没有凭据。 | 设置该路由对应的环境变量并重启。错误行里写了路由名，以它为准，不要照本文。 |

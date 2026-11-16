@@ -8,6 +8,20 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.14.7 — 2026-11-16
+
+### 变化
+
+- **长期目标只问该问的。**
+  - 宿主重启后原 run 无法恢复时，不再立刻弹决策：尝试次数还够就自动换一次新尝试
+    （已完成阶段不会重跑），用尽后才问。
+  - 等待决策不再冻结整个目标。其他正在跑的阶段继续被记录，第二个阶段的问题会和
+    第一个一起列出，一次看完；等待期间不派发新阶段。
+  - 没有任何下游阶段依赖的阶段，两次失败后自动跳过，目标以 `partial` 收尾。状态
+    与完成通知会点名是哪一段、失败原因，并给出单独重来的命令（`superagent_goal
+    action=retry_phase goal_id=… phase_id=…`），不静默跳过。有下游依赖的阶段仍然
+    停下来问人。
+
 ## 0.14.6 — 2026-11-16
 
 ### 修复
