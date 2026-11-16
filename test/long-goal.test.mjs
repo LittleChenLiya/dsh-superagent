@@ -232,7 +232,36 @@ test('a restarted host resumes the interrupted phase, not the finished one', asy
   assert.equal(orchestrator.calls.start.filter(args => /phase 1 of 2/.test(args.goal)).length, 1)
 })
 
-test('retries a failed phase with a new run, then asks a person after the last attempt', async () => {
+test('a resume that fails after a host restart starts a new attempt instead of asking', async () => {
+  const root = await tempRoot('resume-fallback')
+  const orchestrator = fakeOrchestrator()
+  const first = await manager(root, orchestrator)
+  const goal = await first.create({
+    goal: 'restart without a resumable run',
+    parentSessionId: agent.id,
+    maxAttemptsPerPhase: 2,
+    phases: [phase('p1')],
+  })
+  await first.tick()
+  let state = await first.status(goal.id)
+  const runId = state.goal.phases[0].currentRunId
+  // The host died and the run's session is gone: resuming it cannot work.
+  orchestrator.runs.get(runId).status = 'interrupted'
+  orchestrator.runs.get(runId).ownerLost = true
+
+  const second = await manager(root, orchestrator)
+  await second.init()
+  await second.tick()
+  state = await second.status(goal.id)
+  assert.equal(state.goal.decisions.length, 0)
+  assert.equal(state.goal.status, 'running')
+  assert.equal(state.goal.phases[0].status, 'running')
+  assert.equal(state.goal.phases[0].attempts, 2)
+  assert.equal(state.goal.phases[0].resumeRunId, null)
+  assert.match(orchestrator.calls.start.at(-1).goal, /could not be resumed/)
+})
+
+test('retries a failed phase with a new run, then skips it alone after the last attempt', async () => {
   const root = await tempRoot('retry')
   const orchestrator = fakeOrchestrator()
   const goals = await manager(root, orchestrator)
@@ -257,20 +286,21 @@ test('retries a failed phase with a new run, then asks a person after the last a
   orchestrator.fail(secondRun, { failed: [{ id: 'a1', text: 'p1 is done', why: 'file missing' }] })
   await goals.tick()
   state = await goals.status(goal.id)
-  assert.equal(state.goal.phases[0].status, 'failed')
-  assert.equal(state.goal.status, 'needs-decision')
-  const decision = state.goal.decisions.at(-1)
-  assert.equal(decision.kind, 'phase-exhausted')
-  assert.deepEqual(decision.options, ['retry', 'skip', 'stop'])
+  // Nothing depends on p1, so the goal stops asking and ends without it.
+  assert.equal(state.goal.phases[0].status, 'skipped')
+  assert.equal(state.goal.phases[0].skippedBy, 'exhausted')
+  assert.equal(state.goal.status, 'failed')
+  assert.equal(state.goal.decisions.length, 0)
 
-  await goals.answer(goal.id, decision.id, 'retry', { note: 'write the file first', parent: agent })
+  await goals.retryPhase(goal.id, 'p1')
   state = await goals.status(goal.id)
-  assert.equal(state.goal.phases[0].status, 'ready')
+  assert.equal(state.goal.status, 'running')
+  assert.equal(state.goal.phases[0].status, 'pending')
   assert.equal(state.goal.phases[0].attempts, 0)
   await goals.tick()
   state = await goals.status(goal.id)
   assert.equal(state.goal.phases[0].status, 'running')
-  assert.match(orchestrator.calls.start.at(-1).goal, /write the file first/)
+  assert.match(orchestrator.calls.start.at(-1).goal, /reopened on request/)
 })
 
 test('a negative worker claim does not complete a phase whose machine check passed', async () => {
@@ -440,6 +470,137 @@ test('a goal that makes no progress opens a stall decision instead of retrying',
   const decision = state.goal.decisions.at(-1)
   assert.equal(decision.kind, 'stalled')
   assert.deepEqual(decision.options, ['continue', 'stop'])
+})
+
+test('a second phase that needs a person joins the open decision instead of waiting', async () => {
+  const root = await tempRoot('batch')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'two phases, two questions',
+    parentSessionId: agent.id,
+    maxParallelPhases: 2,
+    phases: [phase('p1'), phase('p2')],
+  })
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  const run1 = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+  run1.status = 'failed'
+  run1.attention.items.push({ id: 'q1', question: 'Where should the index go?', answer: null })
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'needs-decision')
+  assert.equal(state.goal.decisions.length, 1)
+
+  // Phase 2 keeps being watched while the first question is open: its own
+  // question is collected now, so one interruption shows both.
+  const run2 = orchestrator.runs.get(state.goal.phases[1].currentRunId)
+  run2.status = 'failed'
+  run2.attention.items.push({ id: 'q2', question: 'Which font should the cover use?', answer: null })
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'needs-decision')
+  assert.deepEqual(state.goal.decisions.map(item => item.source.attentionId), ['q1', 'q2'])
+  assert.deepEqual(state.goal.decisions.map(item => item.kind), ['worker-question', 'worker-question'])
+
+  // Answering one of them does not pretend the goal is free to run again.
+  await goals.answer(goal.id, state.goal.decisions[0].id, 'answer', { note: 'docs/index.md', parent: agent })
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'needs-decision')
+  await goals.answer(goal.id, state.goal.decisions[1].id, 'answer', { note: 'Inter', parent: agent })
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'running')
+})
+
+test('skips a phase nothing depends on after its attempts run out, and the goal ends partial', async () => {
+  const root = await tempRoot('auto-skip')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'two independent deliverables',
+    parentSessionId: agent.id,
+    maxParallelPhases: 2,
+    maxAttemptsPerPhase: 2,
+    phases: [phase('p1'), phase('p2')],
+  })
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  const run1 = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+  const run2 = orchestrator.runs.get(state.goal.phases[1].currentRunId)
+  orchestrator.complete(run2)
+  orchestrator.fail(run1, { error: 'the export tool is missing', stop: 'needs-decision' })
+  await goals.tick()
+  state = await goals.status(goal.id)
+  const retried = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+  orchestrator.fail(retried, { error: 'the export tool is missing' })
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.decisions.length, 0)
+  assert.equal(state.goal.status, 'partial')
+  const skipped = state.goal.phases[0]
+  assert.equal(skipped.status, 'skipped')
+  assert.equal(skipped.skippedBy, 'exhausted')
+  assert.match(skipped.skipReason, /已用尽 2 次尝试/)
+  const text = formatStatus(state.goal, state.runs)
+  assert.match(text, /Skipped after its attempts ran out/)
+  assert.match(text, /p1「Title p1」— 已用尽 2 次尝试/)
+  assert.match(text, new RegExp(`action=retry_phase goal_id=${goal.id} phase_id=p1`))
+})
+
+test('a phase with a dependent still asks a person instead of skipping', async () => {
+  const root = await tempRoot('dependent')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'ordered deliverables',
+    parentSessionId: agent.id,
+    maxAttemptsPerPhase: 1,
+    phases: [phase('p1'), phase('p2', { dependsOn: ['p1'] })],
+  })
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  orchestrator.fail(orchestrator.runs.get(state.goal.phases[0].currentRunId), { error: 'export still broken' })
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'needs-decision')
+  assert.equal(state.goal.decisions[0].kind, 'phase-exhausted')
+  assert.match(state.goal.decisions[0].question, /下游阶段 p2 依赖它/)
+  assert.equal(state.goal.phases[0].status, 'failed')
+})
+
+test('retry_phase revives a skipped phase and the phases skipped with it', async () => {
+  const root = await tempRoot('retry-phase')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'one broken phase in the middle of a plan',
+    parentSessionId: agent.id,
+    maxParallelPhases: 2,
+    maxAttemptsPerPhase: 1,
+    phases: [phase('p1'), phase('p2', { dependsOn: ['p1'] }), phase('p3')],
+  })
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  orchestrator.complete(orchestrator.runs.get(state.goal.phases[2].currentRunId))
+  orchestrator.fail(orchestrator.runs.get(state.goal.phases[0].currentRunId), { error: 'export still broken' })
+  await goals.tick()
+  state = await goals.status(goal.id)
+  await goals.answer(goal.id, state.goal.decisions[0].id, 'skip')
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'partial')
+  assert.deepEqual(state.goal.phases.map(entry => entry.status), ['skipped', 'skipped', 'completed'])
+
+  await goals.retryPhase(goal.id, 'p1')
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.status, 'running')
+  assert.deepEqual(state.goal.phases.map(entry => entry.status), ['pending', 'pending', 'completed'])
+  assert.equal(state.goal.phases[0].attempts, 0)
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.phases[0].status, 'running')
+  assert.equal(state.goal.phases[1].status, 'pending')
+  assert.equal(state.goal.decisions.length, 1)
 })
 
 test('auto-decomposes a natural-language goal, then starts the first phase', async () => {
