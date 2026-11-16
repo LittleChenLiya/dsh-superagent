@@ -8,6 +8,21 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.14.9 — 2026-11-16
+
+### 变化
+
+- **文件可以直接拖进输入框，也能粘贴进来。** 拖到输入框或按 Ctrl+V 粘贴的图片、文档会
+  复制到当前对话的工作区，路径自动写进消息，我拿到就能读。单个文件 8MB 以内，只收
+  图片、PDF、Markdown/文本、CSV/JSON、Office 文档、压缩包和代码文件；类型或大小不
+  合适时直接告诉你「不能放什么、可以放什么」，不会静默失败。文件只会落在当前对话的
+  工作区里，不会写到别处，也不会覆盖上一次放的同名文件。
+- **关掉页面也知道发生了什么。** 任务跑完、没走通、或者在等你批准时，页面会亮起提醒：
+  标题变成「(1) Superagent 专属空间」这样的未读计数，右上角出现「提醒」入口。重新
+  打开页面还能看到当时的结果——「跑完了」「没走通」「要你批准」都还在，点一条就能跳到
+  对应的任务线；已经看过的提醒不会重复打扰。任务结束时的通知仍然走插件原来的通道，
+  所以即使页面一直关着，回到对话里也能看到完成或需要决定的说明。
+
 ## 0.14.8 — 2026-11-16
 
 ### 变化
