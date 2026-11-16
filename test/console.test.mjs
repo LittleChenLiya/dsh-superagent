@@ -843,6 +843,60 @@ test('an oversized remembered timeline is rewritten to the stated bound at start
   }
 })
 
+test('the console stops a run, lists conversations and refuses a foreign one', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    const fake = fakeHost()
+    const cancelled = []
+    const host = {
+      ...fake.host,
+      cancelRun: async (sessionId, runId) => {
+        cancelled.push({ sessionId, runId })
+        if (runId !== 'run-1') return null
+        return { runId, status: 'cancelled', cancelPending: false }
+      },
+      listSessions: async () => ([{
+        sessionId: 'session-console',
+        updatedAt: Date.UTC(2026, 10, 15, 16, 18),
+        running: false,
+        blank: false,
+        runs: 2,
+        artifacts: 3,
+        first: '并行写三个小文件',
+        title: null,
+      }]),
+      openSession: async id => (id === 'session-console' ? { sessionId: id } : null),
+    }
+    panel = await startConsole(state, host)
+    await request(panel, 'POST', '/api/console/session', {})
+
+    const sessions = await request(panel, 'GET', '/api/console/sessions')
+    assert.equal(sessions.status, 200)
+    assert.equal(sessions.json.data.currentSessionId, 'session-console')
+    assert.equal(sessions.json.data.sessions.length, 1)
+    assert.equal(sessions.json.data.sessions[0].artifacts, 3)
+
+    const stopped = await request(panel, 'POST', '/api/console/runs/run-1/cancel', {})
+    assert.equal(stopped.status, 200)
+    assert.equal(stopped.json.data.status, 'cancelled')
+    assert.deepEqual(cancelled, [{ sessionId: 'session-console', runId: 'run-1' }])
+
+    const missing = await request(panel, 'POST', '/api/console/runs/run-404/cancel', {})
+    assert.equal(missing.status, 404)
+
+    const foreign = await request(panel, 'POST', '/api/console/session/switch', { sessionId: 'session-someone-else' })
+    assert.equal(foreign.status, 404)
+
+    const reopen = await request(panel, 'POST', '/api/console/session/switch', { sessionId: 'session-console' })
+    assert.equal(reopen.status, 200)
+    assert.equal(reopen.json.data.switched, false)
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
 test('a remembered conversation that had no saved words still records the next turn', async () => {
   const { base, state } = await fixture()
   let first = null
@@ -917,6 +971,14 @@ test('closing the last page cancels a pending approval instead of approving it',
     assert.equal(settled, 'cancelled')
     const after = await request(panel, 'GET', '/api/console/state')
     assert.deepEqual(after.json.data.approvals, [])
+
+    // A stray answer cannot revive a settled ask, and only an owner may answer.
+    const unknown = await request(panel, 'POST', '/api/console/approval', { id: 'ap_missing', decision: 'allow' })
+    assert.equal(unknown.status, 409)
+    const bad = await request(panel, 'POST', '/api/console/approval', { id: 'ap_missing', decision: 'maybe' })
+    assert.equal(bad.status, 400)
+    const anonymous = await request(panel, 'POST', '/api/console/approval', { id: 'ap_missing', decision: 'allow' }, null)
+    assert.equal(anonymous.status, 401)
   } finally {
     if (panel) await panel.stop()
     await fsp.rm(base, { recursive: true, force: true })
@@ -989,3 +1051,105 @@ test('an approval never resolves without a page, and refuses stray answers', asy
   }
 })
 
+
+test('an approval shows what it will do, when it expires, and can be allowed for the conversation', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    const fake = fakeHost({ sessionId: 'session-approval' })
+    let created = 0
+    fake.host.createSession = async () => ({ sessionId: `session-approval-${++created}` })
+    panel = await startConsole(state, fake.host)
+    assert.equal((await request(panel, 'POST', '/api/console/session', {})).status, 200)
+    const boot = await request(panel, 'GET', '/api/console/state')
+    const sessionId = boot.json.data.sessionId
+    const stream = await fetch(`${panel.url}/api/console/events?sessionId=${encodeURIComponent(sessionId)}`, {
+      headers: { authorization: `Bearer ${panel.token}` },
+    })
+    assert.equal(stream.status, 200)
+    const collected = collectFrames(stream, { count: 100, timeoutMs: 2000 })
+    await new Promise(resolve => setTimeout(resolve, 30))
+
+    const waitForApproval = async () => {
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const view = await request(panel, 'GET', '/api/console/state')
+        const pending = view.json.data.approvals
+        if (pending.length > 0) return pending[0]
+        await new Promise(resolve => setTimeout(resolve, 25))
+      }
+      throw new Error('no approval reached the page')
+    }
+
+    const writeArgs = JSON.stringify({
+      path: 'D:\\work\\report.md',
+      content: `# 结果\n\n- 一\n- 二\n${'x'.repeat(4200)}`,
+    })
+    const first = panel.askApproval({
+      toolName: 'write_file',
+      callId: 'call-write-1',
+      callArguments: writeArgs,
+      reason: 'blocked outside the workspace',
+      source: '子任务 A',
+    })
+    const asked = await waitForApproval()
+    assert.equal(asked.toolName, 'write_file')
+    assert.equal(asked.callArguments.length, 4000, 'the payload must cap the arguments, not drop them')
+    assert.ok(asked.callArguments.includes('report.md'), 'the page needs the real path and body to preview it')
+    const expiresAt = Date.parse(asked.expiresAt)
+    assert.ok(Number.isFinite(expiresAt), `expiresAt must be a date, got ${asked.expiresAt}`)
+    assert.ok(expiresAt - Date.now() > 9 * 60 * 1000, 'the deadline must be visible far enough ahead')
+
+    const allowTool = await request(panel, 'POST', '/api/console/approval', {
+      id: asked.id,
+      decision: 'allow-tool',
+    })
+    assert.equal(allowTool.status, 200)
+    assert.deepEqual(allowTool.json.data, {
+      id: asked.id, outcome: 'allowed-once', scope: 'tool', toolName: 'write_file',
+    })
+    assert.equal(await first, 'allowed-once')
+
+    // The same tool inside this conversation no longer interrupts, and the
+    // host still receives an allow-once answer it understands.
+    assert.equal(
+      await panel.askApproval({ toolName: 'write_file', callId: 'call-write-2', callArguments: writeArgs }),
+      'allowed-once',
+    )
+    assert.deepEqual((await request(panel, 'GET', '/api/console/state')).json.data.approvals, [])
+
+    // A different tool still asks, and a plain reject keeps working.
+    const shell = panel.askApproval({
+      toolName: 'shell',
+      callId: 'call-shell-1',
+      callArguments: JSON.stringify({ command: 'node scripts/report.mjs --out D:\\work\\report.md' }),
+    })
+    const shellAsk = await waitForApproval()
+    assert.equal(shellAsk.toolName, 'shell')
+    const rejected = await request(panel, 'POST', '/api/console/approval', {
+      id: shellAsk.id,
+      decision: 'reject',
+    })
+    assert.equal(rejected.status, 200)
+    assert.equal(await shell, 'rejected')
+
+    // A new conversation drops the tool allowance: the same tool asks again.
+    assert.equal((await request(panel, 'POST', '/api/console/session', {})).status, 200)
+    const again = panel.askApproval({ toolName: 'write_file', callId: 'call-write-3', callArguments: writeArgs })
+    const fresh = await waitForApproval()
+    assert.equal(fresh.toolName, 'write_file')
+    await request(panel, 'POST', '/api/console/approval', { id: fresh.id, decision: 'reject' })
+    assert.equal(await again, 'rejected')
+
+    const frames = await collected
+    const askedFrames = frames.filter(frame => frame.type === 'approval' && frame.action === 'asked')
+    assert.ok(askedFrames.length >= 3, `expected every ask on the stream, got ${JSON.stringify(frames.map(f => f.action))}`)
+    assert.ok(askedFrames.every(frame => frame.approval?.expiresAt), 'each ask must carry its deadline')
+    const toolDecision = frames.find(frame => frame.type === 'approval' && frame.action === 'decided' && frame.scope === 'tool')
+    assert.ok(toolDecision, 'the page must hear that the whole tool was allowed')
+    const auto = frames.find(frame => frame.type === 'approval' && frame.action === 'auto')
+    assert.equal(auto?.toolName, 'write_file', 'a skipped ask must still be announced')
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})

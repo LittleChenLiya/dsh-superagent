@@ -87,6 +87,8 @@
   }
   .btn:hover { color: var(--text); border-color: #35464f; background: #172028; }
   .btn:disabled { opacity: .45; cursor: default; }
+  .btn.danger { color: var(--red); border-color: rgba(255, 123, 114, .3); }
+  .btn.danger:hover { background: rgba(255, 123, 114, .08); border-color: rgba(255, 123, 114, .45); }
 
   .panel {
     min-height: 0; display: flex; flex-direction: column;
@@ -148,6 +150,14 @@
   @keyframes caret { 50% { opacity: 0; } }
   .msg .meta { margin: 5px 4px 0; color: var(--faint); font-size: 11px; }
   .msg .meta .failed { color: var(--red); }
+  .msg-actions { display: flex; gap: 4px; margin: 5px 4px 0; }
+  .msg.user .msg-actions { justify-content: flex-end; }
+  .msg-actions[hidden] { display: none; }
+  .msg-actions button {
+    padding: 1px 4px; border: 0; border-radius: 5px; background: transparent;
+    color: var(--faint); font: 11px var(--sans); cursor: pointer;
+  }
+  .msg-actions button:hover { color: var(--text); background: rgba(255, 255, 255, .06); }
   .reasoning { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 7px; }
   .reasoning summary { color: var(--faint); font-size: 11px; cursor: pointer; }
   .reasoning pre { margin: 6px 0 0; color: var(--muted); font: 12px/1.6 var(--mono); white-space: pre-wrap; }
@@ -292,6 +302,26 @@
   }
   .options button:hover { background: rgba(246, 193, 119, .18); }
   .options button:disabled { opacity: .45; }
+  .approval-card .options button.allow-tool {
+    border-color: rgba(94, 234, 212, .38); background: rgba(94, 234, 212, .1); color: #c2efe7;
+  }
+  .approval-card .call { margin-top: 7px; }
+  .approval-card .call summary {
+    color: #cbb794; font-size: 11px; cursor: pointer; list-style: none;
+  }
+  .approval-card .call summary::-webkit-details-marker { display: none; }
+  .approval-card .call summary::before { content: '▸ '; }
+  .approval-card .call[open] summary::before { content: '▾ '; }
+  .approval-card .call pre {
+    max-height: 240px; overflow: auto; margin: 6px 0 0; padding: 8px 9px;
+    border-radius: 7px; border: 1px solid rgba(246, 193, 119, .22);
+    background: rgba(10, 15, 18, .62); color: #e9dcc4;
+    font: 11px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word;
+  }
+  .approval-card .call .note { margin: 5px 0 0; color: #b9a789; font-size: 10.5px; }
+  .approval-card .expiry { margin-top: 6px; color: #b9a789; font-size: 11px; }
+  .approval-card .expiry.soon { color: var(--amber); }
+  .approval-card .expiry.over { color: var(--red); }
   .free { display: flex; gap: 6px; margin-top: 7px; }
   .free input {
     flex: 1; min-width: 0; height: 29px; padding: 0 8px;
@@ -493,6 +523,26 @@
     margin: 0; padding: 13px; border-radius: 9px; border: 1px solid var(--line-soft);
     background: #0a0f12; font: 12px/1.65 var(--mono); white-space: pre-wrap; word-break: break-word;
   }
+  .dialog-report { font-size: 12.5px; line-height: 1.7; }
+  .dialog-report h1, .dialog-report h2, .dialog-report h3, .dialog-report h4 {
+    margin: 16px 0 8px; font-size: 14px; line-height: 1.45; color: var(--text);
+  }
+  .dialog-report h1 { font-size: 17px; }
+  .dialog-report h2 { font-size: 15px; }
+  .dialog-report p { margin: 0 0 9px; }
+  .dialog-report ul, .dialog-report ol { margin: 0 0 10px; padding-left: 22px; }
+  .dialog-report li { margin: 3px 0; }
+  .dialog-report code {
+    padding: 1px 5px; border-radius: 5px; background: rgba(94, 234, 212, .1);
+    font: 11.5px var(--mono); color: var(--text);
+  }
+  .dialog-report pre { margin: 10px 0; }
+  .dialog-report pre code { padding: 0; background: transparent; font-size: 11.5px; }
+  .dialog-report a { color: var(--teal); }
+  .dialog-report iframe { width: 100%; height: min(62vh, 620px); border: 1px solid var(--line-soft); border-radius: 10px; background: #fff; }
+  .dialog-report .image-preview { max-width: 100%; border-radius: 10px; border: 1px solid var(--line-soft); }
+  .dialog-actions { display: flex; gap: 8px; margin-top: 14px; }
+  .dialog-actions .btn { text-decoration: none; }
 
   /* ---- conversation-first stage ---- */
   .stage { flex: 1; min-height: 0; display: flex; justify-content: center; padding: 0 18px 18px; }
@@ -523,6 +573,15 @@
   .lane-goal { font-size: 12.5px; font-weight: 600; line-height: 1.45; word-break: break-word; }
   .lane-now { display: flex; align-items: center; gap: 6px; margin-top: 3px; color: var(--muted); font-size: 11px; }
   .lane-now .spark { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--amber); animation: blink 1.1s infinite; }
+  .lane-now .lane-tool { color: var(--faint); font-family: var(--mono); font-size: 10.5px; }
+  .lane-time { flex: none; padding-top: 1px; color: var(--faint); font: 10.5px var(--mono); white-space: nowrap; }
+  .lane-stop {
+    flex: none; height: 22px; padding: 0 9px; border-radius: 999px; cursor: pointer;
+    border: 1px solid rgba(255, 123, 114, .3); background: rgba(255, 123, 114, .06);
+    color: var(--red); font-size: 10.5px;
+  }
+  .lane-stop:hover { background: rgba(255, 123, 114, .13); }
+  .lane-stop:disabled { opacity: .55; cursor: default; }
   .steps { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
   .step { display: flex; align-items: flex-start; gap: 7px; color: var(--faint); font-size: 11px; line-height: 1.5; }
   .step .sdot { flex: none; width: 6px; height: 6px; margin-top: 4px; border-radius: 50%; background: #3a4a55; }
@@ -544,7 +603,8 @@
   .artifact {
     display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
     padding: 4px 9px; border-radius: 8px; text-decoration: none;
-    border: 1px solid rgba(94, 234, 212, .3); background: rgba(94, 234, 212, .07); color: #bdf3e8; font-size: 11.5px;
+    border: 1px solid rgba(94, 234, 212, .3); background: rgba(94, 234, 212, .07); color: #bdf3e8;
+    font-size: 11.5px; font-family: inherit; text-align: left; cursor: pointer;
   }
   .artifact:hover { background: rgba(94, 234, 212, .14); }
   .artifact .ak { color: var(--faint); font: 10px var(--mono); }
@@ -591,6 +651,8 @@
     color: var(--text); text-align: left; cursor: pointer;
   }
   .hist-item:hover { border-color: #35464f; }
+  .hist-item.current { border-color: #3a5a52; background: #101b1a; cursor: default; }
+  .hist-state + .hist-state { margin-left: 6px; }
   .hist-top { display: flex; align-items: center; gap: 8px; color: var(--faint); font-size: 10.5px; }
   .hist-state { margin-left: auto; }
   .hist-text { margin-top: 4px; font-size: 12px; line-height: 1.55; word-break: break-word; }
@@ -619,6 +681,8 @@
     </div>
     <div class="topbar-actions">
       <span id="conn" class="conn"><i></i><span id="connText">连接中</span></span>
+      <button id="stopAll" class="btn danger" type="button" hidden>停止这一轮</button>
+      <button id="newChatTop" class="btn" type="button" disabled>新对话</button>
       <button id="historyOpen" class="btn" type="button">历史</button>
       <button id="advancedOpen" class="btn" type="button">高级</button>
     </div>
@@ -659,7 +723,7 @@
   <div class="drawer-head">
     <div>
       <span class="kicker">历史</span>
-      <h2>这次对话的时间线</h2>
+      <h2>你的对话</h2>
     </div>
     <button class="drawer-close" data-close="history" type="button" aria-label="关闭">×</button>
   </div>
@@ -679,7 +743,6 @@
       <h3>会话</h3>
       <div id="advSession" class="adv-kv"></div>
       <div class="adv-actions">
-        <button id="newChat" class="btn tiny" type="button" disabled>开始新对话</button>
         <button id="wizardOpen" class="btn tiny" type="button">首次使用向导</button>
       </div>
     </section>
@@ -737,7 +800,8 @@
   </div>
   <div class="dialog-body">
     <div id="dialogMeta" class="dialog-meta"></div>
-    <pre id="dialogReport"></pre>
+    <div id="dialogReport" class="dialog-report"></div>
+    <div id="dialogActions" class="dialog-actions" hidden></div>
   </div>
 </dialog>
 
@@ -758,7 +822,8 @@
   const sessionLabelEl = $('sessionLabel')
   const connEl = $('conn')
   const connTextEl = $('connText')
-  const newChatEl = $('newChat')
+  const newChatEl = $('newChatTop')
+  const stopAllEl = $('stopAll')
   const gateEl = $('gate')
   const gateFormEl = $('gateForm')
   const gateErrorEl = $('gateError')
@@ -768,6 +833,7 @@
   const dialogTitleEl = $('dialogTitle')
   const dialogMetaEl = $('dialogMeta')
   const dialogReportEl = $('dialogReport')
+  const dialogActionsEl = $('dialogActions')
   const wizardDialogEl = $('wizardDialog')
   const wizardStepsEl = $('wizardSteps')
   const wizardBodyEl = $('wizardBody')
@@ -807,6 +873,12 @@
     runAnchors: new Map(),
     attentionSeen: new Set(),
     approvals: new Map(),
+    sessions: [],
+    sessionsLoadedAt: 0,
+    sessionsBusy: false,
+    sessionNote: null,
+    cancelRequested: new Set(),
+    stopAllBusy: false,
   }
 
   const WIZ = {
@@ -908,6 +980,7 @@
     modeTextEl.textContent = chat ? '已就绪' : mode === 'loading' ? '连接中' : '未连接'
     newChatEl.disabled = !chat
     inputEl.disabled = !chat
+    syncStopAll()
     updateSend()
   }
 
@@ -987,13 +1060,80 @@
     if (message.failed) meta.append(el('span', 'failed', ' · 发送失败'))
     if (message.interrupted) meta.append(el('span', '', ' · 已中断'))
 
-    article.append(who, bubble, meta)
+    const actions = el('div', 'msg-actions')
+    actions.hidden = !message.text
+    if (message.role === 'assistant') {
+      const copy = el('button', '', '复制')
+      copy.type = 'button'
+      copy.title = '复制这条回复的完整文本'
+      copy.addEventListener('click', () => copyMessage(message, copy))
+      actions.append(copy)
+    } else {
+      const edit = el('button', '', '编辑并重发')
+      edit.type = 'button'
+      edit.title = '把这条原文放回输入框，改完再发送'
+      edit.addEventListener('click', () => editMessage(message))
+      actions.append(edit)
+    }
+
+    article.append(who, bubble, meta, actions)
     message.el = article
     message.textEl = text
     message.bubbleEl = bubble
     message.toolsEl = tools
     message.metaEl = meta
+    message.actionsEl = actions
     return article
+  }
+
+  function formatTextOf(message) {
+    return typeof message.text === 'string' ? message.text : ''
+  }
+
+  async function copyText(value) {
+    const text = typeof value === 'string' ? value : ''
+    if (!text) return false
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text)
+        return true
+      } catch {
+        // The page may not be a secure context; fall through to the old path.
+      }
+    }
+    const area = document.createElement('textarea')
+    area.value = text
+    area.setAttribute('readonly', '')
+    area.style.position = 'fixed'
+    area.style.top = '-1000px'
+    document.body.append(area)
+    area.select()
+    let copied = false
+    try { copied = document.execCommand('copy') } catch { copied = false }
+    area.remove()
+    return copied
+  }
+
+  async function copyMessage(message, button) {
+    const copied = await copyText(formatTextOf(message))
+    if (!copied) {
+      pushToast('复制失败，可以手动选中文字。', 'err')
+      return
+    }
+    pushToast('已复制这条回复。', 'ok')
+    button.textContent = '已复制'
+    setTimeout(() => { button.textContent = '复制' }, 1600)
+  }
+
+  /** Put the original text back in the composer; sending stays the person's call. */
+  function editMessage(message) {
+    const text = formatTextOf(message)
+    if (!text) return
+    inputEl.value = text
+    inputEl.dispatchEvent(new Event('input'))
+    inputEl.focus()
+    try { inputEl.setSelectionRange(text.length, text.length) } catch { /* not focusable yet */ }
+    pushToast('原文已放回输入框，改完点发送。', 'ok')
   }
 
   function summarizeArgs(value) {
@@ -1038,6 +1178,7 @@
       if (message.failed) message.metaEl.append(el('span', 'failed', ' · 发送失败'))
       if (message.interrupted) message.metaEl.append(el('span', '', ' · 已中断'))
     }
+    if (message.actionsEl) message.actionsEl.hidden = !message.text
   }
 
   function addMessage(role, text, options = {}) {
@@ -1128,9 +1269,10 @@
   }
 
   function laneStatusText(run) {
+    if (STATE.cancelRequested.has(run.id) && !isTerminal(run.status)) return '停止中'
     if (run.status === 'queued') return '排队'
     if (run.status === 'completed') return '完成'
-    if (isTerminal(run.status)) return '失败'
+    if (isTerminal(run.status)) return run.status === 'cancelled' ? '已取消' : '失败'
     return '进行中'
   }
 
@@ -1143,12 +1285,81 @@
     return `${(minutes / 60).toFixed(1)} 小时`
   }
 
+  /** Per-lane clock, fine-grained enough to visibly tick. */
+  function formatClock(ms) {
+    if (!Number.isFinite(ms) || ms < 0) return ''
+    const total = Math.floor(ms / 1000)
+    const minutes = Math.floor(total / 60)
+    const seconds = total % 60
+    return minutes > 0 ? `${minutes}分${String(seconds).padStart(2, '0')}秒` : `${seconds}秒`
+  }
+
+  function laneElapsed(run) {
+    const start = Date.parse(run.createdAt)
+    const end = isTerminal(run.status) ? Date.parse(run.finishedAt) : Date.now()
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return ''
+    return formatClock(end - start)
+  }
+
+  function tickLaneClocks() {
+    for (const node of messagesEl.querySelectorAll('.lane-time')) {
+      const started = Number(node.dataset.started)
+      if (!Number.isFinite(started) || node.dataset.started === '') continue
+      const finished = node.dataset.finished ? Number(node.dataset.finished) : Date.now()
+      if (!Number.isFinite(finished)) continue
+      node.textContent = formatClock(finished - started)
+    }
+  }
+
+  function syncStopAll() {
+    const active = STATE.runs.filter(run => !isTerminal(run.status))
+    stopAllEl.hidden = active.length === 0
+    stopAllEl.disabled = STATE.mode !== 'chat' || active.length === 0 || STATE.stopAllBusy
+    stopAllEl.textContent = STATE.stopAllBusy ? '正在停止…' : '停止这一轮'
+  }
+
+  async function stopRun(runId) {
+    if (!runId || STATE.cancelRequested.has(runId)) return
+    STATE.cancelRequested.add(runId)
+    renderLanes()
+    try {
+      await api(`/api/console/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' })
+      pushToast('已请求停止，等宿主确认。', 'ok')
+    } catch (error) {
+      STATE.cancelRequested.delete(runId)
+      renderLanes()
+      pushToast(`无法停止这条任务线：${messageOf(error)}`, 'err')
+    }
+  }
+
+  async function stopAllRuns() {
+    const active = STATE.runs.filter(run => !isTerminal(run.status) && !STATE.cancelRequested.has(run.id))
+    if (active.length === 0) return
+    STATE.stopAllBusy = true
+    syncStopAll()
+    for (const run of active) STATE.cancelRequested.add(run.id)
+    renderLanes()
+    for (const run of active) {
+      try {
+        await api(`/api/console/runs/${encodeURIComponent(run.id)}/cancel`, { method: 'POST' })
+      } catch (error) {
+        STATE.cancelRequested.delete(run.id)
+        pushToast(`有任务线没停下来：${messageOf(error)}`, 'err')
+      }
+    }
+    STATE.stopAllBusy = false
+    renderLanes()
+    syncStopAll()
+    pushToast('已请求停止这一轮。', 'ok')
+  }
+
   function stepLabel(subtask) {
     return subtask.title || `步骤 ${subtask.index ?? ''}`.trim()
   }
 
   function currentAction(run) {
     const subtasks = Array.isArray(run.subtasks) ? run.subtasks : []
+    if (STATE.cancelRequested.has(run.id) && !isTerminal(run.status)) return '已请求停止，等宿主确认'
     if (run.status === 'queued') return '排队，等前一条任务线让出位置'
     if (run.status === 'planning') return '正在拆步骤'
     if (run.status === 'aggregating') return '正在汇总各步骤的结果'
@@ -1162,14 +1373,22 @@
     return '正在推进'
   }
 
+  /** Tools the running steps report right now; empty when unknown, never guessed. */
+  function runningToolsOf(run) {
+    const subtasks = Array.isArray(run.subtasks) ? run.subtasks : []
+    return [...new Set(subtasks
+      .filter(subtask => subtask.status === 'running' && typeof subtask.tool === 'string' && subtask.tool)
+      .map(subtask => subtask.tool))]
+  }
+
   function laneSignature(run) {
     const steps = Array.isArray(run.subtasks)
-      ? run.subtasks.map(subtask => `${subtask.status}:${subtask.title}`).join(',')
+      ? run.subtasks.map(subtask => `${subtask.status}:${subtask.title}:${subtask.tool || ''}`).join(',')
       : ''
     const attention = Array.isArray(run.attention)
       ? run.attention.map(item => `${item.id}:${item.question}`).join(',')
       : ''
-    return [run.status, steps, attention, run.report ? run.report.length : 0, run.finishedAt || ''].join('|')
+    return [run.status, steps, attention, run.report ? run.report.length : 0, run.finishedAt || '', STATE.cancelRequested.has(run.id) ? 'stopping' : ''].join('|')
   }
 
   /**
@@ -1195,18 +1414,201 @@
     return items.slice(0, 12)
   }
 
+  function artifactName(item) {
+    return item.href.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || item.href
+  }
+
+  function artifactUrl(item) {
+    if (/^https?:\/\//i.test(item.href)) return item.href
+    return `/api/console/artifact?path=${encodeURIComponent(item.href)}&runId=${encodeURIComponent(item.runId)}&token=${encodeURIComponent(STATE.token)}`
+  }
+
   function artifactElement(item) {
     const isUrl = /^https?:\/\//i.test(item.href)
-    const link = el('a', 'artifact')
-    link.href = isUrl
-      ? item.href
-      : `/api/console/artifact?path=${encodeURIComponent(item.href)}&runId=${encodeURIComponent(item.runId)}&token=${encodeURIComponent(STATE.token)}`
+    const button = el('button', 'artifact')
+    button.type = 'button'
+    button.title = item.href
+    button.append(el('span', 'ak', isUrl ? '页面' : '文件'))
+    button.append(el('span', 'an', artifactName(item)))
+    button.addEventListener('click', () => previewArtifact(item))
+    return button
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, ch => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+    ))
+  }
+
+  /** Inline spans a report actually uses: code, bold, http links. */
+  function inlineMarkdown(text) {
+    return escapeHtml(text)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+  }
+
+  /**
+   * Minimal Markdown for run reports: headings, lists, fenced code, paragraphs.
+   * Everything is escaped before markup is added, so a report cannot inject HTML.
+   */
+  function renderMarkdownInto(container, text) {
+    container.textContent = ''
+    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n')
+    let list = null
+    let listTag = ''
+    let buffer = []
+    const closeList = () => { list = null; listTag = '' }
+    const flushParagraph = () => {
+      if (buffer.length === 0) return
+      const para = el('p')
+      para.innerHTML = inlineMarkdown(buffer.join('\n')).replace(/\n/g, '<br>')
+      container.append(para)
+      buffer = []
+    }
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i]
+      const fence = line.match(/^\s*```(\S*)\s*$/)
+      if (fence) {
+        flushParagraph()
+        closeList()
+        const code = []
+        i += 1
+        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
+          code.push(lines[i])
+          i += 1
+        }
+        const pre = el('pre')
+        pre.append(el('code', '', code.join('\n')))
+        container.append(pre)
+        continue
+      }
+      if (!line.trim()) {
+        flushParagraph()
+        closeList()
+        continue
+      }
+      if (/^\s*(?:---+|\*\*\*+)\s*$/.test(line)) {
+        flushParagraph()
+        closeList()
+        container.append(el('hr'))
+        continue
+      }
+      const heading = line.match(/^(#{1,4})\s+(.*)$/)
+      if (heading) {
+        flushParagraph()
+        closeList()
+        const node = el(`h${heading[1].length}`)
+        node.innerHTML = inlineMarkdown(heading[2])
+        container.append(node)
+        continue
+      }
+      const bullet = line.match(/^\s*[-*+]\s+(.*)$/)
+      const ordered = line.match(/^\s*\d+[.)]\s+(.*)$/)
+      if (bullet || ordered) {
+        flushParagraph()
+        const tag = bullet ? 'ul' : 'ol'
+        if (!list || listTag !== tag) {
+          list = el(tag)
+          listTag = tag
+          container.append(list)
+        }
+        const item = el('li')
+        item.innerHTML = inlineMarkdown((bullet || ordered)[1])
+        list.append(item)
+        continue
+      }
+      buffer.push(line)
+    }
+    flushParagraph()
+    closeList()
+  }
+
+  function previewFrame(src) {
+    const frame = el('iframe')
+    frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-forms')
+    frame.setAttribute('referrerpolicy', 'no-referrer')
+    frame.src = src
+    return frame
+  }
+
+  function setDialogActions(nodes) {
+    dialogActionsEl.textContent = ''
+    const items = Array.isArray(nodes) ? nodes : []
+    for (const node of items) dialogActionsEl.append(node)
+    dialogActionsEl.hidden = items.length === 0
+  }
+
+  function externalArtifactLink(item) {
+    const link = el('a', 'btn', '新标签打开')
+    link.href = artifactUrl(item)
     link.target = '_blank'
     link.rel = 'noopener'
-    link.title = item.href
-    link.append(el('span', 'ak', isUrl ? '页面' : '文件'))
-    link.append(el('span', 'an', item.href.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || item.href))
     return link
+  }
+
+  /**
+   * Show an artifact in place. Markdown is rendered, HTML runs in a sandboxed
+   * frame (the route already ships a sandbox CSP), images and PDFs render
+   * natively, and anything else falls back to its text. The original file stays
+   * one click away from the dialog footer.
+   */
+  async function previewArtifact(item) {
+    const isUrl = /^https?:\/\//i.test(item.href)
+    const name = artifactName(item)
+    const ext = (name.split('.').pop() || '').toLowerCase()
+    dialogTitleEl.textContent = name
+    dialogMetaEl.textContent = ''
+    dialogMetaEl.append(el('span', '', isUrl ? item.href : `产物 · ${item.href}`))
+    dialogReportEl.textContent = ''
+    setDialogActions([externalArtifactLink(item)])
+    const url = artifactUrl(item)
+    if (isUrl) {
+      dialogReportEl.append(previewFrame(url))
+      reportDialogEl.showModal()
+      return
+    }
+    if (ext === 'html' || ext === 'htm') {
+      dialogReportEl.append(previewFrame(url))
+      reportDialogEl.showModal()
+      return
+    }
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) {
+      const image = el('img', 'image-preview')
+      image.src = url
+      image.alt = name
+      dialogReportEl.append(image)
+      reportDialogEl.showModal()
+      return
+    }
+    if (ext === 'pdf') {
+      dialogReportEl.append(previewFrame(url))
+      reportDialogEl.showModal()
+      return
+    }
+    const loading = el('p', '', '正在读取…')
+    dialogReportEl.append(loading)
+    reportDialogEl.showModal()
+    let text = ''
+    try {
+      const response = await fetch(url)
+      if (!response.ok) {
+        throw new Error(response.status === 415
+          ? '这个类型不能在控制台里预览'
+          : `读取失败（HTTP ${response.status}）`)
+      }
+      text = await response.text()
+    } catch (error) {
+      dialogReportEl.textContent = `读取失败：${messageOf(error)}`
+      return
+    }
+    dialogReportEl.textContent = ''
+    if (ext === 'md' || ext === 'markdown') renderMarkdownInto(dialogReportEl, text)
+    else {
+      const pre = el('pre')
+      pre.append(el('code', '', text))
+      dialogReportEl.append(pre)
+    }
   }
 
   function resetLanes() {
@@ -1280,45 +1682,6 @@
         next.focus()
         try { next.setSelectionRange(next.value.length, next.value.length) } catch {}
       }
-    }
-    renderAdvancedRuns()
-    renderHistory()
-  }
-
-  function renderHistory() {
-    if (historyDrawerEl.hidden) return
-    historyListEl.replaceChildren()
-    const entries = []
-    for (const message of STATE.messages) {
-      if (message.role !== 'user') continue
-      entries.push({
-        message,
-        runs: STATE.runs.filter(run => STATE.runAnchors.get(run.id) === message.id),
-      })
-    }
-    if (entries.length === 0) {
-      historyListEl.append(el('p', 'adv-note', '还没有下达过任务。'))
-      return
-    }
-    for (const entry of entries.reverse()) {
-      const item = el('div', 'hist-item')
-      const top = el('div', 'hist-top')
-      top.append(el('span', '', timeLabel(entry.message.at)))
-      if (entry.runs.length > 0) {
-        const done = entry.runs.filter(run => run.status === 'completed').length
-        top.append(el('span', 'hist-state', `${done}/${entry.runs.length} 条任务线完成`))
-      }
-      item.append(top)
-      item.append(el('div', 'hist-text', entry.message.text))
-      const artifacts = []
-      const seen = new Set()
-      for (const run of entry.runs) {
-        for (const artifact of artifactsOf(run)) {
-          if (seen.has(artifact.href)) continue
-          seen.add(artifact.href)
-          artifacts.push(artifact)
-        }
-      }
       if (artifacts.length > 0) {
         const chips = el('div', 'artifacts')
         for (const artifact of artifacts) chips.append(artifactElement(artifact))
@@ -1331,6 +1694,79 @@
         entry.message.el?.classList.add('flash')
         setTimeout(() => entry.message.el?.classList.remove('flash'), 1200)
       })
+      historyListEl.append(item)
+    }
+    renderAdvancedRuns()
+    for (const id of [...STATE.cancelRequested]) {
+      const run = STATE.runs.find(item => item.id === id)
+      if (!run || isTerminal(run.status)) STATE.cancelRequested.delete(id)
+    }
+    syncStopAll()
+    renderHistory()
+  }
+
+  async function loadSessions() {
+    if (STATE.sessionsBusy) return
+    STATE.sessionsBusy = true
+    renderHistory()
+    try {
+      const data = await api('/api/console/sessions')
+      STATE.sessions = Array.isArray(data.sessions) ? data.sessions : []
+      STATE.sessionsLoadedAt = Date.now()
+      STATE.sessionNote = data.reason || null
+    } catch (error) {
+      STATE.sessions = []
+      STATE.sessionNote = messageOf(error)
+    } finally {
+      STATE.sessionsBusy = false
+      renderHistory()
+    }
+  }
+
+  /**
+   * Reopen a conversation the host already has. The page reloads so the normal
+   * bootstrap/follow path rebuilds the thread, cards and artifacts — the same
+   * code that serves a fresh page load, not a second renderer.
+   */
+  async function switchToSession(sessionId) {
+    if (!sessionId || sessionId === STATE.sessionId) {
+      drawerClose()
+      return
+    }
+    try {
+      await api('/api/console/session/switch', { method: 'POST', body: { sessionId } })
+      window.location.reload()
+    } catch (error) {
+      pushToast(`无法打开那条对话：${messageOf(error)}`, 'err')
+    }
+  }
+
+  function renderHistory() {
+    if (historyDrawerEl.hidden) return
+    historyListEl.replaceChildren()
+    if (STATE.sessionsBusy && STATE.sessions.length === 0) {
+      historyListEl.append(el('p', 'adv-note', '正在读取对话…'))
+      return
+    }
+    if (STATE.sessionNote) {
+      historyListEl.append(el('p', 'adv-note', `无法读取历史：${STATE.sessionNote}`))
+    }
+    if (STATE.sessions.length === 0) {
+      historyListEl.append(el('p', 'adv-note', '还没有可回看的对话。'))
+      return
+    }
+    for (const session of STATE.sessions) {
+      const current = session.sessionId === STATE.sessionId
+      const item = el('div', `hist-item${current ? ' current' : ''}`)
+      const top = el('div', 'hist-top')
+      const when = session.updatedAt ? timeLabel(new Date(session.updatedAt).toISOString()) : '时间未知'
+      top.append(el('span', '', when))
+      if (current) top.append(el('span', 'hist-state', '当前'))
+      else if (session.running) top.append(el('span', 'hist-state', '进行中'))
+      if (session.runs > 0) top.append(el('span', 'hist-state', `${session.runs} 轮 · ${session.artifacts} 个产物`))
+      item.append(top)
+      item.append(el('div', 'hist-text', session.first || session.title || '（这条对话还没有内容）'))
+      item.addEventListener('click', () => switchToSession(session.sessionId))
       historyListEl.append(item)
     }
   }
@@ -1386,11 +1822,31 @@
     const action = currentAction(run)
     if (action) {
       const line = el('div', 'lane-now')
-      if (!isTerminal(run.status)) line.append(el('span', 'spark'))
+      if (!isTerminal(run.status) && !STATE.cancelRequested.has(run.id)) line.append(el('span', 'spark'))
       line.append(el('span', '', action))
+      const tools = runningToolsOf(run)
+      if (tools.length > 0) line.append(el('span', 'lane-tool', ` · 工具 ${tools.join('、')}`))
       title.append(line)
     }
     head.append(title)
+    const clock = el('span', 'lane-time', laneElapsed(run))
+    clock.dataset.started = Number.isFinite(Date.parse(run.createdAt)) ? String(Date.parse(run.createdAt)) : ''
+    clock.dataset.finished = isTerminal(run.status) && Number.isFinite(Date.parse(run.finishedAt))
+      ? String(Date.parse(run.finishedAt))
+      : ''
+    if (!clock.textContent) clock.hidden = true
+    head.append(clock)
+    if (!isTerminal(run.status)) {
+      const stopping = STATE.cancelRequested.has(run.id)
+      const stop = el('button', `lane-stop${stopping ? ' stopping' : ''}`, stopping ? '停止中…' : '停止')
+      stop.type = 'button'
+      stop.disabled = stopping
+      stop.addEventListener('click', event => {
+        event.stopPropagation()
+        stopRun(run.id)
+      })
+      head.append(stop)
+    }
     head.append(el('span', `status-pill ${statusClass(run.status)}`, laneStatusText(run)))
     card.append(head)
 
@@ -1576,6 +2032,56 @@
     return approval.source || '这条对话'
   }
 
+  /** Raw arguments of the blocked call, from the request or the streamed chip. */
+  function approvalArguments(approval) {
+    const candidates = [approval.callArguments]
+    const call = approval.callId ? STATE.toolCalls.get(approval.callId) : null
+    if (call && call.arguments) candidates.push(call.arguments)
+    for (const raw of candidates) {
+      if (typeof raw !== 'string' || !raw.trim()) continue
+      try {
+        return { parsed: JSON.parse(raw), text: raw }
+      } catch {
+        return { parsed: null, text: raw }
+      }
+    }
+    return null
+  }
+
+  const CALL_PREVIEW_LIMIT = 4000
+
+  /**
+   * Spell out what the blocked call would actually do: a write shows the text
+   * it would put on disk, a shell call shows the full command, everything else
+   * shows the raw arguments.
+   */
+  function approvalCallPreview(approval) {
+    const args = approvalArguments(approval)
+    if (!args) return null
+    const parsed = args.parsed && typeof args.parsed === 'object' ? args.parsed : null
+    const pick = (...keys) => {
+      if (!parsed) return ''
+      for (const key of keys) {
+        if (typeof parsed[key] === 'string' && parsed[key].trim()) return parsed[key]
+      }
+      return ''
+    }
+    const tool = `${approval.toolName || ''}`.toLowerCase()
+    const clip = value => (value.length > CALL_PREVIEW_LIMIT
+      ? { text: `${value.slice(0, CALL_PREVIEW_LIMIT)}\n…`, note: `共 ${value.length} 字符，这里先看前 ${CALL_PREVIEW_LIMIT} 字符。` }
+      : { text: value, note: '' })
+    if (/write|edit|patch|apply|create|append/.test(tool)) {
+      const body = pick('content', 'contents', 'text', 'new_string', 'newText', 'patch', 'diff')
+      if (body) return { label: '要写入的内容', ...clip(body) }
+    }
+    if (/shell|bash|command|exec|terminal|cmd|powershell|run/.test(tool)) {
+      const command = pick('command', 'cmd', 'script', 'input')
+        || (typeof args.parsed === 'string' ? args.parsed : '')
+      if (command) return { label: '要执行的命令', ...clip(command) }
+    }
+    return { label: '调用参数', ...clip(args.text) }
+  }
+
   function approvalCard(approval) {
     const card = el('div', 'approval-card')
     card.dataset.approvalId = approval.id
@@ -1588,17 +2094,51 @@
     if (target) card.append(el('div', 'where', `要动的位置：${target}`))
     const reason = approval.displayReason?.zh || approval.reason
     card.append(el('p', 'why', reason || '宿主的工具调用被拦住了，需要你明确决定这一次。'))
+    const preview = approvalCallPreview(approval)
+    if (preview) {
+      const details = el('details', 'call')
+      details.append(el('summary', '', preview.label))
+      details.append(el('pre', '', preview.text))
+      if (preview.note) details.append(el('div', 'note', preview.note))
+      card.append(details)
+    }
+    const expiresAt = Date.parse(approval.expiresAt || '')
+    if (Number.isFinite(expiresAt)) {
+      const expiry = el('div', 'expiry')
+      expiry.dataset.expiresAt = String(expiresAt)
+      card.append(expiry)
+      updateApprovalClock(expiry)
+    }
     card.append(el('div', 'state', '等待你的决定…'))
     const options = el('div', 'options')
     const allow = el('button', 'allow', '允许这一次')
     allow.type = 'button'
     allow.addEventListener('click', () => decideApproval(approval.id, 'allow'))
+    const allowTool = el('button', 'allow-tool', `本会话内允许 ${approval.toolName || '这个工具'}`)
+    allowTool.type = 'button'
+    allowTool.title = '这一轮对话里同一个工具不再逐次询问；换对话或新对话后恢复询问。'
+    allowTool.addEventListener('click', () => decideApproval(approval.id, 'allow-tool'))
     const reject = el('button', 'reject', '拒绝')
     reject.type = 'button'
     reject.addEventListener('click', () => decideApproval(approval.id, 'reject'))
-    options.append(allow, reject)
+    options.append(allow, allowTool, reject)
     card.append(options)
     return card
+  }
+
+  /** Keeping the deadline visible beats letting the ask silently expire. */
+  function updateApprovalClock(node) {
+    const expiresAt = Number(node.dataset.expiresAt)
+    if (!Number.isFinite(expiresAt)) return
+    const left = expiresAt - Date.now()
+    node.classList.toggle('soon', left > 0 && left <= 60_000)
+    node.classList.toggle('over', left <= 0)
+    if (left <= 0) node.textContent = `已超过有效期（${timeLabel(expiresAt)}），宿主会按拒绝处理；再发起会重新询问。`
+    else node.textContent = `剩余有效时间 ${formatClock(left)}（约到 ${timeLabel(expiresAt)}）`
+  }
+
+  function updateApprovalClocks() {
+    for (const node of messagesEl.querySelectorAll('.approval-card .expiry')) updateApprovalClock(node)
   }
 
   function settleApprovalNode(entry) {
@@ -1607,9 +2147,12 @@
     const state = entry.node.querySelector('.state')
     if (!state) return
     if (entry.decided === 'allow') state.textContent = '已允许这一次（只对这一条调用生效）'
+    else if (entry.decided === 'allow-tool') state.textContent = `已允许，并在本会话内放行 ${entry.approval?.toolName || '这个工具'}（换对话后恢复询问）`
     else if (entry.decided === 'reject') state.textContent = '已拒绝'
+    else if (entry.decided === 'expired') state.textContent = '已过有效期，宿主按拒绝处理'
     else if (entry.decided === 'cancelled') state.textContent = '没有回答，按拒绝处理'
     else state.textContent = '等待你的决定…'
+    if (entry.decided) entry.node.querySelector('.expiry')?.remove()
   }
 
   function seatApproval(approval) {
@@ -1646,15 +2189,18 @@
     if (!entry || entry.decided) return
     const state = entry.node.querySelector('.state')
     for (const button of entry.node.querySelectorAll('button')) button.disabled = true
-    if (state) state.textContent = decision === 'allow' ? '正在允许这一次…' : '正在拒绝…'
+    const pending = { allow: '正在允许这一次…', 'allow-tool': '正在允许这个工具…', reject: '正在拒绝…' }
+    if (state) state.textContent = pending[decision] || '正在提交…'
     try {
       await api('/api/console/approval', { method: 'POST', body: { id, decision } })
       entry.decided = decision
       settleApprovalNode(entry)
-      pushToast(
-        decision === 'allow' ? '已允许这一次；只对这一条调用生效。' : '已拒绝这一条调用。',
-        'ok',
-      )
+      const done = {
+        allow: '已允许这一次；只对这一条调用生效。',
+        'allow-tool': '已允许：本会话内同一个工具不再询问（换对话后恢复）。',
+        reject: '已拒绝这一条调用。',
+      }
+      pushToast(done[decision] || '已提交。', 'ok')
     } catch (error) {
       for (const button of entry.node.querySelectorAll('button')) button.disabled = false
       if (state) state.textContent = `没有提交成功：${messageOf(error)}`
@@ -1674,7 +2220,12 @@
         data.finishedAt ? `结束 ${timeLabel(data.finishedAt)}` : null,
       ].filter(Boolean)
       for (const value of meta) dialogMetaEl.append(el('span', '', value))
-      dialogReportEl.textContent = data.report || '(这个 run 还没有报告)'
+      setDialogActions([])
+      if (data.report) renderMarkdownInto(dialogReportEl, data.report)
+      else {
+        dialogReportEl.textContent = ''
+        dialogReportEl.append(el('p', '', '(这个 run 还没有报告)'))
+      }
       reportDialogEl.showModal()
     } catch (error) {
       pushToast(`读取报告失败：${messageOf(error)}`, 'err')
@@ -1735,12 +2286,16 @@
         if (frame.action === 'asked' && approval && approval.id) {
           seatApproval(approval)
           pushToast('有一个工具调用在等你决定。', 'warn')
+        } else if (frame.action === 'auto') {
+          pushToast(`已按本会话的许可放行 ${frame.toolName || '这个工具'}，没有再打断你。`, 'ok')
         } else if ((frame.action === 'decided' || frame.action === 'expired') && frame.id) {
           const entry = STATE.approvals.get(frame.id)
           if (entry) {
             entry.decided = frame.action === 'expired'
-              ? 'cancelled'
-              : frame.outcome === 'allowed-once' ? 'allow' : frame.outcome === 'rejected' ? 'reject' : 'cancelled'
+              ? 'expired'
+              : frame.scope === 'tool' ? 'allow-tool'
+                : frame.outcome === 'allowed-once' ? 'allow'
+                  : frame.outcome === 'rejected' ? 'reject' : 'cancelled'
             settleApprovalNode(entry)
           }
         }
@@ -1752,6 +2307,12 @@
         break
       case 'answered':
         pushToast(`已提交 ${frame.attentionId || '决定'}。`, 'ok')
+        break
+      case 'canceling':
+        if (frame.runId) {
+          STATE.cancelRequested.add(frame.runId)
+          renderLanes()
+        }
         break
       case 'error':
         if (frame.code === 'follow-failed' || frame.code === 'state-failed') {
@@ -2697,6 +3258,7 @@
       if (STATE.streamAbort) STATE.streamAbort.abort()
       setSession(data.sessionId)
       STATE.approvals.clear()
+      STATE.cancelRequested.clear()
       clearMessages()
       STATE.runs = []
       renderLanes()
@@ -2753,7 +3315,10 @@
     advancedDrawerEl.hidden = target !== advancedDrawerEl
     scrimEl.hidden = false
     target.hidden = false
-    if (which === 'history') renderHistory()
+    if (which === 'history') {
+      renderHistory()
+      loadSessions()
+    }
     else renderAdvancedRuns()
   }
 
@@ -2797,6 +3362,11 @@
   }
 
   newChatEl.addEventListener('click', newConversation)
+  stopAllEl.addEventListener('click', stopAllRuns)
+  setInterval(() => {
+    tickLaneClocks()
+    updateApprovalClocks()
+  }, 1000)
   $('historyOpen').addEventListener('click', () => drawerOpen('history'))
   $('advancedOpen').addEventListener('click', () => drawerOpen('advanced'))
   for (const button of document.querySelectorAll('[data-close]')) {
