@@ -38,6 +38,7 @@ test('questions and plans are answerable where the user already is', () => {
   assert.ok(source.includes('item.options'), 'plan confirmations render one-tap options')
   assert.ok(source.includes("item.source === 'plan'"), 'plan confirmations say so')
   assert.ok(source.includes('unread'), 'new questions raise an unread count')
+  assert.ok(source.includes("frame.action === 'expired'"), 'an expired approval explains itself instead of vanishing')
 })
 
 test('the run list is clickable instead of a dead list', () => {
