@@ -8,6 +8,15 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.16.9 — 2026-11-17
+
+### 变化
+
+- **去掉输入区的「放进工作区」附件按钮。** 单会话面板不再需要手动上传文件；
+  超级智能体直接在工作区里读写文件。隐藏的 file input、上传调用、`busy`
+  状态和附件图标一并删除，输入卡右下角只保留发送/停止。
+- 输入行改为右对齐，去掉左侧工具区，避免留下空白占位。
+
 ## 0.16.8 — 2026-11-17
 
 ### 变化
