@@ -388,6 +388,28 @@ test('model-only acceptance is judged by an independent child and labeled', asyn
   assert.equal(spawner.calls.filter(call => call.label === 'superagent-accept').length, 1)
 })
 
+test('a single-worker text goal is judged on its output without a copied prompt', async () => {
+  let judgedReport
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed('{"subtasks":[{"title":"Write the example","prompt":"Write one plain-text example"}]}')
+    }
+    if (spec.label === 'superagent-accept') {
+      judgedReport = spec.prompt.split('Round 1 report:\n')[1].split('\n\nConditions')[0]
+      return completed('{"achieved":true,"failed":[],"next":""}')
+    }
+    return completed('Ready for customers.')
+  })
+  const { orchestrator, store } = orchestratorWith({ spawner })
+  const run = await orchestrator.start({
+    goal: 'Write one line of plain text', parentSessionId: parent.id, parent,
+    goalMode: { acceptance: [{ text: 'The result only contains the sentence for customers' }] },
+  })
+  await orchestrator.idle()
+  assert.equal(judgedReport, 'Ready for customers.')
+  assert.equal((await store.read(run.id)).status, 'completed')
+})
+
 test('goal mode is off by default: one plan, no rounds, no acceptance child', async () => {
   const spawner = makeSpawner(async spec => {
     if (spec.label === 'superagent-plan') {

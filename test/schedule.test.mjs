@@ -677,6 +677,7 @@ function mountScheduleTool(dir) {
   const ctx = {
     tools: { register: tool => tools.set(tool.name, tool) },
     get: () => undefined,
+    get schedule() { throw new Error('cannot get property "schedule" without inject') },
   }
   apply(ctx, { stateDir: dir, notifyOnComplete: false })
   return tools.get('superagent_schedule')
@@ -791,15 +792,39 @@ test('migrate pauses local plans and returns schedule_create payloads', async ()
       goal: 'check the release gate',
       every_minutes: 30,
       timezone: 'UTC',
+      goal_mode: true,
+      acceptance: [{ text: 'Gate exists', check: { type: 'file', path: 'gate.txt' } }],
     }, { agent: { id: OWNER } })
     const out = await tool.execute({ action: 'migrate' }, { agent: agentWithHostSchedule() })
     assert.match(out, /migration: 1 plan\(s\)/)
     assert.match(out, /"pluginId"/)
     assert.match(out, /"title": "legacy check"/)
     assert.match(out, /RRULE:FREQ=MINUTELY;INTERVAL=30/)
+    assert.match(out, /Gate exists/)
+    assert.match(out, /gate\.txt/)
     assert.match(out, /action="delete"/)
     const listed = await tool.execute({ action: 'list' }, { agent: { id: OWNER } })
     assert.match(listed, /paused: migrating to a Host scheduled task/)
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a schedule with a whole-plan cap stays enabled in the plugin after migration is requested', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-schedule-budget-'))
+  try {
+    const tool = mountScheduleTool(dir)
+    const agent = agentWithHostSchedule()
+    const out = await tool.execute({
+      action: 'create', name: 'limited check', goal: 'check the release gate', every_minutes: 30,
+      budget: { max_total_runs: 2 },
+    }, { agent })
+    assert.match(out, /local timer is armed/)
+    const migrated = await tool.execute({ action: 'migrate' }, { agent })
+    assert.match(migrated, /migration: 0 plan\(s\)/)
+    assert.match(migrated, /cannot enforce the plugin plan budget/)
+    const listed = await tool.execute({ action: 'list' }, { agent })
+    assert.doesNotMatch(listed, /paused: migrating/)
   } finally {
     await fsp.rm(dir, { recursive: true, force: true })
   }

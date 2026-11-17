@@ -104,6 +104,90 @@ function fakeHost({ sessionId = 'session-console', onPrompt = null } = {}) {
   }
 }
 
+test('a console goal and targeted instructions stay in their own conversation', async () => {
+  const { base, state } = await fixture()
+  const { host, prompts } = fakeHost()
+  const goals = []
+  const instructions = []
+  host.listGoals = async session => goals.filter(goal => goal.session === session)
+  host.createGoal = async (session, text) => {
+    const goal = { id: 'goal-1', goal: text, session, status: 'planning' }
+    goals.push(goal)
+    return goal
+  }
+  host.actOnGoal = async (session, id, action, body) => {
+    assert.equal(session, 'session-console')
+    assert.equal(id, 'goal-1')
+    assert.equal(action, 'answer')
+    assert.equal(body.decisionId, 'd1')
+    return goals[0]
+  }
+  host.instructRun = async (session, id, instruction) => {
+    instructions.push({ session, id, ...instruction })
+    return { id: 'i1', targets: [{ subtaskIndex: 2, status: 'pending' }] }
+  }
+  const panel = await startConsole(state, host)
+  try {
+    const post = (route, body) => request(panel, 'POST', `/api/console/${route}`, body)
+    const stream = await fetch(`${panel.url}/api/console/events`, { headers: { Authorization: `Bearer ${panel.token}` } })
+    assert.equal(stream.status, 200)
+    const created = await post('goals', { text: 'Prepare two deliverables' })
+    assert.equal(created.status, 200)
+    assert.equal(prompts.length, 0)
+    const frames = await collectFrames(stream, { count: 4 })
+    assert.ok(frames.some(frame => frame.type === 'session' && frame.sessionId === 'session-console'))
+    const snapshot = await request(panel, 'GET', '/api/console/state')
+    assert.equal(snapshot.json.data.goals[0].id, 'goal-1')
+    assert.equal((await post('goals/goal-1/answer', { sessionId: 'other-session', decisionId: 'd1' })).status, 409)
+    assert.equal((await post('goals/goal-1/answer', { sessionId: 'session-console', decisionId: 'd1' })).status, 200)
+    const route = 'runs/release-notes/instruction'
+    assert.equal((await post(route, { sessionId: 'other-session', mode: 'inject', subtaskIndex: 2, text: 'Address customers' })).status, 409)
+    assert.equal((await post(route, { sessionId: 'session-console', mode: 'inject', text: 'Address customers' })).status, 400)
+    const sent = await post(route, { sessionId: 'session-console', mode: 'inject', subtaskIndex: 2, text: 'Address customers' })
+    assert.equal(sent.json.data.targets[0].status, 'pending')
+    assert.deepEqual(instructions, [{ session: 'session-console', id: 'release-notes', text: 'Address customers', mode: 'inject', subtaskIndex: 2 }])
+  } finally {
+    await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('the workbench follows the active project and exposes its own task transcript and files', async () => {
+  const { base, state } = await fixture()
+  const project = path.join(base, 'project')
+  await fsp.mkdir(project)
+  await fsp.writeFile(path.join(project, 'report.txt'), 'approved report')
+  const { host } = fakeHost()
+  let name = ''
+  host.createSession = async ({ cwd }) => {
+    assert.equal(cwd, project)
+    return { sessionId: 'project-session' }
+  }
+  host.workbench = async sessionId => ({ name, project: sessionId ? { cwd: project } : null })
+  host.nameWorkbench = async value => { name = value }
+  host.sessionWorkspace = async () => project
+  host.readRun = async (sessionId, id) => sessionId === 'project-session' && id === 'run-1'
+    ? { report: '[Report](report.txt) [Outside](../private.txt)' } : null
+  host.readWorkerSession = async (sessionId, id, worker) => sessionId === 'project-session' && id === 'run-1' && worker === 'worker-1'
+    ? { title: 'Prepare report', records: [{ type: 'event', event: { type: 'assistant/message' } }] } : null
+  const panel = await startConsole(state, host)
+  try {
+    const url = '/api/console'
+    assert.equal((await request(panel, 'GET', `${url}/workbench`)).json.data.project, null)
+    assert.equal((await request(panel, 'POST', `${url}/workbench`, { name: '  交付助理  ' })).json.data.name, '交付助理')
+    assert.equal((await request(panel, 'POST', `${url}/workbench`, { name: ' ' })).status, 400)
+    assert.equal((await request(panel, 'POST', `${url}/session`, { cwd: project })).json.data.sessionId, 'project-session')
+    assert.equal((await request(panel, 'GET', `${url}/workbench`)).json.data.project.cwd, project)
+    assert.equal((await request(panel, 'GET', `${url}/runs/run-1/worker/worker-1`)).json.data.title, 'Prepare report')
+    assert.equal((await request(panel, 'GET', `${url}/runs/run-1/worker/foreign`)).status, 404)
+    assert.equal((await request(panel, 'GET', `${url}/artifact?runId=run-1&path=report.txt`)).text, 'approved report')
+    assert.equal((await request(panel, 'GET', `${url}/artifact?runId=run-1&path=${encodeURIComponent('../private.txt')}`)).status, 403)
+  } finally {
+    await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
 async function collectFrames(response, { count = 12, timeoutMs = 2500 } = {}) {
   const reader = response.body.getReader()
   const decoder = new TextDecoder()

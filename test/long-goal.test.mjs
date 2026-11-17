@@ -121,6 +121,27 @@ test('parses a fenced phase plan and rejects nonsense', () => {
   assert.match(parsePhasePlan('{"phases":"nope"}').error, /no "phases" array/)
 })
 
+test('a console phase receives its objective without sibling deliverables', async () => {
+  const root = await tempRoot('phase-scope')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  try {
+    await goals.create({
+      goal: 'Two reports: ALPHA_ONLY and BETA_ONLY', parentSessionId: agent.id, consoleOwned: true,
+      phases: [phase('p1', { objective: 'Publish ALPHA_ONLY' }), phase('p2', { objective: 'Summarize BETA_ONLY' })],
+    })
+    await goals.tick()
+    const [first, second] = orchestrator.calls.start.map(call => call.goal)
+    assert.match(first, /ALPHA_ONLY/)
+    assert.doesNotMatch(first, /BETA_ONLY/)
+    assert.match(second, /BETA_ONLY/)
+    assert.doesNotMatch(second, /ALPHA_ONLY/)
+  } finally {
+    goals.close()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
 test('rejects an invalid phase graph before creating anything', async () => {
   const root = await tempRoot('invalid')
   const orchestrator = fakeOrchestrator()

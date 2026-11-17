@@ -94,6 +94,24 @@ function makeSpawner(handle) {
   }
 }
 
+test('a long-goal dispatch reuses its completed run if the goal record was not saved', async () => {
+  const store = memoryStore()
+  const spawner = makeSpawner(() => completed('finished'))
+  const { orchestrator } = orchestratorWith({ store, spawner })
+  const args = {
+    goal: 'Prepare release notes', parentSessionId: 'owner', parent: { id: 'owner' },
+    mode: 'direct', allowDuplicate: true,
+    origin: { kind: 'long-goal', goalId: 'goal-1', phaseId: 'notes', dispatchId: 'goal-1/phase/notes/1' },
+  }
+  const first = await orchestrator.start(args)
+  assert.equal((await orchestrator.status(first.id, 3)).status, 'completed')
+  const restarted = orchestratorWith({ store, spawner }).orchestrator
+  const second = await restarted.start(args)
+  assert.equal(second.id, first.id)
+  assert.equal(second.status, 'completed')
+  assert.equal(spawner.calls.length, 1)
+})
+
 function orchestratorWith({ store = memoryStore(), spawner, config = {}, setTimer, clearTimer }) {
   const notifications = []
   const orchestrator = createOrchestrator({
