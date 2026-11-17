@@ -27,6 +27,30 @@
       },
       "versions": [
         {
+          "version": "0.18.0",
+          "publishTimestamp": 1794912814,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/LittleChenLiya/dsh-superagent",
+            "commit": "838f1e02fae405063779cb541328a22927067513"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1 <0.3.0-0"
+          }
+        },
+        {
+          "version": "0.17.1",
+          "publishTimestamp": 1794912547,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/LittleChenLiya/dsh-superagent",
+            "commit": "4b91fcde737e94a43477d3427ae4c1d58f588125"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1 <0.3.0-0"
+          }
+        },
+        {
           "version": "0.17.0",
           "publishTimestamp": 1794911405,
           "source": {
