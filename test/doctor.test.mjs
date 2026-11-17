@@ -10,6 +10,7 @@ import {
   auditPackedFiles,
   auditRegistry,
   readRegisteredTools,
+  readResidentTools,
   readTarEntries,
   renderReport,
   runDoctor,
@@ -226,6 +227,12 @@ test('a lost tool registration is counted against the expected set', async t => 
   assert.equal(readRegisteredTools(indexSource({ imported: [], tools: TOOL_NAMES })).length, 14)
 })
 
+test('only ungated registrations count as resident tools', () => {
+  assert.deepEqual(readResidentTools("ctx.tools.register(defineTool({ name: 'superagent_start' }))"), ['superagent_start'])
+  assert.deepEqual(readResidentTools("registerTool(defineTool({ name: 'superagent_start' }))"), [])
+  assert.deepEqual(readResidentTools('const registerTool = (d, o) => ctx.tools.register(d, o)'), [])
+})
+
 test('node engine ranges accept the documented cases and reject older ones', () => {
   assert.equal(satisfiesRange('>=24.9.0', '24.14.1'), true)
   assert.equal(satisfiesRange('>=24.9.0', '24.8.9'), false)
@@ -318,6 +325,6 @@ test('the report is plain text with copyable fix lines and no ANSI codes', async
   assert.doesNotMatch(text, /\u001b\[/)
   assert.match(text, /\[FAIL\] Package files/)
   assert.match(text, /\n       fix:\n       add the missing entry/)
-  assert.match(text, /1 failed, 2 warning\(s\), /)
+  assert.match(text, /1 failed, 3 warning\(s\), /)
   assert.match(text, /blocking checks failed/)
 })
