@@ -250,6 +250,22 @@ test('the page lets its framer in, and only the framers that may be there', asyn
   }
 })
 
+test('the page carries both host palettes and follows the shell theme', async () => {
+  const file = new URL('../public/console.html', import.meta.url)
+  const html = await fsp.readFile(file, 'utf8')
+  // Light is the host default set, dark is the host's dark set — values copied
+  // from design-platform.css, not one palette inverted into the other.
+  assert.match(html, /:root \{[^}]*color-scheme: light/)
+  assert.match(html, /:root\[data-theme='dark'\] \{[^}]*color-scheme: dark/)
+  assert.match(html, /--bg: rgb\(255, 255, 255\)/)
+  assert.match(html, /--bg: rgb\(21, 21, 23\)/)
+  assert.match(html, /--accent: rgb\(65, 118, 230\)/)
+  assert.match(html, /--accent: rgb\(122, 170, 255\)/)
+  // The theme rides in on the URL, and switching later needs no reload.
+  assert.match(html, /location\.search\)\.get\('theme'\)/)
+  assert.match(html, /dsh-superagent-theme/)
+})
+
 test('a Host header that is not loopback is refused before the token is checked', async () => {
   const { base, state } = await fixture()
   let panel = null

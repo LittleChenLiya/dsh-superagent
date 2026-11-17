@@ -8,6 +8,20 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.15.3 — 2026-11-17
+
+### 变化
+
+- **控制台改成宿主自己的样子。** 配色不再自备一套，直接从 DSH 的主题定义里取：
+  底色、层级、边框、三级文字、强调色全部对齐宿主，绿色不再当主色；深色与浅色
+  两套都是宿主真实的色值，不是把一套反相凑出来。
+- **跟着宿主换主题。** 控制台不再自带主题开关：打开时按宿主当前主题渲染，宿主
+  切换外观后即时跟随，不用刷新页面。
+- **控件对齐宿主。** 主/次/图标/危险按钮、输入框、分段选择、标签、分隔线、滚动条、
+  焦点环、提示条、空状态都按宿主的尺寸与状态统一：32px 高、8px 圆角、13px/500，
+  hover 与 active 用宿主交互色，焦点环 2px 用宿主业务色。
+- **提示与出错面板**改用宿主 token（文字层级、描边、悬停底色），不再自带一套圆药丸。
+
 ## 0.15.2 — 2026-11-17
 
 ### 变化
