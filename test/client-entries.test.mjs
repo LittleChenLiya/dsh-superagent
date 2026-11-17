@@ -31,6 +31,8 @@ test('the panel previews artifacts and renders attention', () => {
   assert.ok(source.includes('download=1'), 'artifacts can be downloaded')
   assert.ok(source.includes('artifactsOf'), 'run reports are parsed into artifact rows')
   assert.ok(source.includes('run.attention'), 'runs expose the questions waiting for a person')
+  assert.ok(source.includes("type: 'artifact'") && source.includes('previewBusy'), 'clicking an artifact previews it in place')
+  assert.ok(source.includes("sandbox: ''"), 'HTML previews run inside a sandboxed frame')
 })
 
 test('questions and plans are answerable where the user already is', () => {
