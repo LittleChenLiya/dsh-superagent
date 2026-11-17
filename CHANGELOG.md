@@ -8,6 +8,10 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.22.1 — 2026-11-17
+
+- 问答卡的回答按钮不再转发空的 `type`，避免宿主按钮在表单里退化成提交按钮。
+
 ## 0.22.0 — 2026-11-17
 
 - 面板按宿主设计重做：思考与工具行进改用宿主 24px 过程行（DisclosureRow/TextShimmer），
