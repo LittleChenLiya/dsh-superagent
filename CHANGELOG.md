@@ -8,6 +8,23 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.16.4 — 2026-11-17
+
+### 变化
+
+- **默认布局回到单列。** 打开时只有正文，没有常驻右栏；会话/任务线列表默认
+  收起，和普通会话一致。
+- **右栏改成可展开的抽屉。** 头栏放宿主 `IconPanelLeft` 图标按钮展开/收起，
+  快捷键 `Ctrl/Cmd+Shift+B`，`Esc` 关闭；状态存 `localStorage`
+  （`dsh-superagent.rail-open`），下次打开保持上次选择。
+- **展开不挤压正文。** 抽屉用绝对定位浮在正文右侧（`z-index` 30、
+  `shadow lv2`、最大宽度 `min(84vw, 320px)`），正文列宽仍按宿主
+  `--dsh-chat-user-width` 公式计算，窄窗口下也是浮层而不是横向挤压。
+- **收起时保留最小信息。** 按钮上显示运行中任务线的数字徽标（超过 9 显示
+  `9+`），不再为了状态保留一整列。
+- **头栏标题固定为「超级智能体」。** 去掉自动生成的会话名和面包屑分隔斜杠；
+  会话名仍保留在数据层与抽屉列表里，不再当页面标题展示。
+
 ## 0.16.3 — 2026-11-17
 
 ### 修复
