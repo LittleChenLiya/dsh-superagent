@@ -8,6 +8,26 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.17.0 — 2026-11-17
+
+### 新增
+
+- **面板终于能进控制台的能力了。** 标题栏新增「会话」：当前对话、最近 12 条
+  历史、「新对话」都在一步之内；点击历史直接切换，不再需要另开控制台页面。
+- **任务线可点开。** 右侧「调度的会话」每一行不再是死的状态条，点开后能看到
+  这条 run 的状态、正在等你回答的问题、报告里引用的产物和执行报告；可以单独
+  停止这一条 run。
+- **回答待决策。** 详情里直接显示 `attention` 问题，输入答案即调
+  `POST /answer`，不需要回到控制台页。
+- **上传与产物预览。** 输入卡左侧「+」把文件收进当前对话工作区，成功后路径
+  自动落进输入框；产物点开走同源中继的 `/artifact`，不再需要手拼 token。
+
+### 说明
+
+- 入口复用已有的 `/superagent/api` 同源中继，没有引入 iframe，也没有把 token
+  带到浏览器；`/superagent/console-address` 仍保留给需要独立页的场景。
+- 缺口清单与后续阶段见 `docs/GAPS-TRAEB.md`。
+
 ## 0.16.10 — 2026-11-17
 
 ### 修复
