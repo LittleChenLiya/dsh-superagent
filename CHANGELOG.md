@@ -8,6 +8,14 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.16.7 — 2026-11-17
+
+### 变化
+
+- **头栏只留边栏开合按钮。** 去掉「刷新」按钮和「已连接 / 流中断 / 连接中」
+  状态文字，清理对应的 `refresh` 动作、`conn` 状态与状态点样式；重连仍由
+  面板自动进行，初次加载失败时保留原有的错误页与「重试」。
+
 ## 0.16.6 — 2026-11-17
 
 ### 变化
