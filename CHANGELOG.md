@@ -8,6 +8,17 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.16.6 — 2026-11-17
+
+### 变化
+
+- **删掉头栏的「新建会话」。** 单会话模型下它没有意义；`new-session` 动作、
+  新建图标一并移除。头栏只剩「刷新」和边栏开合两个按钮。
+- **清掉前端最后的会话列表逻辑。** 删除 `/sessions` 拉取、`sessions` /
+  `sessionsReason` 状态和 `runs` 帧触发的列表刷新，前端不再有任何多会话
+  展示或切换路径；当前 `sessionId` 只用于发消息和取消回合。
+- 右栏仍然只展示超级智能体调度的会话（目标 + 状态 + 运行中数量）。
+
 ## 0.16.5 — 2026-11-17
 
 ### 变化
