@@ -7,7 +7,7 @@ import test from 'node:test'
 import { CronError } from '../lib/cron.js'
 import { apply } from '../lib/index.js'
 import { createOrchestrator } from '../lib/orchestrator.js'
-import { createScheduler, formatScheduleList } from '../lib/schedule.js'
+import { createScheduler, formatScheduleList, rruleFromCron, rruleWithStart } from '../lib/schedule.js'
 
 const OWNER = 'session-owner'
 
@@ -671,3 +671,136 @@ async function waitFor(predicate, timeoutMs = 2000) {
     await new Promise(resolve => setTimeout(resolve, 5))
   }
 }
+
+function mountScheduleTool(dir) {
+  const tools = new Map()
+  const ctx = {
+    tools: { register: tool => tools.set(tool.name, tool) },
+    get: () => undefined,
+  }
+  apply(ctx, { stateDir: dir, notifyOnComplete: false })
+  return tools.get('superagent_schedule')
+}
+
+function agentWithHostSchedule(depth = 0) {
+  return {
+    id: OWNER,
+    session: { header: { delegationDepth: depth }, cwd: process.cwd() },
+    ctx: { tools: { get: name => (name === 'schedule_create' ? { name: 'schedule_create' } : undefined) } },
+  }
+}
+
+test('cron is only converted to RRULE when the mapping is exact', () => {
+  assert.equal(rruleFromCron('*/15 * * * *'), 'FREQ=MINUTELY;INTERVAL=15')
+  assert.equal(rruleFromCron('30 8 * * *'), 'FREQ=DAILY;BYHOUR=8;BYMINUTE=30')
+  assert.equal(rruleFromCron('0 9 * * MON-FRI'), 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0')
+  assert.equal(rruleFromCron('30 8 * * 1-5,0'), 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SU;BYHOUR=8;BYMINUTE=30')
+  assert.equal(rruleFromCron('15 2 1 * *'), null, 'day-of-month has no place in the host DAILY shape')
+  assert.equal(rruleFromCron('0 9 * * MON#2'), null)
+  assert.equal(
+    rruleWithStart('FREQ=DAILY;BYHOUR=8;BYMINUTE=30', 'Asia/Shanghai', Date.UTC(2026, 10, 17, 1, 2, 3)),
+    'DTSTART;TZID=Asia/Shanghai:20261117T090203\nRRULE:FREQ=DAILY;BYHOUR=8;BYMINUTE=30',
+  )
+})
+
+test('a session that can call schedule_create gets a handoff, not a plugin timer', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-schedule-handoff-'))
+  try {
+    const tool = mountScheduleTool(dir)
+    const out = await tool.execute({
+      action: 'create',
+      name: 'gate check',
+      goal: 'check the release gate',
+      cron: '0 9 * * 1-5',
+      timezone: 'Asia/Shanghai',
+    }, { agent: agentWithHostSchedule() })
+    assert.match(out, /handoff/)
+    assert.match(out, /schedule_create/)
+    assert.match(out, /DTSTART;TZID=Asia\/Shanghai:\d{8}T\d{6}/)
+    assert.match(out, /RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0/)
+    assert.match(out, /"target": "this_session"/)
+    assert.match(out, /superagent_start/)
+    await assert.rejects(fsp.access(path.join(dir, 'schedules.json')), 'a handoff must not write plugin state')
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('without schedule_create the plugin keeps its timer and says why', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-schedule-local-'))
+  try {
+    const tool = mountScheduleTool(dir)
+    const out = await tool.execute({
+      action: 'create',
+      name: 'local check',
+      goal: 'check the release gate',
+      every_minutes: 15,
+      timezone: 'UTC',
+    }, { agent: { id: OWNER } })
+    assert.match(out, /plugin-local timer is armed/)
+    assert.match(out, /cannot call schedule_create/)
+    const listed = await tool.execute({ action: 'list' }, { agent: { id: OWNER } })
+    assert.match(listed, /engine: plugin-local timer \(fallback: this session cannot call schedule_create/)
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a delegated subagent falls back because the host tool would refuse it', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-schedule-child-'))
+  try {
+    const tool = mountScheduleTool(dir)
+    const out = await tool.execute({
+      action: 'create',
+      name: 'child check',
+      goal: 'check the release gate',
+      every_minutes: 15,
+      timezone: 'UTC',
+    }, { agent: agentWithHostSchedule(1) })
+    assert.match(out, /delegated subagent cannot call schedule_create/)
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a cron with no lossless RRULE mapping stays local even with the host tool', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-schedule-cron-'))
+  try {
+    const tool = mountScheduleTool(dir)
+    const out = await tool.execute({
+      action: 'create',
+      name: 'monthly check',
+      goal: 'check the release gate',
+      cron: '15 2 1 * *',
+      timezone: 'UTC',
+    }, { agent: agentWithHostSchedule() })
+    assert.match(out, /no lossless RRULE equivalent/)
+    assert.match(out, /plugin-local timer is armed/)
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('migrate pauses local plans and returns schedule_create payloads', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-schedule-migrate-'))
+  try {
+    const tool = mountScheduleTool(dir)
+    await tool.execute({
+      action: 'create',
+      name: 'legacy check',
+      goal: 'check the release gate',
+      every_minutes: 30,
+      timezone: 'UTC',
+    }, { agent: { id: OWNER } })
+    const out = await tool.execute({ action: 'migrate' }, { agent: agentWithHostSchedule() })
+    assert.match(out, /migration: 1 plan\(s\)/)
+    assert.match(out, /"pluginId"/)
+    assert.match(out, /"title": "legacy check"/)
+    assert.match(out, /RRULE:FREQ=MINUTELY;INTERVAL=30/)
+    assert.match(out, /action="delete"/)
+    const listed = await tool.execute({ action: 'list' }, { agent: { id: OWNER } })
+    assert.match(listed, /paused: migrating to a Host scheduled task/)
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})

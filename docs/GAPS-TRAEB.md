@@ -15,7 +15,7 @@
 | 4 | 审批生命周期随面板关闭被取消；默认权限让审批成摆设 | P1 | 1 |
 | 5 | 产物卡缺失 | P1 | 1 |
 | 6 | 8 个常驻工具 + 指导语对宿主所有会话生效，worker 未按深度门控 | P1 | 无 |
-| 7 | 自建 cron 未接宿主 `ctx.schedule`；守卫误杀 `node -e` | P1 | 无 |
+| 7 | 自建 cron 未交给会话的 `schedule_create`；守卫误杀 `node -e` | P1 | 无 |
 
 ---
 
@@ -206,28 +206,44 @@
 
 ## 7. 两处实现问题（P1）
 
-### 7.1 自建 cron 未接宿主 `ctx.schedule`
+### 7.1 自建 cron 未交给会话的宿主定时能力
 
-**现状**
+**现状（2026-11-17 复核，证据在宿主安装包里）**
 
-- 插件自带 `lib/cron.js`（14 KB），调度循环是 `lib/schedule.js:344` 的 `setIntervalFn`，默认 30 秒 tick（`lib/index.js:1855`）。
-- 全仓库没有任何 `ctx.schedule` 调用（检索 `ctx\.schedule` 无命中）。
-- 宿主「自动化任务」页面因此看不到这些计划，重启后只能靠插件自己的 `schedules.json` 恢复（`lib/index.js:1820-1822`）。
+- 插件上下文仍然拿不到 `ctx.schedule`：全仓库检索 `ctx\.schedule` 无命中；但这不是会话层的结论。
+- 宿主把定时能力暴露给了**会话**，不只给插件：
+  - `D:\DeepSeek Harness\resources\app.asar` 内 `dsh/node_modules/@deepseek-ai/dsh-tool-schedule/src/index.ts` 注册四个模型可见工具：`schedule_create`、`schedule_list`、`schedule_view`、`schedule_edit`（`index.ts:372-436`）。
+  - `schedule_create` 入参是 `{title, prompt, rrule, target}`，`rrule` 必须是含 `DTSTART` 的 RRULE 文档，`target` 取 `this_session | new_once | new`（`index.ts:210-237`、`370-400`）。
+  - 该工具对 `delegationDepth > 0` 的委派子会话直接返回 `subagent_session` 错误（`index.ts:307-308`）。
+  - 宿主 bundle `dsh-web-app/cordis.patch.yml:136-137` 挂了 `@deepseek-ai/dsh-schedule` 与 `ui-schedule`（定时任务管理界面）；同一文件 `agent-preset-registry` 的 `default: standard`。
+  - 三个随包 preset（`presets/standard.patch.yml`、`ptc.patch.yml`、`cordis.patch.yml`）都挂了 `@deepseek-ai/dsh-tool-schedule`。
+- 因此「会话能不能自己建定时任务」的答案是**能**，前提是调用方是根会话且 preset 带 `dsh-tool-schedule`；插件自己的 `setInterval` 不是唯一路径。
+- 插件自带 `lib/cron.js`，调度循环是 `lib/schedule.js` 的 `setIntervalFn`，默认 30 秒 tick（`lib/index.js` 里的 `createScheduler`）。
 
-**后果**
+**后果（改前）**
 
-用户在宿主的定时任务列表里看不到自己创建的 plan；宿主停掉插件时计划静默消失；两套定时器可能重复触发。
+用户在宿主的定时任务列表里看不到插件建的 plan；宿主停掉插件时计划静默消失；两套定时器可能重复触发。
 
-**改造要点**
+**改造要点（0.19.0 已落地）**
 
-- 若宿主提供 `ctx.schedule`，把 plan 注册进去，插件只保留「到点后起 run」的执行器；没有该能力时再回退到本地 tick，并在 `superagent_schedule` 的返回里说明「本宿主不显示在自动化任务」。
-- 迁移已有 `schedules.json`，保留 `id`，避免重复。
+- `superagent_schedule action="create"` 先校验时间表达式，再看调用方能否调 `schedule_create`：
+  - 能调且 cron 可无损转 RRULE → 不再建本地定时器，返回 handoff：给出可直接照抄的 `schedule_create` 参数（`title`、`prompt`、含 `DTSTART;TZID=` 的 `rrule`、`target: "this_session"`），并要求会话立即调用；调用成功前不得告诉用户计划已存在。
+  - `prompt` 里写明每次到点要执行的 `superagent_start` 参数，runs 仍归原会话。
+- 本地 `setInterval` 只在这三种情况使用，并在 `create` 与 `list` 的 `engine:` 行写明原因：
+  1. 调用方是委派子会话（`delegationDepth > 0`，宿主工具会拒绝）；
+  2. 会话拿不到 `schedule_create`（preset 未挂 `dsh-tool-schedule`）；
+  3. cron 形状无法无损转成宿主接受的 RRULE（如带 day-of-month、month 的表达式）。
+- 只做无损映射：`*/n * * * *`、`m h * * *`、`m h * * dow`（含 `MON-FRI`、数字、`0/7`）；其余一律留在本地，避免「迁移后触发时间变了」。
+- 迁移：`action="migrate"` 返回每个本地 plan 的 `schedule_create` 参数，并先把本地 plan 暂停，防止双触发；宿主任务建好后用 `action="delete"` 删除本地记录，放弃迁移则 `action="resume"`。无法无损映射的 plan 会单列出来，保持本地运行。
+- 插件上下文没有 `ctx.schedule` 这件事不再是限制：计划的所有权在会话，插件只负责表达意图。
 
 **验收**
 
-1. 在有 `ctx.schedule` 的宿主上创建 plan，宿主「自动化任务」列表出现同名条目。
-2. 删除 plan，宿主列表同步消失。
-3. 无 `ctx.schedule` 的宿主仍能按 30 秒 tick 触发，且返回文案明确说明未注册到宿主。
+1. 在根会话里让 `superagent_schedule action="create"` 建一个 `0 9 * * 1-5` 的 plan：返回含 `handoff`、`DTSTART;TZID=…`、`RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0`、`"target": "this_session"`，且不写 `schedules.json`。
+2. 会话按返回参数调用 `schedule_create` 后，宿主定时任务列表出现同名条目（会话侧工具，需重启后在界面确认）。
+3. 子会话、缺少 `schedule_create`、cron 无法无损映射三种情况仍能创建本地 plan，`create` 与 `list` 都显示 `engine: plugin-local timer (fallback: <原因>)`。
+4. `action="migrate"` 返回暂停后的本地 plan 与 `schedule_create` 参数；无法映射的 plan 明确列出原因。
+5. 回归：`test/schedule.test.mjs` 覆盖 handoff、三种回退、cron 映射与迁移，全部通过。
 
 ### 7.2 守卫把 `node -e` 里的 `^` 当成盘符路径
 
@@ -268,6 +284,6 @@
 | S4 | 审批生命周期 + 默认权限 | S1 | 关面板不取消；超时才取消；默认 profile 出审批卡 | 0.17.x |
 | S5 | 产物卡完整化（预览/在文件夹显示/下载） | S1 | 三步内打开任何报告产物 | 0.17.x |
 | S6 | 常驻工具与指导语门控 | S0 | 普通会话 0 个 `superagent_*`；worker 0 个 | 0.18.0 |
-| S7 | cron 接 `ctx.schedule` + 守卫修复 | S0 | 宿主自动化列表可见；4 条守卫回归全绿 | 0.18.x |
+| S7 | cron 交给会话的 `schedule_create`（本地 tick 仅兜底）+ 守卫修复 | S0 | 宿主可调时 create 只返回 handoff、不写本地状态；无法无损映射/子会话才落本地并标明原因；迁移动作可用；4 条守卫回归全绿 | 0.19.0 |
 
 每阶段收尾口径固定：`pnpm test` 全量、`node bin/… doctor` 全绿、`npm publish`、更新 profile 依赖与 `minimumReleaseAgeExclude`、`pnpm install`、回写 `plugin-index.json`。不重启 DSH/Electron。
