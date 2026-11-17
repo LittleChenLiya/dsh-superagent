@@ -8,6 +8,16 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.15.2 — 2026-11-17
+
+### 变化
+
+- **桌面端点开「超级智能体」不再白屏。** 控制台页面原先只允许本地 http 页面把它嵌进
+  主面板，而桌面端的界面跑在自己的 `dsh-app://` 地址上，浏览器按页面声明的安全策略
+  拒绝渲染，右侧就只剩一片白。现在页面按「谁在嵌入我」放行：本地回环地址照旧，桌面端
+  这种非 http(s) 的自定义地址由界面把自己的地址告诉页面，以后换 scheme 也不用再改
+  插件。网络上的站点仍然嵌不进来，token 仍是唯一入口。
+
 ## 0.15.1 — 2026-11-16
 
 ### 变化

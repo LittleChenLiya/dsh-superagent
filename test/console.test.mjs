@@ -214,6 +214,42 @@ test('the console page and every API refuse a request without the token', async 
   }
 })
 
+test('the page lets its framer in, and only the framers that may be there', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    panel = await startConsole(state, fakeHost().host)
+    const token = encodeURIComponent(panel.token)
+    const policyOf = async hint => {
+      const suffix = hint === null ? '' : `&parent=${encodeURIComponent(hint)}`
+      const response = await fetch(`${panel.url}/?token=${token}${suffix}`)
+      assert.equal(response.status, 200)
+      return response.headers.get('content-security-policy') ?? ''
+    }
+
+    // The desktop shell frames from its own scheme; it works without any hint.
+    const plain = await policyOf(null)
+    assert.match(plain, /frame-ancestors [^;]*'self'/)
+    assert.match(plain, /frame-ancestors [^;]*dsh-app:/)
+
+    // The reported page scheme is echoed back, so a shell that renames its
+    // scheme needs no release here.
+    assert.match(await policyOf('dsh-app://app'), /frame-ancestors [^;]*dsh-app:\/\/app/)
+    assert.match(await policyOf('dsh-shell://host'), /frame-ancestors [^;]*dsh-shell:\/\/host/)
+
+    // The web profile frames from loopback http, which is always listed.
+    assert.match(await policyOf('http://127.0.0.1:5173'), /frame-ancestors [^;]*http:\/\/127\.0\.0\.1:5173/)
+
+    // A page on the internet is not a legitimate framer, hint or no hint.
+    for (const bad of ['https://evil.example', 'http://evil.example', 'javascript:alert(1)', "dsh-app://app; script-src *"]) {
+      assert.doesNotMatch(await policyOf(bad), /evil\.example|javascript:|script-src \*/)
+    }
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
 test('a Host header that is not loopback is refused before the token is checked', async () => {
   const { base, state } = await fixture()
   let panel = null
