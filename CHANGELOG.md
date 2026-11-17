@@ -8,6 +8,16 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.16.8 — 2026-11-17
+
+### 变化
+
+- **去掉输入区的「排队 / 插话」选择。** 用户不再需要决定投递方式：空闲时发送
+  正常开启一轮，回合进行中发送自动使用 `steer` 立即交给超级智能体，适合连续
+  快速发多条消息；对应 `mode` 状态、`Menu` 选择器和 chip 样式一并删除。
+- 输入区只剩附件与发送/停止两个控件；附件按钮从「+」换成宿主回形针图标，
+  不再看起来像新建会话，提示文案保持「放进工作区」。
+
 ## 0.16.7 — 2026-11-17
 
 ### 变化
