@@ -8,6 +8,22 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.18.0 — 2026-11-17
+
+### 变更
+
+- **工具不再对每个会话常驻。** 8 个核心工具只在面板自己的会话里可见；
+  普通宿主会话只保留 `superagent_help`，调用后按需展开。委派出去的 worker
+  一个 `superagent_*` 工具都看不到，不会再套娃起 run。
+- **定时计划如实说明归属。** 这个宿主没有给插件暴露调度 API，`superagent_schedule`
+  现在会在返回里写明「计划在本插件自己的存储里，不会出现在宿主自动化列表」，
+  不再让用户去错误的地方找。
+
+### 修复
+
+- **守卫误杀 `node -e`。** 引号内的 `>`、`=>`、`^` 不再被当成重定向目标；
+  单字符运算符也不会再被解析成 `C:\^` 这类盘符路径。真实重定向仍按原规则拦截。
+
 ## 0.17.1 — 2026-11-17
 
 ### 新增

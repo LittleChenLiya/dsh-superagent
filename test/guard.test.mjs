@@ -207,6 +207,36 @@ test('the OS temp directory stays writable even under a system path', () => {
   assert.equal(call('write', { file_path: 'C:\\Windows\\TEMP2\\scratch.txt' }).blocked, true)
 })
 
+test('a quoted node script is not mistaken for a redirect', () => {
+  // The real incident ran with cwd=C:\ and was blocked as `C:\^`. Operators
+  // inside a quoted -e body must never be read as write targets.
+  const guard = createGuard({ ...BASE, cwd: 'C:\\', config: {} })
+  guard.bindChild('child-1', { runId: 'run-1' })
+  const call = (name, args) => guard.checkToolCall({ name, arguments: args, agent: { id: 'child-1' } })
+  const commands = [
+    'node -e "console.log(1 > 0)"',
+    'node -e "const f = x => x + 1"',
+    "node -e \"const r = /^a/.test('a')\"",
+    'node -e "const n = 1 ^ 2; console.log(n)"',
+  ]
+  for (const command of commands) {
+    assert.equal(call('bash', { command }).blocked, false, command)
+  }
+  assert.equal(guard.snapshot('run-1'), null, 'no guard event is recorded for a quoted script')
+})
+
+test('a real redirect outside the workspace is still refused', () => {
+  const guard = createGuard({ ...BASE, cwd: 'C:\\', config: {} })
+  guard.bindChild('child-1', { runId: 'run-1' })
+  const verdict = guard.checkToolCall({
+    name: 'bash',
+    arguments: { command: 'echo x > C:\\Windows\\System32\\drivers\\etc\\hosts.bak' },
+    agent: { id: 'child-1' },
+  })
+  assert.equal(verdict.blocked, true)
+  assert.match(verdict.rule, /^path\/(system-directory|outside-allowlist)$/)
+})
+
 test('an unrelated session and a disabled guard are never policed', () => {
   const { call, guard } = harness()
   assert.equal(call('write', { file_path: 'C:\\Windows\\x' }, { id: 'parent-session' }).blocked, false)
