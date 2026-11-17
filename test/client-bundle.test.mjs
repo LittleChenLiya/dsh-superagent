@@ -25,16 +25,25 @@ async function materialize() {
   }
   const react = {
     createElement: (type, props, ...children) => ({ type, props, children }),
-    useState: initial => [initial, () => {}],
+    useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
     useEffect: () => {},
+    useRef: value => ({ current: value }),
+  }
+  // The host hands plugin clients its own component library (route A). The
+  // stub keeps the module resolvable without a browser; it deliberately ships
+  // no icons so the entry glyph falls back to the inline mark.
+  const primitives = {
+    Button: props => ({ type: 'button', props, children: [] }),
+    FishLogo: props => ({ type: 'svg', props, children: [] }),
   }
   await import(`${pathToFileURL(clientPath).href}?t=${Date.now()}`)
   assert.ok(captured, 'the client bundle must call window.__ModuleLoader__.load')
   return {
     descriptor: captured,
     exports: captured.factory(specifier => {
-      assert.equal(specifier, 'react')
-      return react
+      if (specifier === 'react') return react
+      if (specifier === '@deepseek-ai/dsh-client-ui-primitives') return primitives
+      throw new Error(`unexpected specifier ${specifier}`)
     }),
   }
 }
@@ -104,7 +113,7 @@ test('a missing react still yields a plugin face the host accepts', async () => 
   assert.doesNotThrow(() => exports.apply({ slots: { inject: () => {}, register: () => {} } }))
 })
 
-test('the main panel renders a frame seat without a host', async () => {
+test('the main panel renders its own loading seat, without a frame', async () => {
   const { exports } = await materialize()
   const registered = []
   const ctx = {
@@ -118,9 +127,13 @@ test('the main panel renders a frame seat without a host', async () => {
   }
   exports.apply(ctx)
   const panel = registered.find(entry => entry.props.name === 'main')
-  const tree = panel.component({})
+  const shell = panel.component({})
+  // Panel is the hook-owned shell; Seat is pure, so one call renders it.
+  const tree = typeof shell.type === 'function' ? shell.type(shell.props) : shell
   assert.equal(tree.type, 'div')
-  const note = tree.children[0][0]
+  assert.equal(tree.props.className, 'dsa-root')
+  const note = tree.children[0].children[0]
+  assert.equal(note.props.className, 'dsa-note')
   assert.equal(note.children[0], '正在连接 Superagent 专属空间…')
 
   const row = registered.find(entry => entry.props.name === 'sidebar.panellist')

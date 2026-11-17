@@ -1308,3 +1308,29 @@ test('notices stay read after the page is closed and the console restarts', asyn
     await fsp.rm(base, { recursive: true, force: true })
   }
 })
+
+test('the host-origin relay carries the console API and adds the token itself', async () => {
+  const { state } = await fixture()
+  const panel = await startConsole(state, fakeHost())
+  const relay = http.createServer((req, res) => panel.proxy(req, res))
+  await new Promise(resolve => relay.listen(0, '127.0.0.1', resolve))
+  const origin = `http://127.0.0.1:${relay.address().port}`
+  try {
+    // The panel sends no credentials: the node half supplies them.
+    const state1 = await fetch(`${origin}/superagent/api/console/state`, { headers: { accept: 'application/json' } })
+    assert.equal(state1.status, 200)
+    const body = await state1.json()
+    assert.equal(body.ok, true)
+    assert.ok(body.data.sessionId === null || typeof body.data.sessionId === 'string')
+
+    // The prefix maps to `/api`, and unknown routes still come back as JSON.
+    const missing = await fetch(`${origin}/superagent/api/console/nope`, { headers: { accept: 'application/json' } })
+    assert.equal(missing.status, 404)
+    const answer = await missing.json()
+    assert.equal(answer.ok, false)
+  } finally {
+    await new Promise(resolve => relay.close(resolve))
+    await panel.stop()
+    await fsp.rm(path.dirname(state), { recursive: true, force: true })
+  }
+})

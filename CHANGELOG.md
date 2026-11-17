@@ -8,6 +8,26 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.16.0 — 2026-11-17
+
+### 变化
+
+- **主面板不再套 iframe，改成宿主自己的界面。** 插件 client 直接
+  `require('@deepseek-ai/dsh-client-ui-primitives')`，用宿主的 `Button`、
+  `FishLogo` 和整套 `Icon*` 图标在 `main` 槽位里原生渲染；组件活在宿主的 React
+  树里，主题、字体、图标、深浅色切换全部天然一致，原先手写的 iframe 主题跟随
+  代码整段删掉。
+- **骨架按宿主的实测尺寸重搭**：顶部栏 76px / `10 28 0 20`、面包屑 14/20 圆角
+  12、空状态 `26/32 500` + 鱼标、输入卡圆角 28、输入区 `4 8 0 14`（停靠 36 /
+  欢迎页 52）、工具栏 `2 8 6` 间距 12、发送键 34 圆、统计行 22、会话行 32 高
+  圆角 12、行尾时间 10/16。数值来自宿主 asar 内的 `*.module.css`，不是目测。
+- **自造的品牌头、大圆角空状态、三个胶囊全部去掉**，换成宿主标题栏 +
+  欢迎页 + 输入卡的形态；右栏会话改成宿主的 32px 列表行。
+- **新增同源中继** `/superagent/api`（node 侧挂到宿主 web server 的前缀路由）：
+  面板用相对路径调用控制台，令牌仍只留在服务端，浏览器不接触明文；事件流按流式
+  转发，不缓冲。
+- 附件按钮接回真实上传（`/upload`），路径写进输入框。
+
 ## 0.15.4 — 2026-11-17
 
 ### 变化
