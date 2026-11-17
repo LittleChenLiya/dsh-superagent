@@ -43,4 +43,6 @@ test('questions and plans are answerable where the user already is', () => {
 test('the run list is clickable instead of a dead list', () => {
   assert.ok(source.includes('onClick: () => props.onOpen?.(run.id)'), 'each run row opens its detail')
   assert.ok(source.includes("className: 'dsa-rowitem'") && source.includes("type: 'button'"), 'run rows are buttons')
+  assert.ok(source.includes("waiting ? 'waiting' : run.status"), 'a run waiting on a person turns amber')
+  assert.ok(source.includes("'等你决定'"), 'the waiting row says what it is waiting for')
 })
