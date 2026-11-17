@@ -8,6 +8,12 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.15.4 — 2026-11-17
+
+### 变化
+
+- 报告弹窗里的链接改用宿主的强调色，不再退回浏览器默认蓝。
+
 ## 0.15.3 — 2026-11-17
 
 ### 变化
