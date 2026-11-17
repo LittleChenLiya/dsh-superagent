@@ -8,6 +8,15 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.16.10 — 2026-11-17
+
+### 修复
+
+- **用户消息重复出现。** `accepted` 帧之前会立刻清掉本地待确认气泡，随后宿主
+  的 `user/message` 事件找不到待确认行，就再追加一条，导致同一条 prompt 显示
+  两次。现在 `accepted` 只标记已确认、不清 pending，由宿主事件收口；同时对
+  5 秒内重复到达的同文本用户事件做折叠，`turn/end` 兜底清理仍未确认的待确认行。
+
 ## 0.16.9 — 2026-11-17
 
 ### 变化
