@@ -8,6 +8,25 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.16.3 — 2026-11-17
+
+### 修复
+
+- **assistant 正文恢复了 Markdown 渲染。** 根因不是渲染分支，而是组件探测：
+  `MarkdownText` 是 `React.memo` 包装的对象，`Button` 是 `React.forwardRef`
+  对象，0.16.1 起用 `typeof x === 'function'` 判断，两者都被误判为「宿主没导出」，
+  于是正文一直走 `.dsa-md-plain` 纯文本兜底（表格、加粗、行内代码原样露出）。
+  现在同时接受 function、`react.memo` 和 `react.forward_ref`，流式与完成态的
+  正文都走宿主 `MarkdownText`。
+- **降级不再静默。** 缺少宿主组件时在控制台打印一次缺失清单；单条消息降级为
+  纯文本时打印带消息 id 的 `console.error`；`MarkdownText` 运行期抛错由错误
+  边界接住并记录，正文继续以纯文本显示。
+
+### 已知待办（本轮未改）
+
+- 委派提示词里把 Run ID、token 统计、并行上限这类内部信息写进了面向用户的
+  输出，措辞需要单独调整。
+
 ## 0.16.2 — 2026-11-17
 
 ### 变化

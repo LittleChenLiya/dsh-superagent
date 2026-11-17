@@ -14,7 +14,7 @@ const pkg = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'u
  * `window`, import the file, and hand its factory a minimal `require`.
  * @returns {Promise<object>} the module exports the host would see.
  */
-async function materialize() {
+async function materialize(overrides = null) {
   let captured = null
   globalThis.window = {
     __ModuleLoader__: {
@@ -35,6 +35,7 @@ async function materialize() {
   const primitives = {
     Button: props => ({ type: 'button', props, children: [] }),
     FishLogo: props => ({ type: 'svg', props, children: [] }),
+    ...overrides,
   }
   await import(`${pathToFileURL(clientPath).href}?t=${Date.now()}`)
   assert.ok(captured, 'the client bundle must call window.__ModuleLoader__.load')
@@ -140,4 +141,27 @@ test('the main panel renders its own loading seat, without a frame', async () =>
   const icon = row.component({ size: 16, active: true })
   assert.equal(icon.type, 'svg')
   assert.equal(icon.props.width, 16)
+})
+
+test('memo/forwardRef host components are not mistaken for missing exports', async () => {
+  // Regression: `typeof ui.MarkdownText === 'function'` rejected React.memo
+  // objects, so assistant prose silently fell back to raw markdown text.
+  const warnings = []
+  const originalWarn = console.warn
+  console.warn = (...args) => warnings.push(args.join(' '))
+  try {
+    await materialize({
+      Button: { $$typeof: Symbol.for('react.forward_ref'), render: () => null },
+      MarkdownText: { $$typeof: Symbol.for('react.memo'), type: () => null },
+      UserMessageBubble: () => null,
+      StateDot: () => null,
+      Menu: () => null,
+      Tooltip: () => null,
+    })
+  } finally {
+    console.warn = originalWarn
+  }
+  const text = warnings.join('\n')
+  assert.ok(!text.includes('MarkdownText'), text)
+  assert.ok(!text.includes('Button'), text)
 })
