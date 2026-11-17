@@ -8,6 +8,25 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.16.5 — 2026-11-17
+
+### 变化
+
+- **不再显示会话列表。** 用户只和超级智能体对话，右栏只展示它调度出去的会话
+  （任务线：目标 + 运行状态），不再提供普通会话式的历史会话切换；`switch`
+  动作一并删除。
+- **边栏开合按宿主普通会话的行为重做。** 右栏改为网格轨道 + 位移的组合动画
+  （与宿主 `AppFrame` / `SidebarRight` 同一套 slow/ease-in-out 节奏），收起时
+  轨道归零、面板滑出；展开时轨道占 360px，正文重新居中而不是被贴边压窄。
+  头栏按钮在展开/收起时镜像图标（宿主 `collapseGlyph` 的做法），保留运行中
+  数量徽标。
+- **窄窗口（≤960px）改为浮层抽屉。** 轨道保持 0，不挤压正文，面板带
+  `shadow lv2` 浮在右侧。
+- 正文列宽优先使用宿主 `--dsh-chat-content-width`，缺失时才退回
+  `clamp(680px, 会话列宽 * .64, 920px)`，不再拿 `--dsh-chat-user-width`
+  二次相乘。
+- 输入区状态行去掉会话 id，只保留调度会话数量。
+
 ## 0.16.4 — 2026-11-17
 
 ### 变化
