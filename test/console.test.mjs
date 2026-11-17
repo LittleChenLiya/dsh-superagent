@@ -66,6 +66,7 @@ async function request(panel, method, route, body, token = panel.token) {
 function fakeHost({ sessionId = 'session-console', onPrompt = null } = {}) {
   const prompts = []
   const answers = []
+  const cancels = []
   let subscriber = null
   const host = {
     capabilities: () => ({ chat: true, reason: null }),
@@ -78,6 +79,10 @@ function fakeHost({ sessionId = 'session-console', onPrompt = null } = {}) {
       return { accepted: true }
     },
     listRuns: async () => [],
+    cancelTurn: async target => {
+      cancels.push(target)
+      return { accepted: true }
+    },
     answer: async args => {
       answers.push(args)
       return { ...args, status: 'completed' }
@@ -93,6 +98,7 @@ function fakeHost({ sessionId = 'session-console', onPrompt = null } = {}) {
     host,
     prompts,
     answers,
+    cancels,
     emit: frame => subscriber?.(frame),
     hasSubscriber: () => Boolean(subscriber),
   }
@@ -354,6 +360,41 @@ test('a submitted message starts a real run and the run panel reads it back', as
     assert.equal(listed.json.data.runs[0].goal, 'fix the login failure')
 
     await orchestrator.status(started.id, 10)
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('a running turn can be stopped through the host session controller', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    const fake = fakeHost()
+    panel = await startConsole(state, fake.host)
+    await request(panel, 'POST', '/api/console/session', {})
+    const stopped = await request(panel, 'POST', '/api/console/cancel', {})
+    assert.equal(stopped.status, 200)
+    assert.deepEqual(stopped.json.data, { canceling: true })
+    assert.deepEqual(fake.cancels, ['session-console'], 'the stop button must reach the host, not just the page')
+  } finally {
+    if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('stopping a turn fails loudly when the host offers no cancel', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    const fake = fakeHost()
+    delete fake.host.cancelTurn
+    panel = await startConsole(state, fake.host)
+    await request(panel, 'POST', '/api/console/session', {})
+    const stopped = await request(panel, 'POST', '/api/console/cancel', {})
+    assert.equal(stopped.status, 501)
+    assert.equal(stopped.json.ok, false)
+    assert.equal(stopped.json.error.id, 'cancel-unsupported')
   } finally {
     if (panel) await panel.stop()
     await fsp.rm(base, { recursive: true, force: true })

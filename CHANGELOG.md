@@ -8,6 +8,32 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.16.1 — 2026-11-17
+
+### 变化
+
+- **运行中能停下来了。** 发送键在回合运行时变成宿主同款的 34px 圆形停止键
+  （中间 10px 圆角方块），点击后进入取消中并画转圈；后端补了真正的回合级取消：
+  新增 `POST /api/console/cancel`，走宿主的 `sessionController.cancel({ sessionId })`，
+  成功广播 `canceling` 帧，回合结束后自动复位。宿主没有取消能力时明确返回 501，
+  不会只画一个按钮。
+- **用户气泡换成宿主的 `UserMessageBubble`。** 圆角 `radius-xl` 20、内边距
+  `10px 16px`、行高 `calc(22px + delta)`、字号跟 `--dsh-content-font-size`，浅色下
+  是宿主的 `deepseek-50` 浅蓝，不再是自造的灰色。
+- **正文列宽按宿主公式。** 正文列改为
+  `clamp(680px, var(--dsh-chat-user-width) * .64, 920px)`，滚动区左右各留 32px；
+  审批卡和 toast 跟随同一列宽，不再贴边。
+- **Markdown 改用宿主的 `MarkdownText`。** 自造的渲染子集整段删除，表格、引用、
+  分割线、嵌套列表、斜体、围栏语言标记和代码高亮全部由宿主组件负责，标题字号
+  走 `--dsw-font-markdown-*`。
+- **审批卡对齐宿主。** 外框 `radius-xl` 20、`border warn-secondary`、
+  `bg input-major`、`shadow lv2`；顶部加 `warn-tertiary` 警示条（`StateDot`
+  warning + 「等待你的批准」）。按钮顺序改为 拒绝 → 允许一次 → 本会话都放行
+  （primary）；请求期间 `disabled` + `aria-busy`，失败会弹出可见提示，不再
+  吞异常。
+- 修掉拼错的 token：`--dsw-alias-state-warning-primary` → 宿主真实存在的
+  `--dsw-alias-state-warn-primary`。
+
 ## 0.16.0 — 2026-11-17
 
 ### 变化
