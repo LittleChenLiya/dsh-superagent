@@ -1063,7 +1063,7 @@ test('a remembered conversation that had no saved words still records the next t
   }
 })
 
-test('closing the last page cancels a pending approval instead of approving it', async () => {
+test('closing the last page parks a pending approval instead of cancelling it', async () => {
   const { base, state } = await fixture()
   let panel = null
   try {
@@ -1078,15 +1078,27 @@ test('closing the last page cancels a pending approval instead of approving it',
     await new Promise(resolve => setTimeout(resolve, 60))
     const before = await request(panel, 'GET', '/api/console/state')
     assert.equal(before.json.data.approvals.length, 1)
+    const approvalId = before.json.data.approvals[0].id
 
     await reader.cancel()
     const settled = await Promise.race([
       answer,
-      new Promise(resolve => setTimeout(() => resolve('still-waiting'), 2000)),
+      new Promise(resolve => setTimeout(() => resolve('still-waiting'), 600)),
     ])
-    assert.equal(settled, 'cancelled')
+    assert.equal(settled, 'still-waiting', 'closing the panel must not answer a tool call')
     const after = await request(panel, 'GET', '/api/console/state')
-    assert.deepEqual(after.json.data.approvals, [])
+    assert.equal(after.json.data.approvals.length, 1, 'the question survives for the next client')
+
+    // Reopening and answering still works, and the parked call resolves 允许.
+    const again = await fetch(`${panel.url}/api/console/events?sessionId=session-console`, {
+      headers: { authorization: `Bearer ${panel.token}` },
+    })
+    const againReader = again.body.getReader()
+    await againReader.read()
+    const decision = await request(panel, 'POST', '/api/console/approval', { id: approvalId, decision: 'allow' })
+    assert.equal(decision.status, 200)
+    assert.match(String(await answer), /^allow/)
+    await againReader.cancel()
 
     // A stray answer cannot revive a settled ask, and only an owner may answer.
     const unknown = await request(panel, 'POST', '/api/console/approval', { id: 'ap_missing', decision: 'allow' })

@@ -27,8 +27,17 @@ test('the panel reaches upload, answers and run-level cancel', () => {
 
 test('the panel previews artifacts and renders attention', () => {
   assert.ok(source.includes('${API}/artifact?path='), 'artifacts open through the console artifact route')
+  assert.ok(source.includes('/artifact/reveal'), 'artifacts can be shown in the file manager')
+  assert.ok(source.includes('download=1'), 'artifacts can be downloaded')
   assert.ok(source.includes('artifactsOf'), 'run reports are parsed into artifact rows')
   assert.ok(source.includes('run.attention'), 'runs expose the questions waiting for a person')
+})
+
+test('questions and plans are answerable where the user already is', () => {
+  assert.ok(source.includes("call('/answer'"), 'the answer path is wired')
+  assert.ok(source.includes('item.options'), 'plan confirmations render one-tap options')
+  assert.ok(source.includes("item.source === 'plan'"), 'plan confirmations say so')
+  assert.ok(source.includes('unread'), 'new questions raise an unread count')
 })
 
 test('the run list is clickable instead of a dead list', () => {

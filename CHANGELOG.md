@@ -8,6 +8,24 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.17.1 — 2026-11-17
+
+### 新增
+
+- **待决策不再藏在任务详情里。** 有 run 在等你回答时，问题卡直接出现在输入框
+  上方；计划确认以选项按钮呈现，点一下就答复。标题栏「会话」带未读数，新问题
+  到达时 +1，打开会话或回答后归零。
+- **停止键现在真的停任务。** 除了中断当前 turn，还会取消所有 `running` 的
+  run；单条任务仍可在详情里单独停止。
+- **产物三件事都能做。** 预览、在文件夹中显示、下载；「在文件夹中显示」走
+  服务端白名单校验后调用系统文件管理器，不会变成任意路径的打开器。
+
+### 变更
+
+- **关闭或切走面板不再回答审批。** 待决审批会保留到自己的超时，重新打开面板
+  仍能看到问题；只有超时才按 `cancelled` 收尾。此前最后一个事件流断开就会把
+  所有待决审批判为取消。
+
 ## 0.17.0 — 2026-11-17
 
 ### 新增
