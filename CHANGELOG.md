@@ -8,6 +8,20 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.16.2 — 2026-11-17
+
+### 变化
+
+- **「排队 / 插话」不再用浏览器原生 `<select>`。** 换成宿主导出的 `Menu`：
+  深浅两套语义 token、32px 行高、圆角与阴影都来自宿主菜单，选中态有对勾，
+  支持方向键 / Home / End / Enter、Esc 关闭、点击外部关闭、关闭后焦点回到
+  触发器，并用 `portal` + CSS anchor 定位，不会被输入卡裁掉。
+- **原生提示条换成宿主 `Tooltip`。** 刷新、新建会话、附件、发送、停止、会话行、
+  任务线行、工具参数气泡都改用宿主 `Tooltip`（无 primitives 的宿主才退回
+  `title`），不再出现系统黄框提示。
+- 附件仍用隐藏的 `<input type="file">` 触发系统文件选择器——宿主没有文件选择
+  组件，这个输入框本身不可见，外观由旁边的宿主风格按钮承担。
+
 ## 0.16.1 — 2026-11-17
 
 ### 变化
