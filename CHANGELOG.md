@@ -8,6 +8,17 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.23.0 — 2026-11-18
+
+- 过程行可以整行点开：思考与工具调用不再只有小箭头能展开，命中区域和宿主的
+  `expandOnRowClick` 一致。
+- 项目表单改用宿主 Input 与图标按钮，产物文件名改用宿主 PathLabel（目录渐隐、
+  长路径省略），图片预览改用宿主灯箱（Esc 或点遮罩关闭、焦点归还）。
+- 任务详情头补上宿主状态点和图标关闭/停止按钮，停止、返回任务、打开会话统一为
+  宿主小号按钮。
+- 对话流声明 `role="log"` 与 `aria-live="polite"`，新消息对读屏可见。
+- 修掉审批卡和问答卡向宿主按钮转发空 `type` 的问题，避免在表单里退化成提交。
+
 ## 0.22.1 — 2026-11-17
 
 - 问答卡的回答按钮不再转发空的 `type`，避免宿主按钮在表单里退化成提交按钮。
