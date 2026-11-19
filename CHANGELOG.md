@@ -8,6 +8,12 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.24.0 — 2026-11-19
+
+- 聊天里保留委托回执。工作台任务卡显示目标、阶段、报告和产物，可在当前会话内预览其他会话的交付物。
+- 「待我处理」汇总各项目的审批、问答和目标决策，标为已读后仍可继续处理。
+- 「补充要求」把输入发给选中的任务。停止当前回复和停止指定任务使用各自的入口。
+
 ## 0.23.0 — 2026-11-18
 
 - 过程行可以整行点开：思考与工具调用不再只有小箭头能展开，命中区域和宿主的

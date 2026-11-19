@@ -188,6 +188,69 @@ test('the workbench follows the active project and exposes its own task transcri
   }
 })
 
+test('cross-project inbox actions and task controls leave the current chat in place', async () => {
+  const { base, state } = await fixture()
+  const { host, cancels, prompts, answers } = fakeHost()
+  const taskCalls = []
+  const project = { cwd: base, name: 'Release' }
+  const item = { id: 'q1', source: 'plan', question: 'Ship?', options: ['Ship'] }
+  host.openSession = async id => id === 'release-session' ? { sessionId: id } : null
+  host.workbench = async () => ({
+    sessionProjects: { 'release-session': project },
+    inbox: answers.length ? [] : [{ id: 'run:release:q1', kind: 'question', sessionId: 'release-session', runId: 'release', item }],
+  })
+  host.sessionWorkspace = async () => base
+  host.readRun = async (owner, id) => owner === 'release-session' && id === 'release'
+    ? { id, parentSessionId: owner, report: '[Report](release.md)' } : null
+  host.instructRun = async (owner, id, instruction) => {
+    taskCalls.push(['instruction', owner, id, instruction.text])
+    return { id: 'instruction-1' }
+  }
+  host.cancelRun = async (owner, id) => {
+    taskCalls.push(['cancel', owner, id])
+    return { status: 'cancelled' }
+  }
+  await fsp.writeFile(path.join(base, 'release.md'), '# Release')
+  const panel = await startConsole(state, host)
+  let events
+  try {
+    const get = route => request(panel, 'GET', `/api/console/${route}`)
+    const post = (route, body) => request(panel, 'POST', `/api/console/${route}`, body)
+    await post('session', {})
+    const response = await fetch(`${panel.url}/api/console/events`, { headers: { authorization: `Bearer ${panel.token}` } })
+    events = response.body.getReader()
+    await events.read()
+    const pending = panel.askApproval({ toolName: 'write_file', ownerSessionId: 'release-session' })
+    const { inbox } = (await get('workbench')).json.data
+    assert.deepEqual(inbox.map(entry => [entry.kind, entry.project.name, entry.read]), [
+      ['approval', 'Release', false], ['question', 'Release', false],
+    ])
+    assert.equal((await post('notices/read', { ids: inbox.map(entry => entry.id) })).status, 200)
+    assert.ok((await get('workbench')).json.data.inbox.every(entry => entry.read))
+    assert.equal((await post('approval', { id: inbox[0].item.id, decision: 'allow-tool' })).status, 409)
+    assert.equal((await post('approval', { id: inbox[0].item.id, decision: 'allow' })).status, 200)
+    assert.equal(await pending, 'allowed-once')
+    assert.equal((await post('answer', { owner: 'release-session', runId: 'release', attentionId: 'q1', answer: 'Ship' })).status, 200)
+    assert.equal(answers[0].sessionId, 'release-session')
+    assert.deepEqual((await get('workbench')).json.data.inbox, [])
+
+    assert.equal((await get('runs/release?owner=foreign')).status, 404)
+    assert.equal((await get('artifact?owner=release-session&runId=release&path=release.md')).text, '# Release')
+    assert.equal((await post('runs/release/instruction?owner=release-session', { sessionId: 'release-session', mode: 'followup', text: 'Mention rollout' })).status, 200)
+    assert.equal((await post('cancel', { sessionId: 'session-console' })).status, 200)
+    assert.deepEqual(taskCalls, [['instruction', 'release-session', 'release', 'Mention rollout']])
+    assert.equal((await post('runs/release/cancel', { owner: 'release-session' })).status, 200)
+    assert.deepEqual(taskCalls.at(-1), ['cancel', 'release-session', 'release'])
+    assert.deepEqual(cancels, ['session-console'])
+    assert.deepEqual(prompts, [])
+    assert.equal((await get('state')).json.data.sessionId, 'session-console')
+  } finally {
+    await events?.cancel()
+    await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
 async function collectFrames(response, { count = 12, timeoutMs = 2500 } = {}) {
   const reader = response.body.getReader()
   const decoder = new TextDecoder()

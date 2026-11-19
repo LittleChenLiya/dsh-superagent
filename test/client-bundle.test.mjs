@@ -25,6 +25,7 @@ async function materialize(overrides = null) {
   }
   const react = {
     createElement: (type, props, ...children) => ({ type, props, children }),
+    cloneElement: (node, props) => ({ ...node, props: { ...node.props, ...props } }),
     useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
     useEffect: () => {},
     useRef: value => ({ current: value }),
@@ -164,4 +165,48 @@ test('memo/forwardRef host components are not mistaken for missing exports', asy
   const text = warnings.join('\n')
   assert.ok(!text.includes('MarkdownText'), text)
   assert.ok(!text.includes('Button'), text)
+})
+
+test('the ready panel links a task receipt, a scoped follow-up, and a direct artifact preview', async () => {
+  const { exports } = await materialize()
+  let panel
+  exports.apply({ slots: {
+    inject: (name, callback) => callback(),
+    register: (props, component) => { if (props.name === 'main') panel = component },
+  } })
+  const shell = panel()
+  const actions = []
+  const first = { id: 'a', goal: 'Release notes', status: 'running', parentSessionId: 'chat-a' }
+  const second = { id: 'b', goal: 'Feedback', status: 'completed', parentSessionId: 'chat-b', artifacts: [{ name: 'Feedback.md', href: 'feedback.md' }] }
+  const goal = {
+    id: 'g1', goal: first.goal, ownerSessionId: 'chat-a', status: 'running', decisions: [],
+    phases: [{ id: 'p1', title: 'Draft', status: 'running', runId: first.id }],
+  }
+  const model = {
+    ...shell.props.model, phase: 'ready', sessionId: 'chat-a', selectedGoalId: goal.id,
+    runs: [first], goals: [goal], workbench: { sessionId: 'chat-a', runs: [second] },
+  }
+  function* elements(tree) {
+    if (Array.isArray(tree)) {
+      for (const child of tree) yield* elements(child)
+    } else if (tree && typeof tree === 'object') {
+      if (typeof tree.type === 'function') {
+        yield* elements(tree.type({ ...tree.props, children: tree.children }))
+      } else {
+        yield tree
+        yield* elements(tree.children)
+      }
+    }
+  }
+  const render = overrides => [...elements(shell.type({ model: { ...model, ...overrides }, dispatch: action => actions.push(action) }))]
+  const button = (nodes, label) => nodes.find(node => node.type === 'button' && node.children.includes(label))
+  const nodes = render()
+  button(nodes, '已委托 · Release notes').props.onClick()
+  button(nodes, '补充要求').props.onClick()
+  button(nodes, 'Feedback.md').props.onClick()
+  assert.equal(actions[0].goalId, goal.id)
+  assert.equal(actions[1].run.id, first.id)
+  assert.equal(actions[2].run.parentSessionId, 'chat-b')
+  assert.equal(actions[2].item.href, 'feedback.md')
+  assert.equal(render({ inboxOpen: true }).some(node => node.children.includes('暂无待处理事项')), true)
 })

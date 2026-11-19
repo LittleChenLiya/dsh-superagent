@@ -35,16 +35,16 @@ test('the panel previews artifacts and renders attention', () => {
   assert.ok(source.includes("sandbox: ''"), 'HTML previews run inside a sandboxed frame')
 })
 
-test('questions and plans are answerable where the user already is', () => {
+test('questions and plans are answerable from the shared inbox', () => {
   assert.ok(source.includes("call('/answer'"), 'the answer path is wired')
   assert.ok(source.includes('item.options'), 'plan confirmations render one-tap options')
   assert.ok(source.includes("item.source === 'plan'"), 'plan confirmations say so')
-  assert.ok(source.includes('unread'), 'new questions raise an unread count')
+  assert.ok(source.includes("call('/notices/read'"), 'pending inbox items can be marked read')
   assert.ok(source.includes("frame.action === 'expired'"), 'an expired approval explains itself instead of vanishing')
 })
 
 test('the run list is clickable instead of a dead list', () => {
-  assert.ok(source.includes('onClick: () => props.onOpen?.(run.id)'), 'each run row opens its detail')
+  assert.ok(source.includes('onClick: () => props.onOpen?.(run.id, run.parentSessionId)'), 'each run row opens its detail in the correct scope')
   assert.ok(source.includes("className: 'dsa-rowitem'") && source.includes("type: 'button'"), 'run rows are buttons')
   assert.ok(source.includes("waiting ? 'waiting' : run.status"), 'a run waiting on a person turns amber')
   assert.ok(source.includes("'等你决定'"), 'the waiting row says what it is waiting for')
