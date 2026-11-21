@@ -493,3 +493,39 @@ test('a phase receipt click opens that phase run, and an expired run falls back 
   assert.deepEqual(tasks, ['g1', 'g1'], 'an expired phase still lands on its task')
   assert.match(notes.join(' '), /阶段 p1 的执行记录已失效/)
 })
+
+test('todo and phase-receipt controls stay inside a narrow, 200%-zoomed panel', async () => {
+  const { exports } = await materialize()
+  const style = { id: 'dsh-superagent-native-style', textContent: '' }
+  const originalDocument = globalThis.document
+  globalThis.document = {
+    getElementById: requested => (requested === style.id ? style : null),
+    head: { appendChild: () => {} },
+    createElement: () => ({}),
+  }
+  try {
+    const ctx = { slots: { inject() {} } }
+    exports.apply(ctx)
+    const css = style.textContent
+
+    // A 320px sidebar at 200% zoom still has 160 layout pixels. Everything that
+    // carries a todo or a receipt must shrink to its container and wrap, never
+    // spill out or be hidden.
+    assert.match(css, /\.dsa-task-receipt[^}]*width:min\(100%,460px\)/u,
+      'the task receipt must be capped by its container')
+    assert.match(css, /\.dsa-task-receipt[^}]*min-width:0/u)
+    assert.match(css, /\.dsa-receipt-copy\{[^}]*min-width:0/u)
+    assert.match(css, /\.dsa-receipt-copy strong\{[^}]*overflow-wrap:anywhere/u)
+    assert.match(css, /\.dsa-answer-row\{[^}]*flex-wrap:wrap/u,
+      'todo buttons and the answer field must wrap instead of overflowing')
+    assert.match(css, /\.dsa-answer-row > button\{[^}]*max-width:100%[^}]*min-width:0/u)
+    assert.match(css, /\.dsa-answer-input\{[^}]*box-sizing:border-box/u)
+    assert.doesNotMatch(css, /\.dsa-task-receipt[^}]*display:none/u,
+      'a narrow panel must not hide the receipt')
+    assert.doesNotMatch(css, /\.dsa-answer-row > button[^}]*display:none/u,
+      'a narrow panel must not hide a todo action')
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document
+    else globalThis.document = originalDocument
+  }
+})

@@ -65,23 +65,28 @@ test('receipts distinguish registered, delivered, accepted and action-required w
   const router = boot()
   try {
     // Two tasks share a title, so an explicit read has to ask which one.
+    // A background status receipt may land after the reply under load; find the
+    // reply that belongs to this command instead of assuming it is the newest
+    // message in the whole conversation.
+    const reply = (snapshot, id) => snapshot.messages.find(message => message.id === `reply-${id}`)
+
     await router.submit({ id: 'attention-clarify', text: '/方案 发布说明' })
     let snapshot = await settled(router)
-    assert.equal(snapshot.messages.at(-1).receipt, 'action-required')
-    assert.deepEqual(snapshot.messages.at(-1).taskIds, ['goal-a', 'goal-b'])
+    assert.equal(reply(snapshot, 'attention-clarify').receipt, 'action-required')
+    assert.deepEqual(reply(snapshot, 'attention-clarify').taskIds, ['goal-a', 'goal-b'])
 
     await router.submit({ id: 'attention-alias', project: 'release-a', text: '把发布说明叫做发版' })
     snapshot = await settled(router)
-    assert.equal(snapshot.messages.at(-1).receipt, 'registered')
+    assert.equal(reply(snapshot, 'attention-alias').receipt, 'registered')
 
     await router.submit({ id: 'attention-followup', project: 'release-a', target: 'goal-a',
       intent: 'followup', text: '把兼容性段落放在开头' })
     snapshot = await settled(router)
-    assert.equal(snapshot.messages.at(-1).receipt, 'delivered')
+    assert.equal(reply(snapshot, 'attention-followup').receipt, 'delivered')
 
     await router.submit({ id: 'attention-task', project: 'release-a', intent: 'task', text: '准备发布说明' })
     snapshot = await settled(router)
-    assert.equal(snapshot.messages.at(-1).receipt, 'registered')
+    assert.equal(reply(snapshot, 'attention-task').receipt, 'registered')
 
     assert.deepEqual(snapshot.metrics, { classifyCalls: 0, clarifications: 1, receipts: 4, appends: 1, sourceEvents: 0 })
     assert.equal(classifyCalls, 0)

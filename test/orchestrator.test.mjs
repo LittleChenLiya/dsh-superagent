@@ -3080,7 +3080,7 @@ async function tempDir() {
   return fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-root-'))
 }
 
-test('two sessions asking the same decision keep one attention card', async () => {
+test('an unregistered key written by two sessions does not merge unrelated cards', async () => {
   const spawner = makeSpawner(async spec => {
     if (spec.label === 'superagent-plan') {
       return completed(JSON.stringify({
@@ -3102,11 +3102,13 @@ test('two sessions asking the same decision keep one attention card', async () =
   const run = await orchestrator.start({ goal: 'playtest scheduling', parentSessionId: parent.id, parent })
   const finished = await orchestrator.status(run.id, 10)
 
-  assert.equal(finished.attention.items.length, 1, 'the same decision must not become two cards')
-  const [item] = finished.attention.items
-  assert.equal(item.question, '你能参加哪一个试玩时间？')
-  assert.deepEqual(item.askedBy, ['subtask-1', 'subtask-2'])
-  assert.equal(finished.attentionSeq, 1)
+  // The key is model-written, not registered by the runtime, so it is only a
+  // citation: it may not join two cards. The goal record validates it later.
+  assert.equal(finished.attention.items.length, 2, 'an unregistered key must not merge two questions')
+  assert.deepEqual(finished.attention.items.map(item => item.source), ['subtask-1', 'subtask-2'])
+  assert.deepEqual(finished.attention.items.map(item => item.refKey), ['playtest-time', 'playtest-time'])
+  assert.equal(new Set(finished.attention.items.map(item => item.key)).size, 2, 'each card has its own runtime key')
+  assert.equal(finished.attentionSeq, 2)
 })
 
 test('two genuinely different decisions still keep two cards', async () => {  const spawner = makeSpawner(async spec => {

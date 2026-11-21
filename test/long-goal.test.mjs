@@ -986,50 +986,44 @@ test('a stale binding never hands the old answer to a new question', async () =>
   const root = await tempRoot('decision-stale-link')
   const orchestrator = fakeOrchestrator()
   const goals = await manager(root, orchestrator)
-  const attention = (id, question, key) => ({ id, source: 'worker', question, options: ['是', '否'], key })
   try {
-    const goal = await goals.create({ goal: 'two sessions, one playtime', parentSessionId: agent.id,
-      phases: [phase('p1'), phase('p2')] })
+    const goal = await goals.create({ goal: 'one playtime question', parentSessionId: agent.id, phases: [phase('p1')] })
     await goals.tick()
     let state = await goals.status(goal.id)
     const p1run = orchestrator.runs.get(state.goal.phases[0].currentRunId)
-    const p2run = orchestrator.runs.get(state.goal.phases[1].currentRunId)
-    p1run.attention.items.push(attention('q1', '你能参加哪一个试玩时间？', 'playtest-time'))
-    p2run.attention.items.push(attention('q1', '试玩安排选哪个时间？', 'playtest-time'))
-    for (const run of [p1run, p2run]) {
-      run.status = 'completed'
-      run.goalMode.achieved = false
-    }
-    await goals.tick()
+    p1run.attention.items.push({
+      id: 'q1', source: 'worker', question: '你能参加哪一个试玩时间？', options: ['是', '否'],
+      key: `${p1run.id.toLowerCase()}:q1`,
+    })
+    p1run.status = 'completed'
+    p1run.goalMode.achieved = false
     await goals.tick()
     state = await goals.status(goal.id)
-    assert.equal(state.goal.decisions.length, 1, 'the same key keeps one card')
     const decision = state.goal.decisions[0]
-    assert.ok(Array.isArray(decision.linked) && decision.linked.length === 1, 'the other session is bound to the card')
-    const link = decision.linked[0]
 
-    // That session restarted and now waits on a different question. The old
-    // card is bound to the old question id, so its answer must not land on the
-    // new one.
-    const linkedRun = orchestrator.runs.get(link.runId)
-    linkedRun.attention.items = [attention('q9', '发布说明用哪种口吻？', 'release-tone')]
-    await goals.answer(goal.id, decision.id, 'answer', { note: '周六下午可以' })
-
-    assert.ok(!orchestrator.calls.answer.some(call => call.runId === linkedRun.id && call.attentionId === 'q9'),
-      'a stale link must not answer the new question')
+    // That session restarted and now waits on a different question. The card is
+    // bound to q1, so its answer must not land on the new one.
+    p1run.attention.items = [{
+      id: 'q9', source: 'worker', question: '发布说明用哪种口吻？', options: ['是', '否'],
+      key: `${p1run.id.toLowerCase()}:q9`,
+    }]
+    await assert.rejects(goals.answer(goal.id, decision.id, 'answer', { note: '周六下午可以' }),
+      /no longer waiting/)
+    assert.ok(!orchestrator.calls.answer.some(call => call.attentionId === 'q9'),
+      'a stale binding must not answer the new question')
     state = await goals.status(goal.id)
-    assert.equal(state.goal.phases.find(item => item.id === link.phaseId).status, 'needs-decision')
+    assert.equal(state.goal.phases[0].status, 'needs-decision')
   } finally {
     await goals.close()
     await fsp.rm(root, { recursive: true, force: true })
   }
 })
 
-test('a cited runtime key joins the open card across a restart and answers only its bound questions', async () => {
-  const root = await tempRoot('runtime-key-link')
+test('an out-of-scope citation keeps its own card and never receives the answer', async () => {
+  const root = await tempRoot('runtime-key-scope')
   const orchestrator = fakeOrchestrator()
   let goals = await manager(root, orchestrator)
-  const runtimeKey = runId => `${runId.toLowerCase()}:q1`
+  const runtimeKey = (runId, id = 'q1') => `${runId.toLowerCase()}:${id}`
   try {
     const goal = await goals.create({
       goal: 'playtest, briefing and release', parentSessionId: agent.id, maxParallelPhases: 3,
@@ -1049,18 +1043,23 @@ test('a cited runtime key joins the open card across a restart and answers only 
     await goals.tick()
     state = await goals.status(goal.id)
     assert.equal(state.goal.decisions.length, 1)
-    const key = state.goal.decisions[0].key
-    assert.equal(key, runtimeKey(p1run.id), 'the runtime key is persisted with the card')
+    const privateKey = state.goal.decisions[0].key
+    assert.equal(privateKey, runtimeKey(p1run.id), 'the runtime key is persisted with the card')
 
-    // The host restarts before a second session asks anything.
+    // The host restarts before the other sessions ask anything.
     await goals.close()
     goals = await manager(root, orchestrator)
 
+    // p2 and p3 do not depend on p1. Even a well-formed citation of p1's
+    // registered key (or an unknown one) must stay independent and must never
+    // receive p1's private answer.
     p2run.attention.items.push({
-      id: 'q1', source: 'subtask-2', question: '试玩安排选哪个时间？', options: ['周六', '周日'], key: runtimeKey(p2run.id), refKey: key,
+      id: 'q1', source: 'subtask-2', question: '试玩安排选哪个时间？', options: ['周六', '周日'],
+      key: runtimeKey(p2run.id), refKey: privateKey,
     })
     p3run.attention.items.push({
-      id: 'q1', source: 'subtask-3', question: '发布说明要不要只给团队看？', options: ['是', '否'], key: runtimeKey(p3run.id), refKey: 'missing-key',
+      id: 'q1', source: 'subtask-3', question: '发布说明要不要只给团队看？', options: ['是', '否'],
+      key: runtimeKey(p3run.id), refKey: 'missing-key',
     })
     for (const run of [p2run, p3run]) {
       run.status = 'completed'
@@ -1068,25 +1067,79 @@ test('a cited runtime key joins the open card across a restart and answers only 
     }
     await goals.tick()
     state = await goals.status(goal.id)
-    assert.equal(state.goal.decisions.length, 2, 'the cited key joins one card; the unknown key stays independent')
-    const linked = state.goal.decisions.find(item => item.key === key)
-    assert.equal(linked.linked.length, 1)
-    assert.equal(linked.linked[0].runId, p2run.id)
-    assert.equal(linked.linked[0].attentionId, 'q1')
-    const independent = state.goal.decisions.find(item => item.id !== linked.id)
-    assert.equal(independent.key, runtimeKey(p3run.id), 'an unknown citation is not trusted as identity')
+    assert.equal(state.goal.decisions.length, 3, 'out-of-scope and unknown citations stay independent')
+    const privateCard = state.goal.decisions.find(item => item.key === privateKey)
+    assert.equal(privateCard.linked, undefined, 'no unrelated session is bound to the private card')
+    assert.equal(state.goal.decisions.find(item => item.phaseId === 'p2').key, runtimeKey(p2run.id),
+      'an out-of-scope citation is not trusted as identity')
+    assert.equal(state.goal.decisions.find(item => item.phaseId === 'p3').key, runtimeKey(p3run.id))
 
-    await goals.answer(goal.id, linked.id, 'answer', { note: '定在周六' })
+    await goals.answer(goal.id, privateCard.id, 'answer', { note: '定在周六' })
     assert.ok(orchestrator.calls.answer.some(call => call.runId === p1run.id && call.attentionId === 'q1'))
-    assert.ok(orchestrator.calls.answer.some(call => call.runId === p2run.id && call.attentionId === 'q1'))
+    assert.ok(!orchestrator.calls.answer.some(call => call.runId === p2run.id),
+      'the out-of-scope session must not receive this answer')
     assert.ok(!orchestrator.calls.answer.some(call => call.runId === p3run.id),
-      'the unrelated question must not receive this answer')
+      'the unknown citation must not receive this answer')
 
     await goals.close()
     goals = await manager(root, orchestrator)
     state = await goals.status(goal.id)
-    assert.equal(state.goal.decisions.length, 2, 'the two cards and their scopes survive a restart')
-    assert.equal(state.goal.decisions.find(item => item.id === linked.id).answerText, '定在周六')
+    assert.equal(state.goal.decisions.length, 3, 'the isolation survives a restart')
+    assert.equal(state.goal.decisions.find(item => item.key === privateKey).answerText, '定在周六')
+  } finally {
+    await goals.close()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a private answer never reaches a phase outside its dependency chain', async () => {
+  const root = await tempRoot('decision-phase-scope')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const runtimeKey = (runId, id = 'q1') => `${runId.toLowerCase()}:${id}`
+  try {
+    // p3 waits on p2 only; p1 is not its prerequisite.
+    const goal = await goals.create({
+      goal: 'playtest and release notes', parentSessionId: agent.id, maxParallelPhases: 2,
+      phases: [phase('p1'), phase('p2'), phase('p3', { dependsOn: ['p2'] })],
+    })
+    await goals.tick()
+    let state = await goals.status(goal.id)
+    const p1run = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+    const p2run = orchestrator.runs.get(state.goal.phases[1].currentRunId)
+    p1run.attention.items.push({
+      id: 'q1', source: 'worker', question: '试玩定在哪个时间？', options: ['周六', '周日'], key: runtimeKey(p1run.id),
+    })
+    p1run.status = 'failed'
+    p1run.goalMode.achieved = false
+    p1run.goalMode.stop = { reason: 'needs-decision' }
+    orchestrator.complete(p2run, 'notes drafted')
+    await goals.tick()
+    state = await goals.status(goal.id)
+    const decision = state.goal.decisions.find(item => item.phaseId === 'p1')
+    await goals.answer(goal.id, decision.id, 'answer', { note: 'SCOPE-PLAYTEST-ONLY 周六' })
+    orchestrator.complete(p1run, 'playtest arranged')
+    await goals.tick()
+
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.phases[2].status, 'running')
+    const p3start = orchestrator.calls.start.at(-1)
+    assert.ok(!p3start.goal.includes('SCOPE-PLAYTEST-ONLY'), 'p3 must not read p1 private answer')
+    assert.ok(!p3start.goal.includes(decision.key), 'p3 is not even offered the out-of-scope key')
+
+    const p3run = orchestrator.runs.get(state.goal.phases[2].currentRunId)
+    p3run.attention.items.push({
+      id: 'q1', source: 'worker', question: '发布说明面向内部团队吗？', options: ['是', '否'],
+      key: runtimeKey(p3run.id), refKey: decision.key,
+    })
+    p3run.status = 'completed'
+    p3run.goalMode.achieved = false
+    await goals.tick()
+    state = await goals.status(goal.id)
+    const card = state.goal.decisions.find(item => item.phaseId === 'p3')
+    assert.equal(card.key, runtimeKey(p3run.id), 'an out-of-scope citation opens its own card')
+    assert.ok(!orchestrator.calls.answer.some(call => call.runId === p3run.id),
+      'the private answer must not be delivered to an unrelated phase')
   } finally {
     await goals.close()
     await fsp.rm(root, { recursive: true, force: true })
