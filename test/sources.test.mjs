@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
+import { createRouter } from '../lib/router.js'
 import { createSourceIngress } from '../lib/sources/ingress.js'
 import { createSourceStore, requestIdFor } from '../lib/sources/store.js'
 
@@ -49,8 +50,36 @@ async function fixture(label) {
   return { base, root, store }
 }
 
-function ingressFor({ store, router = routerStub(), config, faults }) {
-  return createSourceIngress({ store, router, config, catalog, faults })
+function ingressFor({ store, router = routerStub(), config, faults, retry, now, log }) {
+  return createSourceIngress({ store, router, config, catalog, faults, retry, now, log })
+}
+
+async function waitFor(fn, timeoutMs = 4000) {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const value = await fn()
+    if (value) return value
+    if (Date.now() > deadline) throw new Error('等待条件超时')
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+}
+
+async function routerCommands(root) {
+  try {
+    return JSON.parse(await fsp.readFile(path.join(root, 'router.json'), 'utf8')).commands
+  } catch (error) {
+    if (error?.code === 'ENOENT') return []
+    throw error
+  }
+}
+
+function realRouter(root) {
+  return createRouter({
+    root,
+    catalog,
+    classify: async () => ({ action: 'reply', text: 'stub' }),
+    execute: async () => ({ text: 'stub' }),
+  })
 }
 
 async function serve(ingress) {
@@ -93,14 +122,20 @@ function feishuHeaders(body, { key = FEISHU_KEY, timestamp = Math.floor(Date.now
   }
 }
 
-function feishuPayload({ tenant = 'tenant-a', messageId = 'om_1', text = '把这个也带上', eventId = 'evt-1' } = {}) {
+function feishuPayload({
+  tenant = 'tenant-a', messageId = 'om_1', text = '把这个也带上', eventId = 'evt-1', rootId, token = FEISHU_TOKEN,
+} = {}) {
   return {
     schema: '2.0',
-    header: { event_id: eventId, event_type: 'im.message.receive_v1', tenant_key: tenant, token: FEISHU_TOKEN },
+    header: {
+      event_id: eventId, event_type: 'im.message.receive_v1', tenant_key: tenant,
+      ...(token === null ? {} : { token }),
+    },
     event: {
       sender: { sender_id: { open_id: 'ou_1' } },
       message: {
-        message_id: messageId, chat_id: 'oc_1', message_type: 'text', create_time: '1795230000000',
+        message_id: messageId, ...(rootId ? { root_id: rootId, parent_id: rootId } : {}),
+        chat_id: 'oc_1', message_type: 'text', create_time: '1795230000000',
         content: JSON.stringify({ text }),
       },
     },
@@ -364,6 +399,417 @@ test('the same delivery id from another source instance is a different event', a
   assert.equal(snapshot.counts.unbound, 1, 'the second instance has its own record and no binding')
   assert.equal(router.seen.size, 1)
   await fsp.rm(base, { recursive: true, force: true })
+})
+
+test('Feishu replies resolve to the bound root message and each reply is queued once', async () => {
+  const { base, store } = await fixture('sources-feishu-thread')
+  const router = routerStub()
+  const ingress = ingressFor({ store, router, config: feishuConfig })
+  const server = await serve(ingress)
+  try {
+    const root = encryptFeishu(feishuPayload({ messageId: 'om_root', eventId: 'evt-root', text: '根消息' }))
+    let response = await fetch(`${server.url}/hooks/feishu`, {
+      method: 'POST', headers: feishuHeaders(root), body: root,
+    })
+    assert.equal(response.status, 200)
+    await ingress.flush()
+    const rootRecord = (await ingress.snapshot()).recent.find(item => item.deliveryId === 'evt-root')
+    assert.equal(rootRecord.objectId, 'feishu:tenant-a:message:om_root')
+    assert.equal(rootRecord.status, 'unbound')
+
+    const binding = await ingress.bind({
+      source: 'feishu', objectId: rootRecord.objectId, project: 'workspace',
+      taskId: 'goal-release', phaseId: 'p1',
+    })
+
+    const first = encryptFeishu(feishuPayload({
+      messageId: 'om_reply_1', rootId: 'om_root', eventId: 'evt-r1', text: '第一条回复',
+    }))
+    response = await fetch(`${server.url}/hooks/feishu`, {
+      method: 'POST', headers: feishuHeaders(first), body: first,
+    })
+    assert.equal(response.status, 200)
+    await ingress.flush()
+
+    const second = encryptFeishu(feishuPayload({
+      messageId: 'om_reply_2', rootId: 'om_root', eventId: 'evt-r2', text: '第二条回复',
+    }))
+    response = await fetch(`${server.url}/hooks/feishu`, {
+      method: 'POST', headers: feishuHeaders(second), body: second,
+    })
+    assert.equal(response.status, 200)
+    await ingress.flush()
+
+    assert.equal(router.calls.length, 2, '两条回复各入队一次')
+    for (const [index, marker] of [[0, '第一条回复'], [1, '第二条回复']]) {
+      assert.equal(router.calls[index].target, 'goal-release')
+      assert.equal(router.calls[index].phaseId, 'p1')
+      assert.equal(router.calls[index].source.objectId, rootRecord.objectId)
+      assert.match(router.calls[index].text, new RegExp(marker))
+    }
+    const records = (await ingress.snapshot()).recent
+    assert.equal(records.find(item => item.deliveryId === 'evt-r1').data.subject.messageId, 'om_reply_1')
+
+    const replay = await fetch(`${server.url}/hooks/feishu`, {
+      method: 'POST', headers: feishuHeaders(first), body: first,
+    })
+    assert.equal((await replay.json()).duplicate, true)
+    await ingress.flush()
+    assert.equal(router.calls.length, 2, '同一回复重投不得二次提交')
+
+    const otherRoot = encryptFeishu(feishuPayload({ messageId: 'om_other', eventId: 'evt-other', text: '其他根消息' }))
+    await fetch(`${server.url}/hooks/feishu`, {
+      method: 'POST', headers: feishuHeaders(otherRoot), body: otherRoot,
+    })
+    await ingress.flush()
+
+    const otherTenant = encryptFeishu(feishuPayload({
+      tenant: 'tenant-b', messageId: 'om_reply_b', rootId: 'om_root', eventId: 'evt-rb', text: '另一租户',
+    }))
+    await fetch(`${server.url}/hooks/feishu`, {
+      method: 'POST', headers: feishuHeaders(otherTenant), body: otherTenant,
+    })
+    await ingress.flush()
+    assert.equal(router.calls.length, 2, '其他根消息与其他租户不得命中绑定')
+
+    await ingress.unbind(binding.id)
+    const revoked = encryptFeishu(feishuPayload({
+      messageId: 'om_reply_3', rootId: 'om_root', eventId: 'evt-r3', text: '撤销后到达',
+    }))
+    await fetch(`${server.url}/hooks/feishu`, {
+      method: 'POST', headers: feishuHeaders(revoked), body: revoked,
+    })
+    await ingress.flush()
+    assert.equal(router.calls.length, 2, '撤销后的回复不得派工')
+    const revokedRecord = (await ingress.snapshot()).recent.find(item => item.deliveryId === 'evt-r3')
+    assert.ok(['revoked', 'unbound'].includes(revokedRecord.status), '撤销后的回复只留在来源记录')
+  } finally {
+    await server.close()
+    ingress.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('token-only Feishu mode accepts v2 header tokens and rejects misplaced credentials', async () => {
+  const { base, store } = await fixture('sources-feishu-token')
+  const router = routerStub()
+  const logs = []
+  const ingress = ingressFor({
+    store, router,
+    config: { feishu: { enabled: true, instanceId: 'fs', verificationToken: FEISHU_TOKEN } },
+    log: message => logs.push(String(message)),
+  })
+  const server = await serve(ingress)
+  try {
+    await ingress.bind({
+      source: 'feishu', objectId: 'feishu:tenant-a:message:om_1', project: 'workspace',
+      taskId: 'goal-release', phaseId: 'p1',
+    })
+    const unsigned = { 'content-type': 'application/json' }
+    const valid = JSON.stringify(feishuPayload({ eventId: 'token-v2-1' }))
+    let response = await fetch(`${server.url}/hooks/feishu`, { method: 'POST', headers: unsigned, body: valid })
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).duplicate, false)
+    await ingress.flush()
+    assert.equal(router.calls.length, 1)
+    assert.equal(router.calls[0].phaseId, 'p1')
+    const countsAfterValid = (await ingress.snapshot()).counts
+
+    const wrong = JSON.stringify(feishuPayload({ eventId: 'token-v2-2', token: 'wrong-token' }))
+    response = await fetch(`${server.url}/hooks/feishu`, { method: 'POST', headers: unsigned, body: wrong })
+    assert.equal(response.status, 401)
+
+    const missing = JSON.stringify(feishuPayload({ eventId: 'token-v2-3', token: null }))
+    response = await fetch(`${server.url}/hooks/feishu`, { method: 'POST', headers: unsigned, body: missing })
+    assert.equal(response.status, 401)
+
+    const misplaced = feishuPayload({ eventId: 'token-v2-4', token: null })
+    misplaced.token = FEISHU_TOKEN
+    response = await fetch(`${server.url}/hooks/feishu`, {
+      method: 'POST', headers: unsigned, body: JSON.stringify(misplaced),
+    })
+    assert.equal(response.status, 401, 'v2 事件只认 header.token')
+
+    await ingress.flush()
+    assert.equal(router.calls.length, 1)
+    assert.deepEqual((await ingress.snapshot()).counts, countsAfterValid, '凭据不合法的事件不得登记')
+
+    const challengeBody = JSON.stringify({ type: 'url_verification', challenge: 'ch-token', token: FEISHU_TOKEN })
+    response = await fetch(`${server.url}/hooks/feishu`, { method: 'POST', headers: unsigned, body: challengeBody })
+    assert.equal(response.status, 200)
+    assert.deepEqual(await response.json(), { challenge: 'ch-token' })
+
+    const badChallenge = JSON.stringify({ type: 'url_verification', challenge: 'ch-bad', token: 'wrong-token' })
+    response = await fetch(`${server.url}/hooks/feishu`, { method: 'POST', headers: unsigned, body: badChallenge })
+    assert.equal(response.status, 401)
+
+    const misplacedChallenge = JSON.stringify({
+      type: 'url_verification', challenge: 'ch-h', header: { token: FEISHU_TOKEN },
+    })
+    response = await fetch(`${server.url}/hooks/feishu`, {
+      method: 'POST', headers: unsigned, body: misplacedChallenge,
+    })
+    assert.equal(response.status, 401, '握手只认请求体顶层的 token')
+
+    // Encrypted mode still enforces the signed freshness window.
+    const stale = ingressFor({
+      store, router, config: feishuConfig, log: () => {},
+      now: () => Date.now() + 10 * 60 * 1000,
+    })
+    const staleServer = await serve(stale)
+    const sealed = encryptFeishu(feishuPayload({ eventId: 'stale-1' }))
+    const expired = await fetch(`${staleServer.url}/hooks/feishu`, {
+      method: 'POST', headers: feishuHeaders(sealed), body: sealed,
+    })
+    assert.equal(expired.status, 401)
+    await staleServer.close()
+
+    const exposed = JSON.stringify(await ingress.snapshot()) + JSON.stringify(logs)
+    assert.equal(exposed.includes(FEISHU_TOKEN), false, '来源记录与日志不得含 token')
+    assert.equal(exposed.includes('wrong-token'), false)
+  } finally {
+    await server.close()
+    ingress.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('a temporary Router rejection keeps the delivery and resumes with the same request id', async () => {
+  {
+    const { base, store } = await fixture('sources-retry-inline')
+    const real = realRouter(path.join(base, 'router'))
+    let attempts = 0
+    const router = {
+      async submit(input) {
+        attempts += 1
+        if (attempts === 1) {
+          const error = new Error('待处理消息过多，请稍后再发')
+          error.code = 'queue-full'
+          throw error
+        }
+        return real.submit(input)
+      },
+    }
+    const ingress = ingressFor({ store, router, config: githubConfig, retry: { baseMs: 10, maxAttempts: 4 } })
+    const server = await serve(ingress)
+    try {
+      await ingress.bind({
+        source: 'github', objectId: 'github:101:issue:7', project: 'workspace',
+        taskId: 'goal-release', phaseId: 'p1',
+      })
+      const body = JSON.stringify(issuePayload())
+      const response = await fetch(`${server.url}/hooks/github`, {
+        method: 'POST', headers: githubHeaders('retry-inline', body), body,
+      })
+      assert.equal(response.status, 202)
+      await waitFor(async () => (await ingress.snapshot()).recent[0]?.status === 'dispatched')
+      assert.equal(attempts, 2, '上游只投递一次，队列释放后自动重试一次')
+      const recent = (await ingress.snapshot()).recent[0]
+      assert.equal(recent.attempts, 2)
+      assert.equal(recent.deliveredTo, 'router-queue')
+      assert.equal(recent.route.phaseId, 'p1')
+      const commands = await routerCommands(path.join(base, 'router'))
+      assert.equal(commands.length, 1, '原任务只追加一次')
+      assert.equal(commands[0].id, requestIdFor('github:gh:retry-inline'))
+      assert.equal(commands[0].phaseId, 'p1')
+    } finally {
+      await server.close()
+      ingress.stop()
+      await fsp.rm(base, { recursive: true, force: true })
+    }
+  }
+
+  {
+    const { base, store } = await fixture('sources-retry-restart')
+    const real = realRouter(path.join(base, 'router'))
+    let calls = 0
+    const reject = {
+      async submit() {
+        calls += 1
+        const error = new Error('待处理消息过多，请稍后再发')
+        error.code = 'queue-full'
+        throw error
+      },
+    }
+    const first = ingressFor({ store, router: reject, config: githubConfig, retry: { baseMs: 60_000, maxAttempts: 4 } })
+    const server = await serve(first)
+    let requestId
+    try {
+      await first.bind({
+        source: 'github', objectId: 'github:101:issue:7', project: 'workspace',
+        taskId: 'goal-release', phaseId: 'p1',
+      })
+      const body = JSON.stringify(issuePayload())
+      const response = await fetch(`${server.url}/hooks/github`, {
+        method: 'POST', headers: githubHeaders('retry-restart', body), body,
+      })
+      assert.equal(response.status, 202)
+      await first.flush()
+      const waiting = (await first.snapshot()).recent[0]
+      assert.equal(waiting.status, 'retrying')
+      requestId = waiting.requestId
+      assert.equal(requestId, requestIdFor('github:gh:retry-restart'))
+    } finally {
+      await server.close()
+      first.stop()
+    }
+
+    const restarted = ingressFor({
+      store, config: githubConfig,
+      router: { async submit(input) { calls += 1; return real.submit(input) } },
+    })
+    const recovered = await restarted.recover()
+    assert.deepEqual(recovered.map(item => item.status), ['dispatched'])
+    const done = (await restarted.snapshot()).recent[0]
+    assert.equal(done.requestId, requestId, '重启后复用同一 requestId')
+    assert.equal(calls, 2)
+    const commands = await routerCommands(path.join(base, 'router'))
+    assert.equal(commands.length, 1, '重启恢复后原任务只追加一次')
+    assert.equal(commands[0].id, requestId)
+    restarted.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('temporary failures re-check authorization and stop at a bounded retry budget', async () => {
+  {
+    const { base, store } = await fixture('sources-retry-revoked')
+    let calls = 0
+    const rejecting = {
+      async submit() {
+        calls += 1
+        const error = new Error('待处理消息过多，请稍后再发')
+        error.code = 'queue-full'
+        throw error
+      },
+    }
+    const ingress = ingressFor({ store, router: rejecting, config: githubConfig, retry: { baseMs: 60_000, maxAttempts: 4 } })
+    const server = await serve(ingress)
+    try {
+      const binding = await ingress.bind({
+        source: 'github', objectId: 'github:101:issue:7', project: 'workspace',
+        taskId: 'goal-release', phaseId: 'p1',
+      })
+      const body = JSON.stringify(issuePayload())
+      await fetch(`${server.url}/hooks/github`, {
+        method: 'POST', headers: githubHeaders('retry-revoked', body), body,
+      })
+      await ingress.flush()
+      assert.equal((await ingress.snapshot()).recent[0].status, 'retrying')
+      await ingress.unbind(binding.id)
+      const recovered = await ingress.recover()
+      assert.ok(['revoked', 'unbound'].includes(recovered[0].status), '撤销后的绑定不再授权')
+      assert.equal(calls, 1, '暂时失败期间撤销绑定后不得派送')
+    } finally {
+      await server.close()
+      ingress.stop()
+      await fsp.rm(base, { recursive: true, force: true })
+    }
+  }
+
+  {
+    const { base, store } = await fixture('sources-retry-budget')
+    let calls = 0
+    const rejecting = {
+      async submit() {
+        calls += 1
+        const error = new Error('待处理消息过多，请稍后再发')
+        error.code = 'queue-full'
+        throw error
+      },
+    }
+    const ingress = ingressFor({ store, router: rejecting, config: githubConfig, retry: { baseMs: 5, maxAttempts: 2 } })
+    const server = await serve(ingress)
+    try {
+      await ingress.bind({
+        source: 'github', objectId: 'github:101:issue:7', project: 'workspace',
+        taskId: 'goal-release', phaseId: 'p1',
+      })
+      const body = JSON.stringify(issuePayload())
+      await fetch(`${server.url}/hooks/github`, {
+        method: 'POST', headers: githubHeaders('retry-budget', body), body,
+      })
+      await waitFor(async () => (await ingress.snapshot()).recent[0]?.status === 'failed')
+      const failed = (await ingress.snapshot()).recent[0]
+      assert.equal(failed.attempts, 2)
+      assert.match(failed.reason, /重试预算耗尽/)
+      assert.equal(calls, 2)
+      assert.deepEqual(await ingress.recover(), [], '终态失败不再进入恢复扫描')
+      assert.equal(calls, 2)
+    } finally {
+      await server.close()
+      ingress.stop()
+      await fsp.rm(base, { recursive: true, force: true })
+    }
+  }
+})
+
+test('an unreadable source state is reported and the original file is preserved', async () => {
+  const { base, store } = await fixture('sources-state')
+  const router = routerStub()
+  const ingress = ingressFor({ store, router, config: githubConfig })
+  const server = await serve(ingress)
+  try {
+    const binding = await ingress.bind({
+      source: 'github', objectId: 'github:101:issue:7', project: 'workspace', taskId: 'goal-release',
+    })
+    const valid = await fsp.readFile(store.file, 'utf8')
+    assert.match(valid, new RegExp(binding.id))
+
+    const corrupt = '{"version":1,"bindings":[{"id":"broken"}],"events":'
+    await fsp.writeFile(store.file, corrupt, 'utf8')
+    let error = await store.registerEvent('github:gh:state-1', { source: 'github' }).then(() => null, value => value)
+    assert.equal(error?.code, 'source-state-invalid')
+    assert.equal(await fsp.readFile(store.file, 'utf8'), corrupt, '损坏文件不得被登记覆盖')
+    for (const read of [
+      () => store.registerInstance({ source: 'github', instanceId: 'gh' }),
+      () => store.snapshot(),
+      () => store.findBinding({ source: 'github', instanceId: 'gh', objectId: 'github:101:issue:7' }),
+      () => store.pendingEvents(),
+    ]) {
+      await assert.rejects(read, reason => reason?.code === 'source-state-invalid')
+    }
+
+    const body = JSON.stringify(issuePayload())
+    const rejected = await fetch(`${server.url}/hooks/github`, {
+      method: 'POST', headers: githubHeaders('state-1', body), body,
+    })
+    assert.equal(rejected.status, 503)
+    const payload = await rejected.json()
+    assert.equal(payload.ok, false)
+    assert.equal(payload.error, 'source-state-unreadable')
+    assert.equal(router.calls.length, 0)
+    assert.equal(await fsp.readFile(store.file, 'utf8'), corrupt)
+
+    const unsupported = '{"version":99,"events":{}}'
+    await fsp.writeFile(store.file, unsupported, 'utf8')
+    error = await store.read().then(() => null, value => value)
+    assert.equal(error?.code, 'source-state-unsupported')
+    assert.equal(await fsp.readFile(store.file, 'utf8'), unsupported)
+
+    await fsp.rm(store.file, { force: true })
+    await fsp.mkdir(store.file)
+    error = await store.read().then(() => null, value => value)
+    assert.equal(error?.code, 'source-state-unreadable')
+    await fsp.rm(store.file, { recursive: true, force: true })
+
+    await fsp.writeFile(store.file, valid, 'utf8')
+    const restored = await store.listBindings()
+    assert.equal(restored.length, 1, '恢复有效状态后旧绑定仍在')
+    assert.equal(restored[0].id, binding.id)
+
+    const accepted = await fetch(`${server.url}/hooks/github`, {
+      method: 'POST', headers: githubHeaders('state-2', body), body,
+    })
+    assert.equal(accepted.status, 202)
+    await ingress.flush()
+    assert.equal(router.calls.length, 1)
+    assert.equal((await ingress.snapshot()).counts.dispatched, 1)
+  } finally {
+    await server.close()
+    ingress.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
 })
 
 test('binding without a task needs an explicit autoStart rule', async () => {

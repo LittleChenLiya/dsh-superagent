@@ -54,15 +54,28 @@
 入口在控制台 HTTP 服务上，只有 `/hooks/github`、`/hooks/feishu` 不走控制台令牌，
 改用来源自身认证。处理顺序固定：
 
-1. 校验签名、时间窗和握手；
+1. 校验请求：加密模式先验签（`sha256(timestamp + nonce + encryptKey + rawBody)`）并检查时间窗，
+   再 AES-256-CBC 解密；仅配 Verification Token 时，v2 事件读 `header.token`，
+   URL 验证握手读请求体顶层的 `token`；
 2. 归一化为有界记录；
 3. **先持久登记**到 `sources/sources.json`，再返回 2xx；
 4. 用 `source:instance:deliveryId` 去重；
 5. 命中显式绑定且授权有效时，用稳定请求 ID 直通路由器；
-6. 崩溃后扫描 `registered` / `dispatching` 事件，重放同一 ID，路由器幂等去重。
+6. 崩溃或重启后扫描 `registered` / `dispatching` / `retrying` 事件，重放同一 ID，
+   路由器幂等去重。
 
 未绑定事件只登记为 `unbound`；绑定需要 `autoStart: true` 才允许新建任务，
 默认关闭。绑定撤销后事件不再派工。该能力只读外部事件，不向 GitHub / 飞书写回。
+
+Router 队列暂满、锁竞争等暂时失败登记为 `retrying`，进程存活期间按有限退避重试；
+每次尝试都重新读取绑定与工作目录并重新做授权判定。重试预算耗尽后转为 `failed`，
+`reason` 写明尝试次数与最后一次错误。`dispatched` 表示 Router 队列已接收
+（`deliveredTo: "router-queue"`），执行阶段是否送达由任务图证据判断，两者不混用。
+已登记事件在到达终态前不会被保留策略清理。
+
+`sources.json` 缺失时才初始化；JSON 损坏、权限错误或版本结构不受支持时，
+同一条读路径（启动登记、绑定更新、事件登记、状态查询）返回可识别的读失败并保留原文件，
+入站请求返回失败而不是成功接收。
 
 ### 配置
 
@@ -113,8 +126,10 @@ POST /api/console/sources/unbind
 ```
 
 `objectId` 由来源原生标识组成：GitHub 为 `github:<repo.id>:<kind>:<编号>`，
-飞书为 `feishu:<tenant_key>:message:<message_id>`。不同仓库或租户的同号对象
-不会共享绑定。
+飞书为 `feishu:<tenant_key>:message:<root_id>`。话题回复按 `root_id` 归到根消息，
+没有根 ID 时使用消息自身的 `message_id`；原始 `message_id` 保留在
+`subject.messageId` 作为记录来源，投递去重仍用 `event_id`。存量根消息绑定继续有效，
+无法确认归属的历史 ID 需要用户显式重绑。不同仓库或租户的同号对象不会共享绑定。
 
 ## 三、注意力界面
 
