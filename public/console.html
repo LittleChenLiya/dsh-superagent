@@ -1369,6 +1369,10 @@
     if (streaming) container.append(el('span', 'cursor'))
   }
 
+  const RECEIPT_LABELS = {
+    registered: '已登记', delivered: '已送达', accepted: '已验收', 'action-required': '需要你决定',
+  }
+
   function messageElement(message) {
     const article = el('article', `msg ${message.role}${message.pending ? ' pending' : ''}${message.failed ? ' failed' : ''}`)
     article.dataset.id = message.id
@@ -1402,6 +1406,7 @@
     if (message.pending) meta.append(el('span', '', ' · 发送中'))
     if (message.failed) meta.append(el('span', 'failed', ' · 发送失败'))
     if (message.interrupted) meta.append(el('span', '', ' · 已中断'))
+    if (RECEIPT_LABELS[message.receipt]) meta.append(el('span', 'receipt', ` · ${RECEIPT_LABELS[message.receipt]}`))
 
     const actions = el('div', 'msg-actions')
     actions.hidden = !message.text
@@ -1535,6 +1540,8 @@
       failed: false,
       interrupted: false,
       at: options.at || Date.now(),
+      receipt: options.receipt || null,
+      taskId: options.taskId || null,
       tools: [],
     }
     STATE.messages.push(message)
@@ -4146,7 +4153,11 @@
     if (!data || data.revision < (STATE.routerRevision ?? -1)) return
     STATE.routerRevision = data.revision
     clearMessages()
-    for (const message of data.messages ?? []) addMessage(message.role, message.text, { at: message.at })
+    for (const message of data.messages ?? []) {
+      addMessage(message.role, message.text, {
+        at: message.at, id: message.id, receipt: message.receipt, taskId: message.taskId,
+      })
+    }
     if (STATE.messages.length === 0) renderEmpty()
     setTyping(data.pending > 0, '正在处理消息…')
     renderApprovals()

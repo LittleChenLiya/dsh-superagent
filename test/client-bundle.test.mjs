@@ -419,3 +419,26 @@ test('a default workspace task requires switching back before recording from a n
   assert.equal(card.composer(after).props.value, '')
   assert.match(card.hint(after, 'dsa-record-hint'), /切换到「默认工作区」/)
 })
+
+test('the task card separates current decisions from sources and evidence, and labels a receipt', async () => {
+  const at = Date.now()
+  const card = await taskCardHarness({}, {
+    contextFacts: [
+      { id: 'f-alias', taskId: 'goal-empty', kind: 'alias', value: '发版', confirmedAt: at, origin: 'user' },
+      { id: 'f-decision', taskId: 'goal-empty', kind: 'decision', subject: '兼容性', value: '先查旧版',
+        confirmedAt: at, phaseId: null, origin: 'user', source: 'user-message' },
+      { id: 'f-source', taskId: 'goal-empty', kind: 'source', subject: 'issues.opened', value: 'Issue #7',
+        source: 'github', origin: 'external', validFrom: at },
+      { id: 'f-evidence', taskId: 'goal-empty', kind: 'evidence', subject: '交付结论', value: '已完成',
+        source: 'run', origin: 'run', observedAt: at },
+    ],
+    messages: [{ id: 'receipt-1', role: 'assistant', text: '已把补充要求写入执行记录。', receipt: 'delivered', at }],
+  })
+  const nodes = card.openRail()
+  const textOf = node => (node.children ?? []).filter(child => typeof child === 'string').join('')
+  assert.ok(nodes.some(node => textOf(node).includes('别名 · 发版')))
+  assert.ok(nodes.some(node => textOf(node).includes('兼容性 · 先查旧版')))
+  assert.ok(nodes.some(node => textOf(node).includes('来源 · issues.opened')), 'an external source is shown as data')
+  assert.ok(nodes.some(node => textOf(node).includes('证据 · 已完成')), 'run evidence is shown next to decisions')
+  assert.ok(nodes.some(node => (node.children ?? []).includes('已送达')), 'the receipt state is visible')
+})
