@@ -229,3 +229,31 @@ test('legacy state loads, migrates once, and a correction records what it replac
     await fsp.rm(base, { recursive: true, force: true })
   }
 })
+
+test('an answered decision from a prerequisite phase reaches the later session, never an unrelated phase', async () => {
+  const { base, state } = await fixture('superagent-graph-lineage')
+  const tasks = [{
+    id: 'goal-lineage', project: 'game', title: '试玩与镜头', status: 'running', routed: true,
+    phases: [
+      { id: 'p1', title: '执行', status: 'completed', dependsOn: [] },
+      { id: 'p2', title: '汇总', status: 'running', dependsOn: ['p1'] },
+      { id: 'p3', title: '无关', status: 'running', dependsOn: [] },
+    ],
+    decisions: [{
+      id: 'd1', phaseId: 'p1', question: '阶段 p1 的执行 agent 需要你决定：你能参加哪一个试玩时间？',
+      answer: 'answer', answerText: '周六下午可以', answeredAt: '2026-11-21T02:00:00.000Z',
+    }],
+  }]
+  const { boot, stopAll } = harness({ state, projects: [], tasks })
+  const router = boot()
+  try {
+    const summary = await router.taskFacts(tasks[0], 'p2')
+    assert.equal(summary.length, 1)
+    assert.equal(summary[0].value, '周六下午可以', 'the later session must see the answer it would otherwise ask again')
+    assert.equal((await router.taskFacts(tasks[0], 'p3')).length, 0, 'an unrelated phase must stay isolated')
+    assert.equal((await router.taskFacts(tasks[0], 'p1')).length, 1)
+  } finally {
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})

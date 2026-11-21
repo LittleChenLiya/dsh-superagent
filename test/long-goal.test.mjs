@@ -827,3 +827,86 @@ test('cancel stops the goal and its active phase runs', async () => {
   assert.equal(after.goal.status, 'cancelled')
   assert.deepEqual(orchestrator.calls.cancel, [runId])
 })
+
+test('a summary session reuses the answer of the decision the execution session already settled', async () => {
+  const root = await tempRoot('decision-reuse')
+  const orchestrator = fakeOrchestrator()
+  let goals = await manager(root, orchestrator)
+  const attention = (id, question) => ({ id, source: 'subtask-1', question, options: ['周六下午', '周日晚上'] })
+  try {
+    const goal = await goals.create({
+      goal: 'playtest and camera', parentSessionId: agent.id,
+      phases: [phase('p1'), phase('p2', { dependsOn: ['p1'] })],
+    })
+    await goals.tick()
+    let state = await goals.status(goal.id)
+    const p1run = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+    p1run.attention.items.push(attention('q1', '你能参加哪一个试玩时间？'))
+    p1run.status = 'completed'
+    p1run.goalMode.achieved = false
+    await goals.tick()
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.phases[0].status, 'needs-decision')
+    assert.equal(state.goal.decisions.length, 1)
+    await goals.answer(goal.id, state.goal.decisions[0].id, 'answer', { note: '周六下午可以' })
+    orchestrator.complete(p1run, '镜头改法和复验清单')
+
+    await goals.tick()
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.phases[0].status, 'completed')
+    assert.equal(state.goal.phases[1].status, 'running')
+    const p2run = orchestrator.runs.get(state.goal.phases[1].currentRunId)
+    p2run.attention.items.push(attention('q1', '试玩安排选哪个时间？'))
+    p2run.status = 'completed'
+    p2run.goalMode.achieved = false
+
+    await goals.tick()
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.decisions.length, 1, 'the later session must not open a second card')
+    assert.equal(state.goal.phases[1].status, 'running')
+    assert.ok(orchestrator.calls.answer.some(call => call.runId === p2run.id && call.attentionId === 'q1'
+      && call.text === '周六下午可以'), 'the settled answer must reach the summary run')
+    await goals.close()
+
+    goals = await manager(root, orchestrator)
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.decisions.length, 1, 'the one card and its answer survive a restart')
+    assert.equal(state.goal.decisions[0].answerText, '周六下午可以')
+  } finally {
+    await goals.close()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a completed phase keeps its concrete conclusion for the chat receipt across a restart', async () => {
+  const root = await tempRoot('phase-summary')
+  const orchestrator = fakeOrchestrator()
+  let goals = await manager(root, orchestrator)
+  try {
+    const goal = await goals.create({ goal: 'tower defense', parentSessionId: agent.id, phases: [phase('p1')] })
+    await goals.tick()
+    let state = await goals.status(goal.id)
+    const run = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+    orchestrator.complete(run, [
+      '把镜头切到敌人来的一侧，并在门口留 1.5 秒空镜。',
+      '',
+      '复验清单：',
+      '- 门口视角能看清来袭方向',
+      '- 空格镜头不再贴脸',
+    ].join('\n'))
+    await goals.tick()
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.phases[0].status, 'completed')
+    assert.match(state.goal.phases[0].summary, /门口留 1\.5 秒空镜/)
+    assert.match(state.goal.phases[0].summary, /复验清单/)
+    assert.doesNotMatch(state.goal.phases[0].summary, /```/)
+    await goals.close()
+
+    goals = await manager(root, orchestrator)
+    state = await goals.status(goal.id)
+    assert.match(state.goal.phases[0].summary, /复验清单/, 'the conclusion must survive a restart')
+  } finally {
+    await goals.close()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})

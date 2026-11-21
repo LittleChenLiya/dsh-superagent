@@ -266,3 +266,146 @@ test('a supplement naming the earlier foreground task still targets it after ano
     await fsp.rm(base, { recursive: true, force: true })
   }
 })
+
+test('an answerable part reaches the chat before a slow dispatch, and a replay adds neither answer nor task', async () => {
+  const { base, state } = await fixture('superagent-instant-answer')
+  const releases = []
+  let dispatches = 0
+  const text = '塔防空格镜头太近，改好以后打包；顺便想今晚三个朋友吃什么，人均一百的家常菜。'
+  const { boot, stopAll } = harness({
+    state, projects: [], tasks: [],
+    classify: async () => ({
+      action: 'task', title: '塔防镜头和晚饭', text,
+      reply: '今晚可以点清蒸鲈鱼、番茄炒蛋、蒜蓉西兰花，再加一个冬瓜排骨汤，人均大约八十。',
+    }),
+    execute: async () => {
+      dispatches += 1
+      await new Promise(resolve => releases.push(resolve))
+      return { text: '塔防镜头已交给执行方。', taskId: 'goal-tower' }
+    },
+  })
+  const router = boot()
+  try {
+    await router.submit({ id: 'mixed-route-1', text })
+    // The dispatch is deliberately stuck: the instant answer must already be in
+    // the conversation at this point, not after the planner returns.
+    const during = await until(async () => {
+      if (releases.length === 0) return null
+      const snapshot = await router.snapshot()
+      return snapshot.messages.some(message => message.id === 'instant-mixed-route-1') ? snapshot : null
+    }, 'the instant answer while the task is still dispatching')
+    assert.equal(during.pending, 1)
+    assert.equal(dispatches, 1)
+    const instant = during.messages.find(message => message.id === 'instant-mixed-route-1')
+    assert.match(instant.text, /清蒸鲈鱼/)
+    assert.equal(instant.for, 'mixed-route-1')
+    assert.equal(during.messages.find(message => message.role === 'user').text, text, 'the background task keeps the full original text')
+
+    // A duplicate delivery of the same request id must not start a second task
+    // or repeat the immediate answer.
+    await router.submit({ id: 'mixed-route-1', text })
+    releases.shift()()
+    const after = await until(async () => {
+      const snapshot = await router.snapshot()
+      return snapshot.pending === 0 && snapshot.messages.some(message => message.taskId === 'goal-tower') ? snapshot : null
+    }, 'the dispatched task receipt')
+    assert.equal(dispatches, 1)
+    assert.equal(after.messages.filter(message => message.id === 'instant-mixed-route-1').length, 1)
+    assert.equal(after.messages.filter(message => message.taskId === 'goal-tower').length, 1)
+  } finally {
+    for (const release of releases) release()
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('a finished phase is delivered once with its conclusion and evidence entry, while unfinished phases keep their real status', async () => {
+  const { base, state } = await fixture('superagent-phase-receipt')
+  const tasks = [{
+    id: 'goal-playtest', project: 'game', title: '塔防试玩与镜头', status: 'running', routed: true,
+    phases: [
+      {
+        id: 'p1', title: '镜头方案', status: 'completed', dependsOn: [], runId: 'run-1',
+        finishedAt: '2026-11-21T02:00:00.000Z',
+        summary: '把镜头切到敌人来的一侧，门口留 1.5 秒空镜；复验清单 4 项。',
+      },
+      { id: 'p2', title: '试玩安排', status: 'needs-decision', dependsOn: ['p1'] },
+    ],
+  }]
+  let router
+  const { boot, stopAll } = harness({
+    state, projects: [{ name: 'game', cwd: 'game' }], tasks,
+    classify: () => ({ action: 'status' }), execute: async () => ({ text: '任务仍在进行。' }),
+  })
+  const phaseReceipts = messages => messages.filter(message => message.id?.startsWith('phase-goal-playtest-p1-'))
+  try {
+    router = boot()
+    const first = await until(async () => {
+      const hits = phaseReceipts((await router.snapshot()).messages)
+      return hits.length === 1 ? hits : null
+    }, 'the phase receipt')
+    assert.match(first[0].text, /门口留 1\.5 秒空镜/)
+    assert.match(first[0].text, /复验清单与证据/)
+    assert.equal(first[0].taskId, 'goal-playtest')
+    assert.equal(first[0].phaseId, 'p1')
+    assert.equal(first[0].runId, 'run-1')
+
+    // Polling and a restart must not repeat the same finished phase.
+    await sleep(150)
+    await settled(router, 'poll after the phase receipt')
+    await stopAll()
+    router = boot()
+    await settled(router, 'restart after the phase receipt')
+    await sleep(150)
+    assert.equal(phaseReceipts((await router.snapshot()).messages).length, 1)
+
+    // A failed phase is not presented as accepted work, and the closing note
+    // names what did not arrive.
+    tasks[0].phases[1].status = 'failed'
+    tasks[0].phases[1].finishedAt = '2026-11-21T03:00:00.000Z'
+    tasks[0].status = 'partial'
+    tasks[0].finishedAt = '2026-11-21T03:00:00.000Z'
+    const closing = await until(async () => {
+      const messages = (await router.snapshot()).messages
+      return messages.find(message => message.id?.startsWith('result-goal-playtest-')) ?? null
+    }, 'the closing note')
+    assert.match(closing.text, /未交付/)
+    assert.match(closing.text, /p2「试玩安排」failed/)
+    assert.doesNotMatch(closing.text, /p2「试玩安排」已完成/)
+    assert.equal(phaseReceipts((await router.snapshot()).messages).length, 1, 'a failed phase needs no accepted receipt')
+  } finally {
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('asking which decisions are pending answers with the options without parking the task', async () => {
+  const { base, state } = await fixture('superagent-ask-decisions')
+  const tasks = [{
+    id: 'goal-playtest', project: 'game', title: '试玩安排', status: 'running', routed: true,
+    // The goal card stores the answer/stop mechanics; the worker's own choices
+    // are what a person can actually pick, so those must reach the chat.
+    decisions: [{ id: 'd1', question: '阶段 p2 的执行 agent 需要你决定：试玩定在哪个时间？',
+      options: ['answer', 'stop'], source: { options: ['周六下午', '周日晚上'] }, answer: null }],
+  }]
+  let executed = 0
+  const { boot, stopAll } = harness({
+    state, projects: [{ name: 'game', cwd: 'game' }], tasks,
+    classify: () => ({ action: 'status' }), execute: async () => { executed += 1; return { text: '状态已更新。' } },
+  })
+  const router = boot()
+  try {
+    await router.submit({ id: 'ask-decisions', project: 'game', text: '现在哪些事需要我决定？' })
+    const snapshot = await settled(router)
+    const answer = snapshot.messages.at(-1)
+    assert.equal(answer.role, 'assistant')
+    assert.match(answer.text, /试玩定在哪个时间/)
+    assert.match(answer.text, /周六下午 \/ 周日晚上/)
+    assert.doesNotMatch(answer.text, /answer \/ stop/, 'the mechanics are not a person\'s choice')
+    assert.equal(executed, 0, 'a read-only question must not start or park a task')
+    assert.deepEqual(snapshot.messages.at(-1).taskIds, ['goal-playtest'])
+  } finally {
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})

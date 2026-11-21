@@ -3079,3 +3079,58 @@ function diskWorkspace(base, dir) {
 async function tempDir() {
   return fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-root-'))
 }
+
+test('two sessions asking the same decision keep one attention card', async () => {
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }],
+      }))
+    }
+    if (spec.label === 'superagent-1') {
+      return completed('Did A.\n\n```attention\n'
+        + '{"question":"你能参加哪一个试玩时间？","options":["周六下午","周日晚上"],"reason":"需要本人到场"}\n```')
+    }
+    if (spec.label === 'superagent-2') {
+      return completed('Did B.\n\n```attention\n'
+        + '{"question":"试玩安排选哪个时间？","options":["周六下午","周日晚上"],"reason":"两个时间都能排"}\n```')
+    }
+    return completed('worker result')
+  })
+  const { orchestrator } = orchestratorWith({ spawner, config: { maxParallel: 2, attempts: 1 } })
+
+  const run = await orchestrator.start({ goal: 'playtest scheduling', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.attention.items.length, 1, 'the same decision must not become two cards')
+  const [item] = finished.attention.items
+  assert.equal(item.question, '你能参加哪一个试玩时间？')
+  assert.deepEqual(item.askedBy, ['subtask-1', 'subtask-2'])
+  assert.equal(finished.attentionSeq, 1)
+})
+
+test('two genuinely different decisions still keep two cards', async () => {
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }],
+      }))
+    }
+    if (spec.label === 'superagent-1') {
+      return completed('Did A.\n\n```attention\n'
+        + '{"question":"试玩定在哪个时间？","options":["周六下午","周日晚上"],"reason":"需要本人到场"}\n```')
+    }
+    if (spec.label === 'superagent-2') {
+      return completed('Did B.\n\n```attention\n'
+        + '{"question":"发布说明用哪种口吻？","options":["正式","口语"],"reason":"两个都能写"}\n```')
+    }
+    return completed('worker result')
+  })
+  const { orchestrator } = orchestratorWith({ spawner, config: { maxParallel: 2, attempts: 1 } })
+
+  const run = await orchestrator.start({ goal: 'playtest and release', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.attention.items.length, 2)
+  assert.deepEqual(finished.attention.items.map(item => item.source), ['subtask-1', 'subtask-2'])
+})
