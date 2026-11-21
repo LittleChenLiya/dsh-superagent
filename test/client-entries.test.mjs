@@ -11,11 +11,13 @@ const source = await readFile(path.join(root, 'lib', 'client.js'), 'utf8')
  * Phase 1 acceptance: every console capability the panel promises must be
  * reached by the panel itself, not left to a second page.
  */
-test('the panel reaches sessions, history and switching', () => {
-  assert.ok(source.includes("call('/sessions')"), 'history comes from GET /sessions')
-  assert.ok(source.includes("call('/session',"), 'new conversation comes from POST /session')
-  assert.ok(source.includes("call('/session/switch'"), 'switching comes from POST /session/switch')
-  assert.ok(source.includes("'aria-label': '会话'"), 'the title bar carries a 会话 entry')
+test('the panel sends through one router and keeps project selection local to the composer', () => {
+  assert.ok(source.includes("call('/message',"))
+  assert.ok(source.includes("call('/router')"))
+  assert.ok(source.includes("call('/projects',"))
+  assert.ok(!source.includes("call('/sessions')"))
+  assert.ok(!source.includes("call('/session/switch'"))
+  assert.ok(!source.includes('编辑助理名称'))
 })
 
 test('the panel reaches upload, answers and run-level cancel', () => {
@@ -44,8 +46,8 @@ test('questions and plans are answerable from the shared inbox', () => {
 })
 
 test('the run list is clickable instead of a dead list', () => {
-  assert.ok(source.includes('onClick: () => props.onOpen?.(run.id, run.parentSessionId)'), 'each run row opens its detail in the correct scope')
+  assert.ok(source.includes('onClick: () => onOpen(task.id, task.parentSessionId)'), 'each run row opens its detail in the correct scope')
   assert.ok(source.includes("className: 'dsa-rowitem'") && source.includes("type: 'button'"), 'run rows are buttons')
-  assert.ok(source.includes("waiting ? 'waiting' : run.status"), 'a run waiting on a person turns amber')
+  assert.ok(source.includes("waiting ? 'waiting' : task.status"), 'a run waiting on a person turns amber')
   assert.ok(source.includes("'等你决定'"), 'the waiting row says what it is waiting for')
 })

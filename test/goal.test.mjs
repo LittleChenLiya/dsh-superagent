@@ -6,7 +6,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
 
-import { normalizeGoalSpec, parseVerdict, runChecks } from '../lib/goal.js'
+import { hasMatchingCheckReceipt, normalizeGoalSpec, parseVerdict, runChecks } from '../lib/goal.js'
 import { apply } from '../lib/index.js'
 import { createOrchestrator } from '../lib/orchestrator.js'
 
@@ -177,6 +177,8 @@ test('goal mode stops on the round whose acceptance command passes', async () =>
   assert.equal(checks[0].source, 'command')
   assert.equal(checks[0].ok, true)
   assert.equal(checks[0].exitCode, 0)
+  assert.equal(hasMatchingCheckReceipt(finished.id, 1, checks[0]), true)
+  assert.equal(hasMatchingCheckReceipt(finished.id, 1, { ...checks[0], exitCode: 1 }), false)
   assert.match(finished.report, /# Goal achieved/)
   assert.equal(notifications.length, 1)
 })
@@ -328,6 +330,7 @@ test('max rounds is a hard stop of its own', async () => {
 test('machine checks carry real exit codes; conditions without a check stay model-judged', async () => {
   const cwd = await makeWorkspace()
   await fsp.writeFile(path.join(cwd, 'present.txt'), 'here', 'utf8')
+  await fsp.writeFile(path.join(cwd, 'empty.txt'), '', 'utf8')
   const spec = normalizeGoalSpec({
     cwd,
     acceptance: [
@@ -336,6 +339,8 @@ test('machine checks carry real exit codes; conditions without a check stay mode
       { id: 'file', text: 'the artifact exists', check: { type: 'file', path: 'present.txt' } },
       { id: 'missing', text: 'the lockfile is gone', check: { type: 'file', path: 'lock.json', mustExist: false } },
       { id: 'judged', text: 'the change is minimal' },
+      { id: 'empty', text: 'the report contains content',
+        check: { type: 'file', path: 'empty.txt', workspaceFile: true } },
     ],
   })
 
@@ -349,6 +354,8 @@ test('machine checks carry real exit codes; conditions without a check stay mode
   assert.equal(byId.fail.exitCode, 3)
   assert.match(byId.fail.detail, /exit 3/)
   assert.equal(byId.file.ok, true)
+  assert.equal(byId.empty.ok, false)
+  assert.equal(byId.empty.bytes, 0)
   assert.equal(byId.missing.ok, true)
   assert.equal(byId.judged.source, 'model')
   assert.equal(byId.judged.ok, null)
@@ -386,6 +393,20 @@ test('model-only acceptance is judged by an independent child and labeled', asyn
   assert.equal(check.source, 'model')
   assert.equal(check.ok, true)
   assert.equal(spawner.calls.filter(call => call.label === 'superagent-accept').length, 1)
+})
+
+test('an open human question parks the goal before acceptance', async () => {
+  const spawner = makeSpawner(async () => completed('Prepared a draft\n\n```attention\n{"question":"Which scope should I use?"}\n```'))
+  const { orchestrator, store } = orchestratorWith({ spawner })
+  const run = await orchestrator.start({
+    goal: 'Prepare the report', parentSessionId: parent.id, parent, mode: 'direct',
+    goalMode: { cwd: process.cwd(), acceptance: [{ text: 'The report covers the chosen scope' }] },
+  })
+  await orchestrator.idle()
+  const saved = await store.read(run.id)
+  assert.equal(saved.goalMode.achieved, false)
+  assert.equal(saved.goalMode.stop.reason, 'needs-decision')
+  assert.equal(spawner.calls.some(call => call.label === 'superagent-accept'), false)
 })
 
 test('a single-worker text goal is judged on its output without a copied prompt', async () => {

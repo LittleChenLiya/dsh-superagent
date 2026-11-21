@@ -1312,8 +1312,7 @@ only, and there is no remote or unauthenticated mode.
 
 ## Conversation console
 
-`consolePort` adds a local page where you talk to a **real Host Session**, not a
-mock chat and not a re-skinned `superagent_start(goal)` form:
+`consolePort` enables the Superagent conversation and task inbox:
 
 ```yaml
 - id: superagent
@@ -1322,14 +1321,38 @@ mock chat and not a re-skinned `superagent_start(goal)` form:
     consoleRoot: /path/to/project
 ```
 
-The plugin creates the session with the host's `sessionController.create()`,
-sends each message with `prompt({ mode: 'queue' | 'steer' })`, and forwards
-`follow({ assistantStream: true })` plus `observeState()` to the page. Follow-up
-messages therefore continue the same conversation; they are not a new session.
-The right-hand column lists the runs whose `parentSessionId` is that session, so
-the page shows exactly the subtasks the conversation derived. An attention card
-answers through `orchestrator.answer`, the same path as the
-`superagent_answer` tool, with the conversation agent as the run owner.
+The desktop Superagent uses one conversation for new work, progress questions
+and updates to existing tasks. The workspace on the composer scopes a new task.
+Name a task and phase in the same conversation, or use the phase's follow-up
+action in the task card. A queued phase receives the instruction on dispatch.
+Use the task-level follow-up action for updates that apply to the whole task.
+The task card shows what each phase is waiting for and where updates were sent.
+
+Enable **Reuse recent conversation** before sending to attach a text snapshot of
+up to ten earlier messages from the selected workspace to that task. Sharing is
+opt-in per send. The task card shows how many messages it received.
+
+Use **Insert batch list** to submit independent items in the same composer. The
+first line is `/批量 Your batch name`, followed by one item per line. A batch can
+hold up to 5,000 items, subject to the request size limit. Append
+` => relative/path.md` to check for a nonempty deliverable when a work item
+finishes. The task card shows progress, supports pausing new admissions,
+resuming and cancelling, and allows individual failed items to be retried.
+The run detail shows acceptance evidence and identifies model judgments.
+
+Give a task a lasting alias with `/别名 Task | Alias` and record a confirmed
+choice with `/决定 Alias | Topic | Choice`. Query `/状态 Alias` or `/方案 Alias`
+from the same composer. The task card shows the active records and their
+origins, and later dispatches receive related decisions. Add `| 7天` for expiry,
+or use `/撤销决定 Alias | Topic` and `/撤销别名 Task | Alias` to withdraw a record.
+
+
+
+The router coordinates independent Harness worker sessions. The task list
+includes searchable past work and deliverables. The inbox gathers questions and
+approvals across configured workspaces. The router retains its conversation and
+task associations on restart. Explicit project rules apply to that project's
+new work, and explicit personal preferences can span projects.
 
 The bound URL and a fresh per-process token are written to
 `<stateDir>/console.json` (mode `0600`). Open
@@ -1348,13 +1371,7 @@ the editor touches just the two entries it owns (`llm-pi-ai`,
 `501 wizard-unavailable`, so the button says that rather than opening a form that
 cannot work.
 
-If the host does not mount `sessionController` (for example a headless profile
-without the web session API), the page says so and refuses to create a session.
-It does **not** pretend to be a chat. The console also keeps one active
-conversation per process; "新对话" creates a new Host Session and leaves the old
-one intact. Approval prompts that appear as host `pendingInput` are surfaced in
-the status line but are not answered by this page; only run attention questions
-are.
+Background dispatch requires the host's `sessionController` and a configured model.
 
 ### Tools the conversation gets
 

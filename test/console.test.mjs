@@ -8,6 +8,8 @@ import test from 'node:test'
 import { createConsole } from '../lib/console.js'
 import { createOrchestrator } from '../lib/orchestrator.js'
 import { createStore } from '../lib/store.js'
+import { createRouter } from '../lib/router.js'
+import { currentFacts, putFact } from '../lib/work-context.js'
 
 const BASE_CONFIG = {
   maxSubtasks: 6,
@@ -23,6 +25,156 @@ const BASE_CONFIG = {
 function completed(text) {
   return { output: [{ type: 'text', text }], stopReason: 'completed' }
 }
+
+test('one router dispatches independently scoped tasks and resumes with its decisions after restart', async () => {
+  const { base, state } = await fixture()
+  const { host } = fakeHost()
+  const tasks = []
+  const executed = []
+  const projects = [{ name: '发布', cwd: 'release' }, { name: '反馈', cwd: 'feedback' }]
+  host.workbench = async () => ({ projects, runs: [], goals: [], inbox: [] })
+  const classify = ({ input, project, tasks: candidates }) => {
+    if (input.startsWith('以后')) return { action: 'remember', text: '写升级提醒', projectId: project }
+    if (input === '暂停刚才那个') return { action: 'pause', taskId: candidates[0].id }
+    if (input === '查发布进度') return { action: 'status', taskId: 'goal-a' }
+    if (input === '昨天发版那件事，兼容性继续查') {
+      const match = candidates.find(task => task.aliases?.includes('发版'))
+      assert.ok(match.confirmed.some(item => item.value === '先灰度 10%'))
+      return { action: 'followup', taskId: match.id, phaseId: 'compat', text: '兼容性继续查' }
+    }
+    if (input.startsWith('补充')) {
+      assert.ok(candidates.find(task => task.id === 'goal-a').phases.some(phase => phase.id === 'compat'))
+      return { action: 'followup', taskId: 'goal-a', phaseId: input.endsWith('安装') ? 'foreign' : input.includes('兼容性') ? 'compat' : null }
+    }
+    return { action: 'task', text: input, projectId: project }
+  }
+  const execute = async command => {
+    executed.push(command)
+    if (command.action === 'task') {
+      const id = command.project === 'release' ? 'goal-a' : 'goal-b'
+      tasks.push({ id, project: command.project, title: command.text, status: 'running', routed: true })
+      return { text: '已接收', taskId: id }
+    }
+    return { text: command.action === 'status' ? '进行中' : '已送达执行方', taskId: command.target }
+  }
+  const newRouter = () => createRouter({ root: state, catalog: async () => ({ projects, tasks }), classify, execute })
+  let router = newRouter()
+  let panel
+  const settled = async () => {
+    for (let attempt = 0; attempt < 400; attempt++) {
+      const snapshot = await router.snapshot()
+      if (snapshot.pending === 0) return snapshot
+      await new Promise(resolve => setTimeout(resolve, 15))
+    }
+    assert.fail('router queue did not drain')
+  }
+  try {
+    panel = await startConsole(state, host, { router })
+    const post = (route, body) => request(panel, 'POST', `/api/console/${route}`, body)
+    assert.equal((await post('bootstrap', {})).json.data.mode, 'router')
+    assert.equal(panel.sessionId, null)
+    for (const route of ['session', 'session/switch', 'workbench']) assert.equal((await post(route, {})).status, 405)
+    await post('message', { id: 'route-memory-1', project: 'release', text: '以后发布说明都写升级提醒' })
+    await post('message', { id: 'route-release-1', project: 'release', text: '准备发布' })
+    await post('message', { id: 'route-feedback-1', project: 'feedback', text: '汇总反馈' })
+    await post('message', { id: 'route-release-1', project: 'release', text: '准备发布' })
+    await settled()
+    assert.equal(tasks.length, 2)
+    assert.equal(executed[0].preferences[0].text, '写升级提醒')
+    assert.deepEqual(executed[1].preferences, [])
+    assert.equal((await post('message', { project: 'feedback', target: 'goal-a', text: '失败即结束', intent: 'followup' })).status, 500)
+    await post('message', { id: 'route-add-1', target: 'goal-a', text: '补上迁移指引', intent: 'followup' })
+    await post('message', { id: 'route-ambiguous-1', text: '暂停刚才那个' })
+    const before = await settled()
+    assert.equal(executed[2].target, 'goal-a')
+    assert.equal(executed[2].project, 'release')
+    assert.equal(executed.length, 3, 'ambiguous pause must not be applied')
+    assert.deepEqual(before.messages.at(-1).taskIds, ['goal-a', 'goal-b'])
+    assert.equal((await post('router/choose', { requestId: 'route-ambiguous-1', target: 'goal-b' })).status, 200)
+    const chosen = await settled()
+    assert.equal(executed.at(-1).action, 'pause')
+    assert.equal(executed.at(-1).target, 'goal-b')
+    assert.equal(chosen.messages.find(message => message.id === 'reply-route-ambiguous-1').choiceFor, undefined)
+    await panel.stop()
+
+    router = newRouter()
+    panel = await startConsole(state, host, { router })
+    assert.deepEqual((await router.snapshot()).messages, chosen.messages)
+    assert.equal((await post('message', { id: 'route-status-1', text: '查发布进度' })).status, 200)
+    assert.equal((await settled()).messages.at(-1).text, '进行中')
+    assert.equal(executed.at(-1).target, 'goal-a')
+
+    tasks[0].phases = [{ id: 'compat', title: '兼容性', status: 'pending' }, { id: 'review', title: '评审', status: 'running' }]
+    tasks[1].phases = [{ id: 'foreign', title: '安装', status: 'running' }]
+    await post('message', { id: 'route-phase-1', text: '补充兼容性' })
+    await settled()
+    assert.equal(executed.at(-1).target, 'goal-a')
+    assert.equal(executed.at(-1).phaseId, 'compat')
+    await post('message', { id: 'route-phase-2', target: 'goal-a', phaseId: 'review', text: '保留依据', intent: 'followup' })
+    await settled()
+    assert.equal(executed.at(-1).phaseId, 'review')
+    const exactCount = executed.length
+    assert.equal((await post('message', { target: 'goal-a', phaseId: 'foreign', text: '跨任务追加', intent: 'followup' })).status, 500)
+    await post('message', { id: 'route-phase-3', text: '补充安装' })
+    assert.match((await settled()).messages.at(-1).text, /无法接收/)
+    await post('message', { id: 'route-phase-4', project: 'release', text: '补充一个要求' })
+    assert.match((await settled()).messages.at(-1).text, /多个阶段/)
+    assert.equal(executed.length, exactCount, 'an unresolved phase must never turn into a goal-wide instruction')
+
+    await post('message', { id: 'route-context-1', project: 'release', text: '查发布进度' })
+    await settled()
+    assert.equal(executed.at(-1).snapshot, undefined)
+    const batch = ['/批量 配置清点', ...Array.from({ length: 5000 }, (_, i) => `核对配置 ${i}`)].join('\n')
+    assert.equal((await post('message', { id: 'route-batch-1', project: 'release', text: batch, contextMode: 'snapshot' })).status, 200)
+    const batched = await settled()
+    assert.equal(executed.at(-1).action, 'batch')
+    assert.equal(executed.at(-1).batch.length, 5000)
+    assert.ok(executed.at(-1).snapshot.some(message => message.text === '查发布进度'))
+    assert.ok(!executed.at(-1).snapshot.some(message => message.text === '汇总反馈' || message.text.includes('批量清单')))
+    assert.ok(batched.messages.find(message => message.id === 'route-batch-1').text.length < 100)
+    assert.equal((await post('message', { text: '/批量 路径校验\n检查文件 => ../outside.txt' })).status, 500)
+
+    await post('message', { id: 'work-alias-release', project: 'release', text: '把准备发布叫做发版' })
+    await post('message', { id: 'work-decision-release', project: 'release', text: '记下发版的发布方案：先灰度 10%' })
+    await settled()
+    assert.equal((await router.taskFacts(tasks[0])).at(-1).value, '先灰度 10%')
+    assert.equal((await router.taskFacts(tasks[1])).length, 0)
+    await panel.stop()
+    router = newRouter()
+    panel = await startConsole(state, host, { router })
+    await post('message', { id: 'work-status-release', project: 'release', text: '发版到哪了' })
+    assert.equal((await settled()).messages.at(-1).text, '进行中')
+    await post('message', { id: 'work-read-release', project: 'release', text: '发版的当前方案' })
+    assert.match((await settled()).messages.at(-1).text, /先灰度 10%/)
+    await post('message', { id: 'work-resume-release', text: '昨天发版那件事，兼容性继续查' })
+    await settled()
+    assert.equal(executed.at(-1).target, 'goal-a')
+    assert.equal(executed.at(-1).phaseId, 'compat')
+    await post('message', { id: 'work-wrong-project', project: 'feedback', text: '/方案 发版' })
+    assert.match((await settled()).messages.at(-1).text, /找不到/)
+    await post('message', { id: 'work-alias-feedback', project: 'feedback', text: '/别名 goal-b | 发版' })
+    await post('message', { id: 'work-ambiguous-project', text: '/方案 发版' })
+    assert.match((await settled()).messages.at(-1).text, /2 项工作/)
+    await post('message', { id: 'work-remove-decision', project: 'release', text: '/撤销决定 发版 | 发布方案' })
+    await post('message', { id: 'work-read-revoked', project: 'release', text: '/方案 发版' })
+    assert.match((await settled()).messages.at(-1).text, /没有已确认的决定/)
+  } finally {
+    await panel?.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('dated facts retain their source and cannot revive an expired or withdrawn decision', () => {
+  const state = {}
+  const fact = { kind: 'decision', taskId: 'goal-1', project: 'release', key: 'plan', subject: 'Plan' }
+  putFact(state, { ...fact, value: 'first' }, { id: 'user-a', at: 100 })
+  putFact(state, { ...fact, value: 'second', expiresAt: 220 }, { id: 'user-b', at: 200 })
+  assert.deepEqual(currentFacts(state.facts, 210).map(item => [item.id, item.replaces, item.source, item.value]),
+    [['user-b', 'user-a', 'user-message', 'second']])
+  assert.deepEqual(currentFacts(state.facts, 220), [])
+  putFact(state, { ...fact, revoked: true }, { id: 'user-c', at: 250 })
+  assert.deepEqual(currentFacts(state.facts, 300), [])
+})
 
 async function fixture() {
   const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-console-'))

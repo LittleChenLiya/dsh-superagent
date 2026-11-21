@@ -214,6 +214,110 @@ test('starts independent phases in parallel under the cap', async () => {
   )
 })
 
+test('delivers instructions only to the named phase and retains them across a restart before dispatch', async t => {
+  const root = await tempRoot('phase-instructions')
+  t.after(() => fsp.rm(root, { recursive: true, force: true }))
+  const orchestrator = fakeOrchestrator()
+  const delivered = []
+  orchestrator.followup = async (runId, text, parent, options) => delivered.push({ runId, text, context: options.context })
+  const context = { resolveContext: async (goal, phaseId) => [{ value: `confirmed for ${phaseId}` }] }
+  let goals = await manager(root, orchestrator, context)
+  const goal = await goals.create({
+    goal: 'release review', parentSessionId: agent.id, maxParallelPhases: 2,
+    phases: [phase('checks'), phase('compat'), phase('summary', { dependsOn: ['checks', 'compat'] })],
+  })
+  await goals.tick()
+  const [checks, compat] = (await goals.get(goal.id)).phases
+  assert.ok(checks.currentRunId && compat.currentRunId)
+  await goals.instruct(goal.id, 'compatibility only', 'instruct-compat', 'compat')
+  await goals.instruct(goal.id, 'compatibility only', 'instruct-compat', 'compat')
+  assert.equal(delivered.length, 1)
+  assert.equal(delivered[0].runId, compat.currentRunId)
+  assert.equal(delivered[0].text, 'compatibility only')
+  assert.match(delivered[0].context, /confirmed for compat/)
+  await assert.rejects(goals.instruct(goal.id, 'unknown', 'instruct-unknown', 'foreign'), /不存在/)
+  const pending = await goals.instruct(goal.id, 'summary only', 'instruct-summary', 'summary')
+  assert.deepEqual(pending.instructions.at(-1).targets, [])
+  await goals.close()
+
+  goals = await manager(root, orchestrator, context)
+  orchestrator.complete(orchestrator.runs.get(checks.currentRunId), 'check result')
+  orchestrator.complete(orchestrator.runs.get(compat.currentRunId), 'compat result')
+  await goals.tick()
+  const next = orchestrator.calls.start.at(-1)
+  assert.equal(next.origin.phaseId, 'summary')
+  assert.match(next.goal, /summary only/)
+  assert.match(next.goal, /confirmed for summary/)
+  assert.match(next.goal, /check result/)
+  assert.doesNotMatch(next.goal, /compatibility only/)
+  await assert.rejects(goals.instruct(goal.id, 'too late', 'instruct-late', 'compat'), /已结束/)
+  await goals.close()
+})
+
+test('a batch bounds live work, persists pause and resumes the remaining items after restart', async t => {
+  const root = await tempRoot('batch')
+  t.after(() => fsp.rm(root, { recursive: true, force: true }))
+  const orchestrator = fakeOrchestrator()
+  let goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'batch review', batch: true, parentSessionId: agent.id, maxParallelPhases: 2, maxAttemptsPerPhase: 1,
+    contextSnapshot: [{ role: 'user', text: 'Use the earlier checklist as background.' }],
+    phases: Array.from({ length: 5000 }, (_, index) => phase(`item${index + 1}`)),
+  })
+  await goals.tick()
+  assert.equal(orchestrator.calls.start.length, 2)
+  assert.equal(orchestrator.calls.start[0].mode, 'direct')
+  assert.match(orchestrator.calls.start[0].goal, /earlier checklist/)
+  orchestrator.complete(orchestrator.runs.get('r-1'))
+  orchestrator.fail(orchestrator.runs.get('r-2'))
+  await goals.pause(goal.id)
+  await goals.close()
+  goals = await manager(root, orchestrator)
+  await goals.tick()
+  assert.equal(orchestrator.calls.start.length, 2)
+  assert.equal((await goals.get(goal.id)).status, 'paused')
+  await goals.resume(goal.id)
+  await goals.tick()
+  assert.deepEqual(orchestrator.calls.start.map(call => call.origin.phaseId), ['item1', 'item2', 'item3', 'item4'])
+  const resumed = await goals.get(goal.id)
+  assert.equal(resumed.phases[0].status, 'completed')
+  assert.equal(resumed.phases[1].status, 'skipped')
+  assert.equal(resumed.phases.length, 5000)
+  await goals.cancel(goal.id)
+  assert.equal((await goals.get(goal.id)).phases.at(-1).status, 'cancelled')
+  assert.deepEqual(orchestrator.calls.cancel, ['r-3', 'r-4'])
+  await goals.close()
+})
+
+test('an item waiting for a person lets the rest of its batch advance', async t => {
+  const root = await tempRoot('batch-decision')
+  t.after(() => fsp.rm(root, { recursive: true, force: true }))
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'check independent items', batch: true, parentSessionId: agent.id,
+    maxParallelPhases: 1, phases: [phase('one'), phase('two'), phase('three')],
+  })
+  await goals.tick()
+  const first = orchestrator.fail(orchestrator.runs.get('r-1'), { stop: 'needs-decision' })
+  first.attention.items.push({ id: 'which', question: 'Which option?' })
+  await goals.tick()
+  const waiting = await goals.get(goal.id)
+  assert.equal(waiting.status, 'running')
+  assert.equal(waiting.phases[0].status, 'needs-decision')
+  assert.equal(waiting.phases[1].status, 'running')
+  orchestrator.complete(orchestrator.runs.get('r-2'))
+  await goals.tick()
+  orchestrator.complete(orchestrator.runs.get('r-3'))
+  await goals.tick()
+  assert.equal((await goals.get(goal.id)).status, 'needs-decision')
+  await goals.answer(goal.id, waiting.decisions[0].id, 'answer', { note: 'Use the first option' })
+  orchestrator.complete(first)
+  await goals.tick()
+  assert.equal((await goals.get(goal.id)).status, 'completed')
+  await goals.close()
+})
+
 test('a restarted host resumes the interrupted phase, not the finished one', async () => {
   const root = await tempRoot('restart')
   const orchestrator = fakeOrchestrator()

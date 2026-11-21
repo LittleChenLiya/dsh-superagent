@@ -14,7 +14,7 @@ const pkg = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'u
  * `window`, import the file, and hand its factory a minimal `require`.
  * @returns {Promise<object>} the module exports the host would see.
  */
-async function materialize(overrides = null) {
+async function materialize(overrides = null, hooks = {}) {
   let captured = null
   globalThis.window = {
     __ModuleLoader__: {
@@ -29,6 +29,7 @@ async function materialize(overrides = null) {
     useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
     useEffect: () => {},
     useRef: value => ({ current: value }),
+    ...hooks,
   }
   // The host hands plugin clients its own component library (route A). The
   // stub keeps the module resolvable without a browser; it deliberately ships
@@ -53,6 +54,30 @@ async function materialize(overrides = null) {
 test('the client bundle parses as JavaScript', () => {
   const result = spawnSync(process.execPath, ['--check', clientPath], { encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr)
+})
+
+test('reloading the client refreshes an existing stylesheet without appending another one', async () => {
+  const { exports } = await materialize()
+  const id = 'dsh-superagent-native-style'
+  const previous = { id, textContent: '.dsa-task-receipt{display:block}' }
+  const originalDocument = globalThis.document
+  const appended = []
+  globalThis.document = {
+    getElementById: requested => requested === id ? previous : null,
+    head: { appendChild: element => appended.push(element) },
+    createElement: () => ({}),
+  }
+  try {
+    const ctx = { slots: { inject() {} } }
+    exports.apply(ctx)
+    assert.match(previous.textContent, /\.dsa-header-start,\.dsa-header-actions\{display:flex/)
+    assert.match(previous.textContent, /\.dsa-receipt-copy\{display:grid/)
+    exports.apply(ctx)
+    assert.equal(appended.length, 0)
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document
+    else globalThis.document = originalDocument
+  }
 })
 
 test('the package declares its browser half consistently', () => {
@@ -168,7 +193,19 @@ test('memo/forwardRef host components are not mistaken for missing exports', asy
 })
 
 test('the ready panel links a task receipt, a scoped follow-up, and a direct artifact preview', async () => {
-  const { exports } = await materialize()
+  const seatState = []
+  let seatHook = null
+  const { exports } = await materialize(null, {
+    useState(initial) {
+      const value = typeof initial === 'function' ? initial() : initial
+      if (seatHook === null) return [value, () => {}]
+      const index = seatHook++
+      if (seatState[index] === undefined) seatState[index] = value
+      return [seatState[index], next => {
+        seatState[index] = typeof next === 'function' ? next(seatState[index]) : next
+      }]
+    },
+  })
   let panel
   exports.apply({ slots: {
     inject: (name, callback) => callback(),
@@ -180,11 +217,15 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   const second = { id: 'b', goal: 'Feedback', status: 'completed', parentSessionId: 'chat-b', artifacts: [{ name: 'Feedback.md', href: 'feedback.md' }] }
   const goal = {
     id: 'g1', goal: first.goal, ownerSessionId: 'chat-a', status: 'running', decisions: [],
-    phases: [{ id: 'p1', title: 'Draft', status: 'running', runId: first.id }],
+    phases: [
+      { id: 'p1', title: 'Draft', status: 'running', runId: first.id },
+      { id: 'p2', title: 'Review', status: 'pending', dependsOn: ['p1'] },
+    ],
   }
   const model = {
     ...shell.props.model, phase: 'ready', sessionId: 'chat-a', selectedGoalId: goal.id,
-    runs: [first], goals: [goal], workbench: { sessionId: 'chat-a', runs: [second] },
+    messages: [{ id: 'receipt', role: 'assistant', text: '已接下任务', taskId: goal.id, at: Date.now() }],
+    workbench: { sessionId: 'chat-a', runs: [first, second], goals: [goal] },
   }
   function* elements(tree) {
     if (Array.isArray(tree)) {
@@ -198,15 +239,31 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
       }
     }
   }
-  const render = overrides => [...elements(shell.type({ model: { ...model, ...overrides }, dispatch: action => actions.push(action) }))]
-  const button = (nodes, label) => nodes.find(node => node.type === 'button' && node.children.includes(label))
+  const render = overrides => {
+    seatHook = 0
+    const seat = shell.type({ model: { ...model, ...overrides }, dispatch: action => actions.push(action) })
+    seatHook = null
+    return [...elements(seat)]
+  }
+  const button = (nodes, label) => nodes.find(node => node.type === 'button'
+    && (node.children.includes(label) || node.props.title === label || node.props['aria-label'] === label))
+  const initial = render()
+  assert.equal(initial.some(node => node.type === 'aside'), false, 'the chat starts without the task drawer')
+  button(initial, first.goal).props.onClick()
   const nodes = render()
-  button(nodes, '已委托 · Release notes').props.onClick()
   button(nodes, '补充要求').props.onClick()
-  button(nodes, 'Feedback.md').props.onClick()
-  assert.equal(actions[0].goalId, goal.id)
-  assert.equal(actions[1].run.id, first.id)
+  button(nodes, 'feedback.md').props.onClick()
+  assert.equal(actions[0].taskId, goal.id)
+  assert.equal(actions[1].run.id, goal.id)
   assert.equal(actions[2].run.parentSessionId, 'chat-b')
   assert.equal(actions[2].item.href, 'feedback.md')
-  assert.equal(render({ inboxOpen: true }).some(node => node.children.includes('暂无待处理事项')), true)
+  assert.ok(nodes.some(node => node.children.includes('等待 Draft')))
+  button(nodes, '补充阶段要求 Review').props.onClick()
+  assert.equal(actions.at(-1).run.id, goal.id)
+  assert.equal(actions.at(-1).phase.id, 'p2')
+  button(render(), '待办').props.onClick()
+  const inbox = render({ inboxOpen: true })
+  assert.equal(inbox.some(node => node.children.includes('暂无待处理事项')), true)
+  assert.equal(inbox.find(node => node.props?.['aria-label'] === '任务列表')?.props.hidden, true,
+    'the task list stays mounted so its search can survive a view change')
 })

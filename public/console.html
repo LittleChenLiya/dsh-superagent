@@ -1339,6 +1339,7 @@
 
   function setSession(sessionId) {
     STATE.sessionId = sessionId
+    if (STATE.router) return
     sessionLabelEl.textContent = sessionId ? `session ${shortId(sessionId)}` : '没有会话'
     sessionLabelEl.title = sessionId || '宿主会话 id'
   }
@@ -3012,7 +3013,9 @@
     const reject = el('button', 'reject', '拒绝')
     reject.type = 'button'
     reject.addEventListener('click', () => decideApproval(approval.id, 'reject'))
-    options.append(allow, allowTool, reject)
+    options.append(allow)
+    if (!STATE.router) options.append(allowTool)
+    options.append(reject)
     card.append(options)
     return card
   }
@@ -3130,8 +3133,11 @@
     switch (frame.type) {
       case 'hello':
         setSession(frame.sessionId)
-        setMode(frame.mode === 'chat' ? 'chat' : 'unavailable', frame.capabilities)
+        setMode(frame.mode === 'chat' || STATE.router ? 'chat' : 'unavailable', frame.capabilities)
         setConn('live', '已连接')
+        break
+      case 'router.changed':
+        refreshRouter().catch(() => {})
         break
       case 'session':
         if (frame.sessionId && frame.sessionId !== STATE.sessionId) {
@@ -3433,7 +3439,17 @@
 
   function applyBootstrap(data) {
     STATE.booted = true
-    setMode(data.mode === 'chat' ? 'chat' : 'unavailable', data.capabilities)
+    STATE.router = data.mode === 'router'
+    setMode(data.mode === 'chat' || STATE.router ? 'chat' : 'unavailable', data.capabilities)
+    if (STATE.router) {
+      newChatEl.style.display = 'none'
+      $('historyOpen').style.display = 'none'
+      stopAllEl.style.display = 'none'
+      document.querySelector('[aria-label="发送方式"]')?.closest('section')?.setAttribute('hidden', '')
+      sessionLabelEl.textContent = '超级智能体'
+      sessionLabelEl.title = '超级智能体'
+      renderRouterMessages(data.router)
+    }
     if (data.sessionId) setSession(data.sessionId)
     if (data.preset) STATE.preset = data.preset
     STATE.runs = Array.isArray(data.runs) ? data.runs : []
@@ -3442,8 +3458,10 @@
     for (const approval of Array.isArray(data.approvals) ? data.approvals : []) seatApproval(approval)
     refreshNotices()
     if (STATE.messages.length === 0) renderEmpty()
-    loadTools()
-    loadSchedules()
+    if (!STATE.router) {
+      loadTools()
+      loadSchedules()
+    }
     wizardLoad({ probe: false, auto: true })
   }
 
@@ -4042,7 +4060,8 @@
     try {
       const data = await api('/api/console/bootstrap', { method: 'POST' })
       applyBootstrap(data)
-      if (data.mode === 'chat' && data.sessionId) connectEvents()
+      if (STATE.router) refreshRouter().catch(() => {})
+      if (STATE.router || (data.mode === 'chat' && data.sessionId)) connectEvents()
       else setConn('warn', '未连接')
     } catch (error) {
       if (error.status === 401) {
@@ -4057,13 +4076,13 @@
   }
 
   async function connectEvents() {
-    if (!STATE.sessionId) return
+    if (!STATE.sessionId && !STATE.router) return
     if (STATE.streamAbort) STATE.streamAbort.abort()
     const controller = new AbortController()
     STATE.streamAbort = controller
     setConn('warn', '连接流中')
     try {
-      const response = await fetch(`/api/console/events?sessionId=${encodeURIComponent(STATE.sessionId)}`, {
+      const response = await fetch(STATE.router ? '/api/console/events' : `/api/console/events?sessionId=${encodeURIComponent(STATE.sessionId)}`, {
         headers: { authorization: `Bearer ${STATE.token}` },
         signal: controller.signal,
       })
@@ -4117,17 +4136,53 @@
     if (STATE.reconnectTimer) return
     STATE.reconnectTimer = setTimeout(() => {
       STATE.reconnectTimer = null
-      if (STATE.mode === 'chat' && STATE.sessionId) connectEvents()
+      if (STATE.mode === 'chat' && (STATE.sessionId || STATE.router)) connectEvents()
     }, 1200)
   }
 
   // ---------- composer ----------
+
+  function renderRouterMessages(data) {
+    if (!data || data.revision < (STATE.routerRevision ?? -1)) return
+    STATE.routerRevision = data.revision
+    clearMessages()
+    for (const message of data.messages ?? []) addMessage(message.role, message.text, { at: message.at })
+    if (STATE.messages.length === 0) renderEmpty()
+    setTyping(data.pending > 0, '正在处理消息…')
+    renderApprovals()
+  }
+
+  async function refreshRouter() {
+    const [router, runs] = await Promise.all([api('/api/console/router'), api('/api/console/runs')])
+    renderRouterMessages(router)
+    STATE.runs = runs.runs ?? []
+    renderLanes()
+    renderRail()
+    refreshNotices()
+  }
 
   async function sendMessage() {
     const text = inputEl.value.trim()
     if (!text || STATE.sending || STATE.mode !== 'chat') return
     STATE.sending = true
     updateSend()
+    if (STATE.router) {
+      try {
+        if (STATE.pendingRouterSend?.text !== text) STATE.pendingRouterSend = { text, id: crypto.randomUUID() }
+        await api('/api/console/message', { method: 'POST', body: STATE.pendingRouterSend })
+        STATE.pendingRouterSend = null
+        if (inputEl.value.trim() === text) inputEl.value = ''
+        autoGrow()
+        await refreshRouter().catch(() => {})
+      } catch (error) {
+        pushToast(`发送失败：${messageOf(error)}`, 'err')
+      } finally {
+        STATE.sending = false
+        updateSend()
+        inputEl.focus()
+      }
+      return
+    }
     inputEl.value = ''
     autoGrow()
     removeEmpty()
@@ -4377,7 +4432,7 @@
   }
 
   setInterval(() => {
-    if (STATE.mode === 'chat' && !STATE.sessionId) bootstrap()
+    if (STATE.mode === 'chat' && !STATE.sessionId && !STATE.router) bootstrap()
   }, 15_000)
 })()
 </script>

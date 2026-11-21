@@ -73,6 +73,8 @@
     "lib/browser.js",
     "lib/desktop.js",
     "lib/runtime-control.js",
+    "lib/router.js",
+    "lib/work-context.js",
     "bin/watch.js",
     "bin/report.js",
     "bin/doctor.js",
