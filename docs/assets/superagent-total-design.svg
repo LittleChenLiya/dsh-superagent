@@ -1,0 +1,183 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="780" viewBox="0 0 1200 780" role="img" aria-labelledby="title desc">
+  <title id="title">Superagent total design architecture</title>
+  <desc id="desc">GitHub and Feishu events pass through signature-verified ingress and durable registration, match an explicit binding, and reach the router. The router reads and writes a work graph of user-confirmed, run-observed and external facts, injects only current facts into execution phases, and surfaces receipts and work context in the attention UI.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#059669"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7c3aed"/>
+    </marker>
+    <style>
+      .bg { fill: #f6f7f9; }
+      .box { fill: #ffffff; stroke-width: 1.5; }
+      .source { stroke: #2563eb; }
+      .router { stroke: #d97706; }
+      .graph { stroke: #059669; }
+      .attention { stroke: #7c3aed; }
+      .title { font: 600 16px "Segoe UI", "Microsoft YaHei", sans-serif; fill: #0f172a; }
+      .sub { font: 500 12px "Segoe UI", "Microsoft YaHei", sans-serif; fill: #64748b; }
+      .item { font: 400 12.5px "Segoe UI", "Microsoft YaHei", sans-serif; fill: #334155; }
+      .badge { font: 600 11px "Segoe UI", "Microsoft YaHei", sans-serif; }
+      .edge { stroke: #475569; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .edge-blue { stroke: #2563eb; stroke-width: 1.7; fill: none; marker-end: url(#arrow-blue); }
+      .edge-green { stroke: #059669; stroke-width: 1.7; fill: none; marker-end: url(#arrow-green); stroke-dasharray: 6 5; }
+      .edge-purple { stroke: #7c3aed; stroke-width: 1.7; fill: none; marker-end: url(#arrow-purple); }
+      .label { font: 500 11.5px "Segoe UI", "Microsoft YaHei", sans-serif; fill: #475569; }
+      .tiny { font: 400 11px "Segoe UI", "Microsoft YaHei", sans-serif; fill: #64748b; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="780"/>
+  <text x="40" y="42" class="title" font-size="21">超级智能体 · 总设计</text>
+  <text x="40" y="64" class="sub">外部事件进入工作图，执行线只读当前事实，注意力界面只呈现需要人处理的事</text>
+  <rect x="1000" y="26" width="160" height="28" rx="14" fill="#e2e8f0"/>
+  <text x="1080" y="45" text-anchor="middle" class="badge" fill="#334155">base 45f6923</text>
+
+  <!-- Sources -->
+  <rect x="40" y="100" width="230" height="132" rx="10" class="box source"/>
+  <text x="58" y="126" class="title">GitHub</text>
+  <text x="58" y="148" class="item">issues / issue_comment</text>
+  <text x="58" y="168" class="item">check_run 事件</text>
+  <text x="58" y="192" class="tiny">X-Hub-Signature-256</text>
+  <text x="58" y="210" class="tiny">仓库 + Issue/PR 编号定位对象</text>
+
+  <rect x="40" y="260" width="230" height="152" rx="10" class="box source"/>
+  <text x="58" y="286" class="title">飞书</text>
+  <text x="58" y="308" class="item">im.message.receive_v1</text>
+  <text x="58" y="328" class="item">AES-256-CBC 加密事件</text>
+  <text x="58" y="352" class="tiny">X-Lark-Signature + 时间窗</text>
+  <text x="58" y="370" class="tiny">租户 + message_id 定位对象</text>
+  <text x="58" y="394" class="tiny">url_verification 握手</text>
+
+  <!-- Ingress -->
+  <rect x="340" y="96" width="280" height="266" rx="10" class="box source"/>
+  <text x="360" y="122" class="title">来源入口 · /hooks/*</text>
+  <text x="360" y="144" class="tiny">回环地址；仅这两条路由不走控制台令牌</text>
+  <text x="360" y="174" class="item">1. 验签 / HMAC / 时间窗</text>
+  <text x="360" y="198" class="item">2. 归一化为有界数据</text>
+  <text x="360" y="222" class="item">3. 先持久登记，再回 2xx</text>
+  <text x="360" y="246" class="item">4. source:instance:delivery 去重</text>
+  <text x="360" y="270" class="item">5. 绑定命中后直通 Router</text>
+  <text x="360" y="294" class="item">6. 稳定 request id，重投幂等</text>
+  <rect x="360" y="312" width="240" height="34" rx="6" fill="#eff6ff"/>
+  <text x="372" y="333" class="tiny" fill="#1d4ed8">崩溃扫描：registered / dispatching 重放</text>
+
+  <!-- Bindings -->
+  <rect x="340" y="400" width="280" height="126" rx="10" class="box source"/>
+  <text x="360" y="426" class="title">显式绑定</text>
+  <text x="360" y="450" class="item">来源实例 + 对象 ID → 工作区</text>
+  <text x="360" y="472" class="item">→ 任务 → 阶段（可选）</text>
+  <text x="360" y="496" class="tiny">未绑定：只登记，不派工</text>
+  <text x="360" y="514" class="tiny">autoStart 默认关闭；撤销即失效</text>
+
+  <!-- Router -->
+  <rect x="670" y="96" width="270" height="212" rx="10" class="box router"/>
+  <text x="690" y="122" class="title">路由器</text>
+  <text x="690" y="146" class="item">确定性读：/状态 /方案 /证据</text>
+  <text x="690" y="170" class="item">显式指代优先，冲突只给候选</text>
+  <text x="690" y="194" class="item">不明确时最多澄清一次</text>
+  <text x="690" y="218" class="item">绑定事件带 intent，直通不分类</text>
+  <text x="690" y="242" class="item">模型分类只作兜底</text>
+  <rect x="690" y="260" width="230" height="32" rx="6" fill="#fffbeb"/>
+  <text x="702" y="281" class="tiny" fill="#b45309">分类调用 / 澄清 / 回执 / 追加 计数</text>
+
+  <!-- Work graph -->
+  <rect x="670" y="330" width="270" height="246" rx="10" class="box graph"/>
+  <text x="690" y="356" class="title">工作图</text>
+  <text x="690" y="380" class="item">事实：工作区 · 任务 · 阶段 · 主题</text>
+  <text x="690" y="404" class="item">来源：用户确认 / 运行观察 / 外部事件</text>
+  <text x="690" y="428" class="item">有效期 · 更正替换 · 撤回墓碑</text>
+  <text x="690" y="452" class="item">当前值只在同一作用域内生效</text>
+  <text x="690" y="476" class="item">运行终态自动落为证据</text>
+  <text x="690" y="500" class="item">旧状态可加载，迁移幂等可重试</text>
+  <rect x="690" y="518" width="230" height="40" rx="6" fill="#ecfdf5"/>
+  <text x="702" y="536" class="tiny" fill="#047857">用户撤回只由明确动作触发</text>
+  <text x="702" y="551" class="tiny" fill="#047857">外部文本始终按数据处理</text>
+
+  <!-- Execution -->
+  <rect x="670" y="606" width="270" height="126" rx="10" class="box graph"/>
+  <text x="690" y="632" class="title">执行线</text>
+  <text x="690" y="656" class="item">任务阶段 / 执行会话</text>
+  <text x="690" y="680" class="item">只注入该任务、该阶段的当前事实</text>
+  <text x="690" y="704" class="tiny">补充要求带登记 / 送达回执；重启不丢</text>
+
+  <!-- Attention -->
+  <rect x="980" y="96" width="188" height="636" rx="10" class="box attention"/>
+  <text x="999" y="124" class="title" font-size="15">注意力界面</text>
+  <text x="999" y="150" class="item">任务卡</text>
+  <rect x="999" y="162" width="150" height="132" rx="7" fill="#faf5ff"/>
+  <text x="1010" y="182" class="tiny" fill="#6b21a8">工作上下文</text>
+  <text x="1010" y="202" class="tiny">来源 · 决定 · 证据</text>
+  <text x="1010" y="222" class="tiny">阶段归属与有效期</text>
+  <text x="1010" y="242" class="tiny">窄窗 / 草稿保持不变</text>
+  <text x="1010" y="270" class="tiny" fill="#6b21a8">回执状态</text>
+  <text x="1010" y="288" class="tiny">已登记 · 已送达</text>
+
+  <text x="999" y="328" class="item">已验收 · 需你决定</text>
+  <text x="999" y="356" class="item">待办</text>
+  <text x="999" y="378" class="tiny">审批 / 无法继续 / 关键决定</text>
+  <text x="999" y="404" class="item">稳定去重</text>
+  <text x="999" y="426" class="tiny">重启、重投不重复提醒</text>
+  <text x="999" y="452" class="item">不抢焦点</text>
+  <text x="999" y="474" class="tiny">后台完成只更新任务详情</text>
+  <text x="999" y="500" class="tiny">来源更新不写入对话</text>
+  <text x="999" y="534" class="item">普通进展留在详情</text>
+  <text x="999" y="556" class="tiny">阶段、重试、依赖等待</text>
+
+  <!-- Edges -->
+  <path class="edge-blue" d="M270 166 L338 166"/>
+  <path class="edge-blue" d="M270 336 L338 300"/>
+  <text x="276" y="152" class="label">事件</text>
+  <text x="280" y="326" class="label">事件</text>
+
+  <path class="edge" d="M482 362 L482 398"/>
+  <text x="490" y="386" class="label">查绑定</text>
+
+  <path class="edge-blue" d="M620 246 L668 246"/>
+  <text x="622" y="232" class="label">直通 submit</text>
+  <path class="edge" d="M620 440 L668 440" stroke-dasharray="6 5"/>
+  <text x="620" y="428" class="label">授权校验</text>
+
+  <path class="edge" d="M805 308 L805 328"/>
+  <text x="812" y="322" class="label">当前事实</text>
+
+  <path class="edge" d="M805 576 L805 604"/>
+  <text x="812" y="596" class="label">派工 / 补充</text>
+
+  <path class="edge-green" d="M940 660 C 960 660, 960 560, 978 560"/>
+  <text x="916" y="646" class="label" fill="#047857">运行证据</text>
+  <path class="edge-green" d="M940 430 C 960 430, 960 390, 978 390"/>
+  <text x="924" y="420" class="label" fill="#047857">上下文</text>
+  <path class="edge-purple" d="M940 210 C 960 210, 960 250, 978 250"/>
+  <text x="918" y="200" class="label" fill="#6b21a8">回执 / 待办</text>
+
+  <path class="edge-blue" d="M480 96 C 480 62, 155 62, 155 98" stroke-dasharray="5 4"/>
+  <text x="300" y="58" class="label" fill="#1d4ed8">先登记，再确认接收</text>
+
+  <!-- Legend -->
+  <line x1="40" y1="720" x2="1160" y2="720" stroke="#cbd5e1"/>
+  <text x="40" y="746" class="label">图例</text>
+  <line x1="92" y1="742" x2="132" y2="742" class="edge-blue"/>
+  <text x="138" y="746" class="tiny">主路径</text>
+  <line x1="196" y1="742" x2="236" y2="742" class="edge-green"/>
+  <text x="242" y="746" class="tiny">回写 / 恢复</text>
+  <rect x="330" y="734" width="12" height="12" rx="3" fill="#2563eb"/>
+  <text x="348" y="746" class="tiny">来源</text>
+  <rect x="398" y="734" width="12" height="12" rx="3" fill="#d97706"/>
+  <text x="416" y="746" class="tiny">路由</text>
+  <rect x="462" y="734" width="12" height="12" rx="3" fill="#059669"/>
+  <text x="480" y="746" class="tiny">状态</text>
+  <rect x="532" y="734" width="12" height="12" rx="3" fill="#7c3aed"/>
+  <text x="550" y="746" class="tiny">注意力</text>
+  <text x="640" y="746" class="tiny">事实来源：用户确认（user）· 运行观察（run）· 外部事件（external）</text>
+  <text x="640" y="764" class="tiny">本地合成验收 14/14；GitHub / 飞书未连接真实账号</text>
+  <text x="980" y="746" class="tiny">v0.24.0 · 本地分支 feat/superagent-total-design</text>
+</svg>
