@@ -223,12 +223,17 @@ test('a sign-in page stops the action as attention, not as a failure', async () 
   const page = fakePage({ gate: { kind: 'login-required', label: 'a sign-in the page is waiting for', matched: '请先登录' } })
   const { runtime } = runtimeWith(stateDir, { enabled: true }, { openBrowserImpl: async () => fakeLive({ page }) })
   const open = runtime.tools.find(tool => tool.name === 'browser_open')
-  const result = await open.execute({ url: 'http://127.0.0.1:8080/' })
+  const result = await runtime.withActor('worker-1', () => open.execute({ url: 'http://127.0.0.1:8080/?private=token' }))
 
   assert.match(result, /^\[attention\]/)
   assert.doesNotMatch(result, /^\[error\]/)
   assert.match(result, /browser_await_human/)
   assert.match(result, /sign-in the page is waiting for/)
+  assert.equal(runtime.takeHumanHandoff('worker-2'), null)
+  assert.deepEqual(runtime.takeHumanHandoff('worker-1'), {
+    kind: 'login-required', url: 'http://127.0.0.1:8080/', headless: true,
+  })
+  assert.equal(runtime.takeHumanHandoff('worker-1'), null)
 
   const { events } = await readAudit(stateDir)
   const attention = events.find(event => event.kind === 'attention')

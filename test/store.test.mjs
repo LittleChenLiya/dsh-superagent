@@ -15,13 +15,15 @@ async function tempStore() {
 
 test('concurrent writes to one run leave a valid file and no temp files', async () => {
   const { store, dir } = await tempStore()
+  const another = createStore(dir)
   const run = { id: '20260101T000000-abcd', status: 'running', subtasks: [] }
 
-  await Promise.all(Array.from({ length: 40 }, (_, index) => store.write({ ...run, tick: index })))
+  await Promise.all(Array.from({ length: 40 }, (_, index) =>
+    (index % 2 ? another : store).write({ ...run, tick: index })))
 
   const stored = await store.read(run.id)
   assert.equal(stored.id, run.id)
-  assert.equal(typeof stored.tick, 'number')
+  assert.equal(stored.tick, 39)
   const leftovers = (await fsp.readdir(store.runsDir)).filter(name => name.startsWith('.'))
   assert.deepEqual(leftovers, [])
   await fsp.rm(dir, { recursive: true, force: true })

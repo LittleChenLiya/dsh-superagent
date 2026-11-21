@@ -5,7 +5,33 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { createRouter } from '../lib/router.js'
-import { currentFacts } from '../lib/work-context.js'
+import { currentFacts, taskImpact } from '../lib/work-context.js'
+
+test('a changed input marks its accepted dependents and preserves other branches', () => {
+  const date = (day) => `2026-11-${day}T00:00:00.000Z`
+  const phase = (id, dependsOn, day) => ({
+    id, title: id, dependsOn, status: 'completed', finishedAt: date(day), runId: `run-${id}`,
+  })
+  const task = { id: 'release', project: 'workspace', phases: [
+    phase('scope', [], 11), phase('draft', ['scope'], 12), phase('review', ['draft'], 13), phase('assets', [], 12),
+  ] }
+  const facts = ['beta', 'stable'].map((value, index) => ({
+    id: `f${index}`, kind: 'decision', origin: 'user', project: task.project, taskId: task.id,
+    phaseId: 'scope', key: 'channel', subject: '发布渠道', value, validFrom: date(index ? 14 : 10),
+  }))
+  facts.push({ ...facts[1], id: 'foreign', project: 'other', phaseId: null, validFrom: date(15) })
+  const impact = taskImpact(task, facts, Date.parse(date(16)))
+  assert.deepEqual(impact.reReview.map(item => item.phaseId), ['scope', 'draft', 'review'])
+  assert.deepEqual(impact.canContinue.map(item => item.phaseId), ['assets'])
+  assert.equal(impact.reReview[2].runId, 'run-review')
+  assert.match(impact.reReview[0].reason, /发布渠道/)
+  assert.equal(taskImpact(task, facts, Date.parse(date(13))), null)
+  task.phases[0].finishedAt = date(15)
+  assert.deepEqual(taskImpact(task, facts, Date.parse(date(16))).reReview.map(item => item.phaseId), ['draft', 'review'])
+  task.phases[1].finishedAt = date(16)
+  task.phases[2].finishedAt = date(17)
+  assert.equal(taskImpact(task, facts, Date.parse(date(18))), null)
+})
 
 // Scratch state stays outside the repository; DSH_TEST_TMP_DIR only redirects it.
 const TMP_ROOT = process.env.DSH_TEST_TMP_DIR ?? os.tmpdir()

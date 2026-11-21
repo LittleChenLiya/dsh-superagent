@@ -1004,7 +1004,7 @@ test('a temporary catalog read stays retryable and re-checks the binding and pha
     })
     const server = await serve(ingress)
     try {
-      await ingress.bind({
+      const binding = await ingress.bind({
         source: 'github', objectId: 'github:101:issue:7', project: 'workspace',
         taskId: 'goal-release', phaseId: 'p1',
       })
@@ -1014,8 +1014,16 @@ test('a temporary catalog read stays retryable and re-checks the binding and pha
         method: 'POST', headers: githubHeaders('catalog-denied', body), body,
       })
       await ingress.flush()
-      const denied = (await ingress.snapshot()).recent[0]
+      const snapshot = await ingress.snapshot()
+      const denied = snapshot.recent[0]
       assert.equal(denied.status, 'unauthorized', '成功读取后确认无权应保持终态')
+      assert.equal(snapshot.instances.github.enabled, true)
+      assert.match(snapshot.deliveries[binding.id][0].reason, /阶段已结束/)
+      closed = false
+      await ingress.bind({
+        source: 'github', objectId: 'github:101:issue:7', project: 'workspace', taskId: 'goal-release',
+      })
+      assert.equal((await ingress.snapshot()).deliveries[binding.id], undefined, '旧阶段的拒绝不属于新绑定')
       await new Promise(resolve => setTimeout(resolve, 40))
       await ingress.flush()
       assert.equal((await ingress.snapshot()).recent[0].status, 'unauthorized')

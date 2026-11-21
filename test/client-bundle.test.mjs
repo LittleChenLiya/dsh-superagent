@@ -460,19 +460,27 @@ test('the task card binds and unbinds a source without calling the API by hand',
     project: { cwd: '/work/one', name: '工作区一' },
     sourceBindings: [{
       id: 'binding-1', source: 'github', objectId: 'github:1:issue:7',
-      taskId: 'goal-empty', phaseId: 'p1', autoStart: false, revoked: false,
+      project: '/work/one', taskId: 'goal-empty', phaseId: 'p1', autoStart: false,
     }],
+    sourceState: {
+      instances: { feishu: { enabled: true, instanceId: 'fs' } },
+      recent: [{ source: 'feishu', instanceId: 'fs', objectId: 'feishu:t1:message:om_1',
+        status: 'unbound', data: { subject: { text: '发布检查清单' } } }],
+      deliveries: { 'binding-1': [{ key: 'e1', status: 'failed', at: Date.now(), reason: 'Router 无法接收' }] },
+    },
   }, { sessionProjects: { 'chat-a': { cwd: '/work/one', name: '工作区一' } } })
   const nodes = card.openRail()
   assert.ok(nodes.some(node => (node.children ?? []).join('').includes('github:1:issue:7')),
     'an existing binding is visible on the task card')
+  assert.ok(nodes.some(node => (node.children ?? []).includes('Router 无法接收')))
   card.button(nodes, '撤销').props.onClick()
   assert.deepEqual(card.actions.at(-1), { type: 'sourceUnbind', id: 'binding-1' })
 
   card.button(nodes, '绑定来源').props.onClick()
   const form = card.render()
-  const object = form.find(node => node.props?.['aria-label'] === '来源对象 ID')
-  assert.ok(object, 'the card has a visible object-id field')
+  const object = form.find(node => node.props?.['aria-label'] === '选择收到的来源')
+  assert.ok(object, 'the card offers observed objects')
+  assert.ok(form.some(node => node.type === 'option' && (node.children ?? []).includes('发布检查清单')))
   object.props.onChange({ target: { value: 'feishu:t1:message:om_1' } })
   const phase = card.render().find(node => node.props?.['aria-label'] === '归到哪个阶段')
   phase.props.onChange({ target: { value: 'p1' } })
