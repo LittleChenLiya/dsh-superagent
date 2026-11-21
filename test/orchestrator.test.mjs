@@ -2723,6 +2723,36 @@ test('planner assumptions and unresolved questions reach the run and the worker'
   assert.match(worker.prompt, /一般游戏/)
 })
 
+test('desktop dispatch investigates planner uncertainties and still surfaces an actual human blocker', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{ id: 'w1', title: 'Check the scene and access', prompt: 'Inspect both before acting' }],
+        ambiguities: [{ phrase: '那一面', question: '战场侧怎么判定？', why: 'check the scene geometry' }],
+        needsInput: [{ question: '镜头构图范围是多少？' }, { question: '如果还没登录，该怎么登录？' }],
+      }))
+    }
+    if (spec.label === 'superagent-1') {
+      return completed('镜头可以按现有战场分区取景。\n```attention\n'
+        + '{"question":"请在刚打开的学习通页面扫码。","reason":"打开作业页后实际跳到了二维码登录页。"}\n```')
+    }
+    return completed('verified what was possible')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild } })
+  const run = await orchestrator.start({
+    goal: '取景切到敌人所在那一面，同时查看作业页',
+    parentSessionId: parent.id,
+    parent,
+    origin: { kind: 'long-goal', role: 'phase', routed: true },
+  })
+  const finished = await orchestrator.status(run.id, 10)
+  assert.match(calls.find(call => call.label === 'superagent-plan').prompt, /Investigate before interrupting/)
+  assert.match(calls.find(call => call.label === 'superagent-1').prompt, /check the actual state before asking/)
+  assert.equal(finished.plan.needsInput, undefined)
+  assert.deepEqual(finished.attention.items.map(item => [item.source, item.question]),
+    [['subtask-1', '请在刚打开的学习通页面扫码。']])
+})
+
 test('a subtask missing a declared capability is blocked and never spawns', async () => {
   const { spawnChild, calls } = makeSpawner(async spec => {
     if (spec.label === 'superagent-plan') {

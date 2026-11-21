@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { createRouter } from '../lib/router.js'
+import { createRouter, readRouterDecision } from '../lib/router.js'
 
 // Scratch state stays outside the repository; DSH_TEST_TMP_DIR only redirects it.
 const TMP_ROOT = process.env.DSH_TEST_TMP_DIR ?? os.tmpdir()
@@ -52,6 +52,69 @@ async function settled(router, what = 'router queue to drain') {
 
 const receipts = (messages, taskId) => messages.filter(message =>
   message.id?.startsWith(`result-${taskId}-`) && message.taskId === taskId)
+
+test('a model permission failure in a finish chunk is shown before any task is dispatched', async () => {
+  const { base, state } = await fixture('superagent-router-model-permission')
+  const original = '帮我看看新作业和课程更新。我的塔防空格镜头太近，改好以后打包，打好了发消息给我。顺便看看最近的 PR 和今晚吃什么。'
+  const model = { provider: 'local', model: 'denied-model' }
+  let dispatches = 0
+  const h = harness({
+    state, projects: [], tasks: [],
+    classify: () => readRouterDecision((async function* () {
+      yield { type: 'text-delta', text: '{"action":"task","text":"incomplete request"}' }
+      yield { type: 'finish', reason: { kind: 'error', failure: {
+        code: 'AUTH', message: '403 gateway rejected request [private diagnostic]',
+      } } }
+    })(), model),
+    execute: async () => { dispatches++ },
+  })
+  try {
+    const router = h.boot()
+    await router.submit({ id: 'denied-route', text: original })
+    const messages = (await settled(router)).messages
+    assert.equal(messages.find(message => message.role === 'user').text, original)
+    const response = messages.find(message => message.role === 'assistant')
+    assert.equal(response.error, true)
+    assert.match(response.text, /local\/denied-model 的访问被拒绝/)
+    assert.doesNotMatch(response.text, /private diagnostic|未返回有效指令/)
+    assert.equal(dispatches, 0)
+  } finally {
+    await h.stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('stream parsing still accepts fenced JSON and reports malformed output separately', async () => {
+  const model = { provider: 'local', model: 'test-model' }
+  const chunks = text => (async function* () {
+    yield { type: 'text-delta', text }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  })()
+  assert.deepEqual(await readRouterDecision(chunks('```json\n{"action":"reply","text":"OK"}\n```'), model),
+    { action: 'reply', text: 'OK' })
+  await assert.rejects(readRouterDecision(chunks('reply without JSON'), model), /未返回有效指令/)
+})
+
+test('a new task forwards the complete original request even when the router model focuses on one item', async () => {
+  const { base, state } = await fixture('superagent-route-original')
+  const original = '帮我看看作业。塔防镜头太近，帮我改一下。再看看我的 PR 和晚饭。对了，塔防改好了打包，打包成功再告诉我。'
+  const dispatched = []
+  const h = harness({
+    state, projects: [], tasks: [],
+    classify: async () => ({ action: 'task', title: '调整塔防镜头', text: '塔防镜头太近，帮我改一下。' }),
+    execute: async decision => { dispatched.push(decision); return { text: '已接单', taskId: 'goal' } },
+  })
+  try {
+    const router = h.boot()
+    await router.submit({ id: 'mixed-request', text: original })
+    await settled(router)
+    assert.equal(dispatched.length, 1)
+    assert.equal(dispatched[0].text, original)
+  } finally {
+    await h.stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
 
 test('a known alias in the same workspace answers status and plan without the classifier or a new task', async () => {
   const { base, state } = await fixture('superagent-attention-alias')

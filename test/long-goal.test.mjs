@@ -637,6 +637,42 @@ test('a second phase that needs a person joins the open decision instead of wait
   assert.equal(state.goal.status, 'running')
 })
 
+test('a desktop goal starts unrelated work while an actual login blocks only its own dependents', async () => {
+  const root = await tempRoot('routed-human-wait')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'log in where required and keep unrelated work moving',
+    parentSessionId: agent.id,
+    routerRequestId: 'routed-login',
+    maxParallelPhases: 1,
+    phases: [phase('login'), phase('assignment', { dependsOn: ['login'] }), phase('game')],
+  })
+  await goals.tick()
+  let state = await goals.get(goal.id)
+  const login = orchestrator.runs.get(state.phases[0].currentRunId)
+  orchestrator.fail(login, { stop: 'needs-decision' })
+  login.attention.items.push({ id: 'q1', question: 'Please log in', answer: null })
+  await goals.tick()
+  state = await goals.get(goal.id)
+  assert.deepEqual(state.phases.map(item => item.status), ['needs-decision', 'pending', 'running'])
+  assert.equal(state.decisions[0].answer, null)
+  assert.equal((await goals.resume(goal.id)).status, 'running')
+  login.status = 'running'
+  await goals.tick()
+  assert.equal((await goals.get(goal.id)).decisions[0].answer, null)
+  orchestrator.complete(orchestrator.runs.get(state.phases[2].currentRunId))
+  await goals.tick()
+  state = await goals.get(goal.id)
+  assert.equal(state.status, 'needs-decision')
+  assert.deepEqual(state.phases.map(item => item.status), ['needs-decision', 'pending', 'completed'])
+  await goals.answer(goal.id, state.decisions[0].id, 'answer', { note: 'Logged in', parent: agent })
+  orchestrator.complete(login)
+  await goals.tick()
+  state = await goals.get(goal.id)
+  assert.deepEqual(state.phases.map(item => item.status), ['completed', 'running', 'completed'])
+})
+
 test('skips a phase nothing depends on after its attempts run out, and the goal ends partial', async () => {
   const root = await tempRoot('auto-skip')
   const orchestrator = fakeOrchestrator()
