@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="780" viewBox="0 0 1180 780" font-family="Segoe UI, Microsoft YaHei, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3370ff"/>
+    </marker>
+  </defs>
+  <rect width="1180" height="780" fill="#f7f8fa"/>
+  <text x="40" y="46" font-size="22" font-weight="600" fill="#1f2329">超级智能体工作原理：一句话交办 → 工作图 → 一张待办 → 回原会话 → 阶段证据</text>
+  <text x="40" y="72" font-size="13" fill="#646a73">只画已被验收证据覆盖的主路径。可编辑图源：architecture.mmd（Mermaid）。</text>
+
+  <g stroke="#3370ff" stroke-width="2" fill="#fff">
+    <rect x="40" y="110" width="210" height="100" rx="10"/>
+    <rect x="300" y="110" width="210" height="100" rx="10"/>
+    <rect x="560" y="105" width="250" height="110" rx="10"/>
+    <rect x="880" y="110" width="270" height="100" rx="10"/>
+    <rect x="560" y="330" width="250" height="120" rx="10"/>
+    <rect x="180" y="330" width="270" height="120" rx="10"/>
+    <rect x="560" y="560" width="250" height="110" rx="10"/>
+  </g>
+  <rect x="880" y="330" width="270" height="120" rx="10" fill="#fff7e8" stroke="#ff9f1c" stroke-width="2"/>
+  <rect x="880" y="560" width="270" height="110" rx="10" fill="#eef4ff" stroke="#3370ff" stroke-width="2"/>
+
+  <g font-size="15" font-weight="600" fill="#1f2329">
+    <text x="56" y="142">用户：一句话</text>
+    <text x="316" y="142">固定入口</text>
+    <text x="576" y="137">工作图</text>
+    <text x="896" y="142">来源</text>
+    <text x="576" y="362">运行时</text>
+    <text x="196" y="362">阶段回执 → 证据</text>
+    <text x="576" y="592">绑定回原 run</text>
+    <text x="896" y="362">一张待办</text>
+    <text x="896" y="592">用户本人处理</text>
+  </g>
+  <g font-size="12" fill="#1f2329">
+    <text x="56" y="168">即时建议 + 独立事项</text>
+    <text x="56" y="188">+ 登录阻塞 + 前后依赖</text>
+    <text x="316" y="168">别名 / 任务查询</text>
+    <text x="316" y="188">决定 / 证据</text>
+    <text x="576" y="162">阶段 + dependsOn</text>
+    <text x="576" y="182">变更影响：需重审 / 可继续</text>
+    <text x="896" y="168">GitHub 签名事件</text>
+    <text x="896" y="188">飞书 AES 事件</text>
+    <text x="576" y="388">真实浏览器 / 桌面</text>
+    <text x="576" y="408">只读或明确授权</text>
+    <text x="196" y="388">每条 accepted 回执</text>
+    <text x="196" y="408">带 phaseId / runId</text>
+    <text x="576" y="618">只恢复提问的那个 qN</text>
+    <text x="576" y="638">其他阶段不重来</text>
+    <text x="896" y="388">网站 · 事项 · 会话</text>
+    <text x="896" y="408">继续方式 + 页面 URL</text>
+    <text x="896" y="618">扫码 / 决定 / 补证据</text>
+    <text x="896" y="638">完成后填写并提交</text>
+  </g>
+
+  <g stroke="#3370ff" stroke-width="2" fill="none" marker-end="url(#arrow)">
+    <path d="M250 160 H300"/>
+    <path d="M510 160 H560"/>
+    <path d="M880 160 H810"/>
+    <path d="M685 215 V330"/>
+    <path d="M810 390 H880"/>
+    <path d="M1015 450 V560"/>
+    <path d="M880 615 H810"/>
+    <path d="M685 560 V450"/>
+    <path d="M560 390 H450"/>
+    <path d="M315 330 V265 H600 V215"/>
+    <path d="M180 390 H120 V210"/>
+  </g>
+
+  <text x="40" y="715" font-size="12" fill="#646a73">实线均为已验证路径：真实 DSH 宿主、会话、长目标、插件、Edge 浏览器与审计；模型为确定性 stub，扫码由本地夹具 /grant 代替。</text>
+  <text x="40" y="737" font-size="12" fill="#646a73">GitHub / 飞书为本地签名与 AES 夹具，未连接真实账号；来源未绑定时只登记、不派工。</text>
+  <text x="40" y="759" font-size="12" fill="#646a73">证据：audit/login-handoff/2026-11-21T12-52-11-300Z/observation.json · audit/decision-boundary.log · audit/impact.log · acceptance/acceptance-report.md</text>
+</svg>
