@@ -50,8 +50,8 @@ async function fixture(label) {
   return { base, root, store }
 }
 
-function ingressFor({ store, router = routerStub(), config, faults, retry, now, log }) {
-  return createSourceIngress({ store, router, config, catalog, faults, retry, now, log })
+function ingressFor({ store, router = routerStub(), config, faults, retry, now, log, catalog: catalogFn = catalog }) {
+  return createSourceIngress({ store, router, config, catalog: catalogFn, faults, retry, now, log })
 }
 
 async function waitFor(fn, timeoutMs = 4000) {
@@ -656,6 +656,8 @@ test('a temporary Router rejection keeps the delivery and resumes with the same 
 
     const restarted = ingressFor({
       store, config: githubConfig,
+      // The restart happens after the persisted backoff deadline.
+      now: () => Date.now() + 60_000,
       router: { async submit(input) { calls += 1; return real.submit(input) } },
     })
     const recovered = await restarted.recover()
@@ -683,7 +685,11 @@ test('temporary failures re-check authorization and stop at a bounded retry budg
         throw error
       },
     }
-    const ingress = ingressFor({ store, router: rejecting, config: githubConfig, retry: { baseMs: 60_000, maxAttempts: 4 } })
+    let clock = Date.now()
+    const ingress = ingressFor({
+      store, router: rejecting, config: githubConfig,
+      retry: { baseMs: 60_000, maxAttempts: 4 }, now: () => clock,
+    })
     const server = await serve(ingress)
     try {
       const binding = await ingress.bind({
@@ -697,6 +703,7 @@ test('temporary failures re-check authorization and stop at a bounded retry budg
       await ingress.flush()
       assert.equal((await ingress.snapshot()).recent[0].status, 'retrying')
       await ingress.unbind(binding.id)
+      clock += 60_000
       const recovered = await ingress.recover()
       assert.ok(['revoked', 'unbound'].includes(recovered[0].status), '撤销后的绑定不再授权')
       assert.equal(calls, 1, '暂时失败期间撤销绑定后不得派送')
@@ -835,5 +842,329 @@ test('binding without a task needs an explicit autoStart rule', async () => {
   } finally {
     await server.close()
     await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('a temporary catalog read stays retryable and re-checks the binding and phase', async () => {
+  {
+    const { base, store } = await fixture('sources-catalog-retry')
+    const router = routerStub()
+    let offline = false
+    const ingress = ingressFor({
+      store, router, config: githubConfig,
+      catalog: async () => {
+        if (offline) throw Object.assign(new Error('Work catalog temporarily unavailable'), { code: 'EBUSY' })
+        return catalog()
+      },
+      retry: { baseMs: 20, maxAttempts: 3 },
+    })
+    const server = await serve(ingress)
+    try {
+      await ingress.bind({
+        source: 'github', objectId: 'github:101:issue:7', project: 'workspace',
+        taskId: 'goal-release', phaseId: 'p1',
+      })
+      offline = true
+      const body = JSON.stringify(issuePayload())
+      const response = await fetch(`${server.url}/hooks/github`, {
+        method: 'POST', headers: githubHeaders('catalog-retry', body), body,
+      })
+      assert.equal(response.status, 202)
+      await ingress.flush()
+      const waiting = (await ingress.snapshot()).recent[0]
+      assert.equal(waiting.status, 'retrying', '清单暂不可用不得转成 unauthorized')
+      assert.equal(waiting.attempts, 1)
+      assert.match(waiting.reason, /工作清单暂不可用/)
+      assert.equal(router.calls.length, 0)
+
+      offline = false
+      await waitFor(async () => (await ingress.snapshot()).recent[0]?.status === 'dispatched')
+      const done = (await ingress.snapshot()).recent[0]
+      assert.equal(done.requestId, requestIdFor('github:gh:catalog-retry'))
+      assert.equal(done.route.phaseId, 'p1')
+      assert.equal(router.calls.length, 1)
+      assert.equal(router.calls[0].id, done.requestId)
+    } finally {
+      await server.close()
+      ingress.stop()
+      await fsp.rm(base, { recursive: true, force: true })
+    }
+  }
+
+  {
+    // Restart with the persisted deadline already due.
+    const { base, store } = await fixture('sources-catalog-restart')
+    const router = routerStub()
+    let offline = false
+    let clock = Date.parse('2026-01-01T00:00:00Z')
+    const ingress = ingressFor({
+      store, router, config: githubConfig,
+      catalog: async () => {
+        if (offline) throw Object.assign(new Error('busy'), { code: 'EBUSY' })
+        return catalog()
+      },
+      retry: { baseMs: 30_000, maxAttempts: 3 },
+      now: () => clock,
+    })
+    await ingress.bind({
+      source: 'github', objectId: 'github:101:issue:7', project: 'workspace',
+      taskId: 'goal-release', phaseId: 'p1',
+    })
+    offline = true
+    const server = await serve(ingress)
+    let requestId
+    try {
+      const body = JSON.stringify(issuePayload())
+      await fetch(`${server.url}/hooks/github`, {
+        method: 'POST', headers: githubHeaders('catalog-restart', body), body,
+      })
+      await ingress.flush()
+      const waiting = (await ingress.snapshot()).recent[0]
+      assert.equal(waiting.status, 'retrying')
+      requestId = waiting.requestId
+      assert.equal(Date.parse(waiting.nextAttemptAt), clock + 30_000)
+    } finally {
+      await server.close()
+      ingress.stop()
+    }
+
+    const restarted = ingressFor({
+      store, router, config: githubConfig,
+      retry: { baseMs: 30_000, maxAttempts: 3 },
+      now: () => clock + 30_000,
+    })
+    const recovered = await restarted.recover()
+    assert.deepEqual(recovered.map(item => item.status), ['dispatched'])
+    const done = (await restarted.snapshot()).recent[0]
+    assert.equal(done.requestId, requestId, '重启后复用同一 requestId')
+    assert.equal(router.calls.length, 1)
+    restarted.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+
+  {
+    // A binding revoked while the catalog is unavailable must not dispatch.
+    const { base, store } = await fixture('sources-catalog-revoked')
+    let offline = false
+    let clock = Date.parse('2026-03-01T00:00:00Z')
+    const router = routerStub()
+    const ingress = ingressFor({
+      store, router, config: githubConfig,
+      catalog: async () => {
+        if (offline) throw Object.assign(new Error('busy'), { code: 'EBUSY' })
+        return catalog()
+      },
+      retry: { baseMs: 30_000, maxAttempts: 3 },
+      now: () => clock,
+    })
+    const binding = await ingress.bind({
+      source: 'github', objectId: 'github:101:issue:7', project: 'workspace',
+      taskId: 'goal-release', phaseId: 'p1',
+    })
+    offline = true
+    const server = await serve(ingress)
+    try {
+      const body = JSON.stringify(issuePayload())
+      await fetch(`${server.url}/hooks/github`, {
+        method: 'POST', headers: githubHeaders('catalog-revoked', body), body,
+      })
+      await ingress.flush()
+      assert.equal((await ingress.snapshot()).recent[0].status, 'retrying')
+      await ingress.unbind(binding.id)
+      offline = false
+      clock += 30_000
+      const recovered = await ingress.recover()
+      assert.ok(['revoked', 'unbound'].includes(recovered[0].status))
+      assert.equal(router.calls.length, 0, '撤销绑定后不得派送')
+    } finally {
+      await server.close()
+      ingress.stop()
+      await fsp.rm(base, { recursive: true, force: true })
+    }
+  }
+
+  {
+    // A successful read that confirms the phase is closed stays final.
+    const { base, store } = await fixture('sources-catalog-denied')
+    const router = routerStub()
+    let closed = false
+    const ingress = ingressFor({
+      store, router, config: githubConfig,
+      catalog: async () => {
+        const data = catalog()
+        if (!closed) return data
+        return {
+          projects: data.projects,
+          tasks: data.tasks.map(task => ({
+            ...task, phases: task.phases.map(phase => ({ ...phase, status: 'completed' })),
+          })),
+        }
+      },
+      retry: { baseMs: 10, maxAttempts: 3 },
+    })
+    const server = await serve(ingress)
+    try {
+      await ingress.bind({
+        source: 'github', objectId: 'github:101:issue:7', project: 'workspace',
+        taskId: 'goal-release', phaseId: 'p1',
+      })
+      closed = true
+      const body = JSON.stringify(issuePayload())
+      await fetch(`${server.url}/hooks/github`, {
+        method: 'POST', headers: githubHeaders('catalog-denied', body), body,
+      })
+      await ingress.flush()
+      const denied = (await ingress.snapshot()).recent[0]
+      assert.equal(denied.status, 'unauthorized', '成功读取后确认无权应保持终态')
+      await new Promise(resolve => setTimeout(resolve, 40))
+      await ingress.flush()
+      assert.equal((await ingress.snapshot()).recent[0].status, 'unauthorized')
+      assert.equal(router.calls.length, 0)
+      assert.deepEqual(await ingress.recover(), [])
+    } finally {
+      await server.close()
+      ingress.stop()
+      await fsp.rm(base, { recursive: true, force: true })
+    }
+  }
+})
+
+test('duplicate deliveries reuse the backoff window and the terminal state', async () => {
+  {
+    const { base, store } = await fixture('sources-replay-clock')
+    let clock = Date.parse('2026-04-01T00:00:00Z')
+    let calls = 0
+    const router = {
+      async submit(input) {
+        calls += 1
+        if (calls === 1) throw Object.assign(new Error('queue full'), { code: 'queue-full' })
+        return { accepted: true, id: input.id }
+      },
+    }
+    const ingress = ingressFor({
+      store, router, config: githubConfig,
+      retry: { baseMs: 30_000, maxAttempts: 3 },
+      now: () => clock,
+    })
+    const server = await serve(ingress)
+    try {
+      await ingress.bind({
+        source: 'github', objectId: 'github:101:issue:7', project: 'workspace',
+        taskId: 'goal-release', phaseId: 'p1',
+      })
+      const body = JSON.stringify(issuePayload())
+      const post = () => fetch(`${server.url}/hooks/github`, {
+        method: 'POST', headers: githubHeaders('replay-clock', body), body,
+      })
+      assert.equal((await post()).status, 202)
+      await ingress.flush()
+      const first = (await ingress.snapshot()).recent[0]
+      assert.equal(first.status, 'retrying')
+      assert.equal(first.attempts, 1)
+      const deadline = first.nextAttemptAt
+      assert.equal(Date.parse(deadline), clock + 30_000)
+
+      await post()
+      await ingress.flush()
+      await post()
+      await ingress.flush()
+      const early = (await ingress.snapshot()).recent[0]
+      assert.equal(early.status, 'retrying')
+      assert.equal(early.attempts, 1, '退避窗口内的重投不得消耗尝试')
+      assert.equal(early.nextAttemptAt, deadline, '退避窗口内的重投不得移动重试时间')
+      assert.equal(calls, 1)
+
+      clock += 29_999
+      const notDue = await ingress.recover()
+      assert.equal(notDue[0].status, 'retrying')
+      assert.equal(calls, 1)
+      assert.equal((await ingress.snapshot()).recent[0].nextAttemptAt, deadline)
+
+      clock += 1
+      const due = await ingress.recover()
+      assert.equal(due[0].status, 'dispatched')
+      const done = (await ingress.snapshot()).recent[0]
+      assert.equal(done.attempts, 2)
+      assert.equal(done.requestId, requestIdFor('github:gh:replay-clock'))
+      assert.equal(calls, 2, '到期后只执行一次应有的重试')
+    } finally {
+      await server.close()
+      ingress.stop()
+      await fsp.rm(base, { recursive: true, force: true })
+    }
+  }
+
+  {
+    // Feishu deliveries share the same entry point and terminal rules.
+    const { base, store } = await fixture('sources-replay-feishu')
+    let clock = Date.parse('2026-05-01T00:00:00Z')
+    let calls = 0
+    const router = {
+      async submit() {
+        calls += 1
+        throw Object.assign(new Error('queue full'), { code: 'queue-full' })
+      },
+    }
+    const ingress = ingressFor({
+      store, router, config: feishuConfig,
+      retry: { baseMs: 10_000, maxAttempts: 2 },
+      now: () => clock,
+    })
+    const server = await serve(ingress)
+    try {
+      await ingress.bind({
+        source: 'feishu', objectId: 'feishu:tenant-a:message:om_1', project: 'workspace',
+        taskId: 'goal-release', phaseId: 'p1',
+      })
+      const body = encryptFeishu(feishuPayload({ eventId: 'duplicate-feishu' }))
+      const post = () => fetch(`${server.url}/hooks/feishu`, {
+        method: 'POST', headers: feishuHeaders(body, { timestamp: Math.floor(clock / 1000) }), body,
+      })
+      const first = await post()
+      assert.equal(first.status, 200)
+      assert.equal((await first.json()).duplicate, false)
+      await ingress.flush()
+      const waiting = (await ingress.snapshot()).recent[0]
+      assert.equal(waiting.status, 'retrying')
+      assert.equal(waiting.attempts, 1)
+      const deadline = waiting.nextAttemptAt
+
+      const replay = await post()
+      assert.equal(replay.status, 200)
+      assert.equal((await replay.json()).duplicate, true)
+      await ingress.flush()
+      const early = (await ingress.snapshot()).recent[0]
+      assert.equal(early.attempts, 1)
+      assert.equal(early.nextAttemptAt, deadline)
+      assert.equal(calls, 1)
+
+      clock += 10_000
+      const exhausted = await ingress.recover()
+      assert.equal(exhausted[0].status, 'failed')
+      const failed = (await ingress.snapshot()).recent[0]
+      assert.equal(failed.attempts, 2)
+      assert.match(failed.reason, /重试预算耗尽/)
+
+      const afterTerminal = await post()
+      assert.equal((await afterTerminal.json()).duplicate, true)
+      await ingress.flush()
+      assert.equal((await ingress.snapshot()).recent[0].status, 'failed')
+      assert.equal(calls, 2, '终态后的重投不得再派发')
+      assert.deepEqual(await ingress.recover(), [])
+
+      const restarted = ingressFor({
+        store, router, config: feishuConfig,
+        retry: { baseMs: 10_000, maxAttempts: 2 },
+        now: () => clock,
+      })
+      assert.deepEqual(await restarted.recover(), [])
+      assert.equal((await restarted.snapshot()).recent[0].status, 'failed')
+      assert.equal(calls, 2, '终态在重启后保持稳定')
+      restarted.stop()
+    } finally {
+      await server.close()
+      ingress.stop()
+      await fsp.rm(base, { recursive: true, force: true })
+    }
   }
 })
