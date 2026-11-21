@@ -224,7 +224,11 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   }
   const model = {
     ...shell.props.model, phase: 'ready', sessionId: 'chat-a', selectedGoalId: goal.id,
-    messages: [{ id: 'receipt', role: 'assistant', text: '已接下任务', taskId: goal.id, at: Date.now() }],
+    messages: [
+      { id: 'receipt', role: 'assistant', text: '已接下任务', taskId: goal.id, at: Date.now() },
+      { id: 'phase-receipt', role: 'assistant', text: '阶段 p1 已通过验收', taskId: goal.id,
+        phaseId: 'p1', runId: first.id, at: Date.now() },
+    ],
     workbench: { sessionId: 'chat-a', runs: [first, second], goals: [goal] },
   }
   function* elements(tree) {
@@ -262,6 +266,15 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   assert.equal(actions.at(-1).run.id, goal.id)
   assert.equal(actions.at(-1).phase.id, 'p2')
   button(render(), '待办').props.onClick()
+  // A phase receipt is a different button from a whole-task receipt: clicking
+  // it must open that phase's execution evidence.
+  const withPhase = render()
+  const phaseButton = withPhase.find(node => node.type === 'button'
+    && node.props?.title === '打开阶段 p1 的执行证据')
+  assert.ok(phaseButton, 'the phase receipt offers its own evidence entry')
+  phaseButton.props.onClick()
+  assert.equal(actions.at(-1).type, 'openReceipt')
+  assert.equal(actions.at(-1).message.runId, first.id)
   const inbox = render({ inboxOpen: true })
   assert.equal(inbox.some(node => node.children.includes('暂无待处理事项')), true)
   assert.equal(inbox.find(node => node.props?.['aria-label'] === '任务列表')?.props.hidden, true,
@@ -420,8 +433,7 @@ test('a default workspace task requires switching back before recording from a n
   assert.match(card.hint(after, 'dsa-record-hint'), /切换到「默认工作区」/)
 })
 
-test('the task card separates current decisions from sources and evidence, and labels a receipt', async () => {
-  const at = Date.now()
+test('the task card separates current decisions from sources and evidence, and labels a receipt', async () => {  const at = Date.now()
   const card = await taskCardHarness({}, {
     contextFacts: [
       { id: 'f-alias', taskId: 'goal-empty', kind: 'alias', value: '发版', confirmedAt: at, origin: 'user' },
@@ -441,4 +453,43 @@ test('the task card separates current decisions from sources and evidence, and l
   assert.ok(nodes.some(node => textOf(node).includes('来源 · issues.opened')), 'an external source is shown as data')
   assert.ok(nodes.some(node => textOf(node).includes('证据 · 已完成')), 'run evidence is shown next to decisions')
   assert.ok(nodes.some(node => (node.children ?? []).includes('已送达')), 'the receipt state is visible')
+})
+
+test('a phase receipt click opens that phase run, and an expired run falls back to the task', async () => {
+  const { exports } = await materialize()
+  const runs = []
+  const tasks = []
+  const notes = []
+  const openRun = async runId => {
+    if (runId === 'run-gone') return false
+    runs.push(runId)
+    return true
+  }
+  const openTask = async taskId => { tasks.push(taskId) }
+  const notify = text => notes.push(text)
+
+  const first = await exports.openReceiptTarget({
+    message: { taskId: 'g1', phaseId: 'p1', runId: 'run-1' }, openRun, openTask, notify,
+  })
+  const second = await exports.openReceiptTarget({
+    message: { taskId: 'g1', phaseId: 'p2', runId: 'run-2' }, openRun, openTask, notify,
+  })
+  assert.deepEqual(runs, ['run-1', 'run-2'], 'each receipt opens its own phase run')
+  assert.deepEqual(tasks, [])
+  assert.equal(first.opened, 'phase')
+  assert.equal(second.phaseId, 'p2')
+
+  const whole = await exports.openReceiptTarget({
+    message: { taskId: 'g1' }, openRun, openTask, notify,
+  })
+  assert.equal(whole.opened, 'task')
+  assert.deepEqual(tasks, ['g1'], 'a whole-task receipt opens the task page')
+
+  const expired = await exports.openReceiptTarget({
+    message: { taskId: 'g1', phaseId: 'p1', runId: 'run-gone' }, openRun, openTask, notify,
+  })
+  assert.equal(expired.opened, 'task')
+  assert.equal(expired.fellBack, true)
+  assert.deepEqual(tasks, ['g1', 'g1'], 'an expired phase still lands on its task')
+  assert.match(notes.join(' '), /阶段 p1 的执行记录已失效/)
 })

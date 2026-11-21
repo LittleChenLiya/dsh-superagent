@@ -271,6 +271,7 @@ test('an answerable part reaches the chat before a slow dispatch, and a replay a
   const { base, state } = await fixture('superagent-instant-answer')
   const releases = []
   let dispatches = 0
+  let received = null
   const text = '塔防空格镜头太近，改好以后打包；顺便想今晚三个朋友吃什么，人均一百的家常菜。'
   const { boot, stopAll } = harness({
     state, projects: [], tasks: [],
@@ -278,8 +279,9 @@ test('an answerable part reaches the chat before a slow dispatch, and a replay a
       action: 'task', title: '塔防镜头和晚饭', text,
       reply: '今晚可以点清蒸鲈鱼、番茄炒蛋、蒜蓉西兰花，再加一个冬瓜排骨汤，人均大约八十。',
     }),
-    execute: async () => {
+    execute: async decision => {
       dispatches += 1
+      received = decision
       await new Promise(resolve => releases.push(resolve))
       return { text: '塔防镜头已交给执行方。', taskId: 'goal-tower' }
     },
@@ -300,6 +302,7 @@ test('an answerable part reaches the chat before a slow dispatch, and a replay a
     assert.match(instant.text, /清蒸鲈鱼/)
     assert.equal(instant.for, 'mixed-route-1')
     assert.equal(during.messages.find(message => message.role === 'user').text, text, 'the background task keeps the full original text')
+    assert.match(received?.deliveredReply ?? '', /清蒸鲈鱼/, 'the planner must know this part already reached the chat')
 
     // A duplicate delivery of the same request id must not start a second task
     // or repeat the immediate answer.
@@ -373,6 +376,49 @@ test('a finished phase is delivered once with its conclusion and evidence entry,
     assert.match(closing.text, /p2「试玩安排」failed/)
     assert.doesNotMatch(closing.text, /p2「试玩安排」已完成/)
     assert.equal(phaseReceipts((await router.snapshot()).messages).length, 1, 'a failed phase needs no accepted receipt')
+  } finally {
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('a state from before the upgrade does not backfill receipts for work already finished', async () => {
+  const { base, state } = await fixture('superagent-phase-receipt-upgrade')
+  const tasks = [{
+    id: 'goal-old', project: 'game', title: '上一轮完成的任务', status: 'completed', routed: true,
+    finishedAt: '2026-11-20T02:00:00.000Z',
+    phases: [{
+      id: 'p1', title: '旧阶段', status: 'completed', dependsOn: [], runId: 'run-old',
+      finishedAt: '2026-11-20T02:00:00.000Z', summary: '旧版本完成时没有阶段回执。',
+    }],
+  }]
+  // Exactly what the previous build persisted: no phaseOutcomes at all.
+  await fsp.writeFile(path.join(state, 'router.json'), JSON.stringify({
+    version: 2, revision: 4, messages: [], commands: [], memory: [], outcomes: {}, facts: [],
+  }))
+  const { boot, stopAll } = harness({
+    state, projects: [{ name: 'game', cwd: 'game' }], tasks,
+    classify: () => ({ action: 'status' }), execute: async () => ({ text: '任务仍在进行。' }),
+  })
+  const phaseReceipts = messages => messages.filter(message => message.id?.startsWith('phase-'))
+  try {
+    const router = boot()
+    await settled(router, 'the upgrade pass')
+    await sleep(200)
+    assert.equal(phaseReceipts((await router.snapshot()).messages).length, 0,
+      'historical work must not appear as a new phase receipt')
+
+    // Work that finishes after the boundary does get its own receipt.
+    tasks[0].phases.push({
+      id: 'p2', title: '新阶段', status: 'completed', dependsOn: ['p1'], runId: 'run-new',
+      finishedAt: '2026-11-21T05:00:00.000Z', summary: '升级后完成的新阶段。',
+    })
+    const fresh = await until(async () => {
+      const hits = phaseReceipts((await router.snapshot()).messages)
+        .filter(message => message.phaseId === 'p2')
+      return hits.length === 1 ? hits : null
+    }, 'the post-upgrade phase receipt')
+    assert.match(fresh[0].text, /升级后完成的新阶段/)
   } finally {
     await stopAll()
     await fsp.rm(base, { recursive: true, force: true })

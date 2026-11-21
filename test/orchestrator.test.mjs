@@ -3089,11 +3089,11 @@ test('two sessions asking the same decision keep one attention card', async () =
     }
     if (spec.label === 'superagent-1') {
       return completed('Did A.\n\n```attention\n'
-        + '{"question":"你能参加哪一个试玩时间？","options":["周六下午","周日晚上"],"reason":"需要本人到场"}\n```')
+        + '{"key":"playtest-time","question":"你能参加哪一个试玩时间？","options":["周六下午","周日晚上"],"reason":"需要本人到场"}\n```')
     }
     if (spec.label === 'superagent-2') {
       return completed('Did B.\n\n```attention\n'
-        + '{"question":"试玩安排选哪个时间？","options":["周六下午","周日晚上"],"reason":"两个时间都能排"}\n```')
+        + '{"key":"playtest-time","question":"试玩安排选哪个时间？","options":["周六下午","周日晚上"],"reason":"两个时间都能排"}\n```')
     }
     return completed('worker result')
   })
@@ -3109,8 +3109,7 @@ test('two sessions asking the same decision keep one attention card', async () =
   assert.equal(finished.attentionSeq, 1)
 })
 
-test('two genuinely different decisions still keep two cards', async () => {
-  const spawner = makeSpawner(async spec => {
+test('two genuinely different decisions still keep two cards', async () => {  const spawner = makeSpawner(async spec => {
     if (spec.label === 'superagent-plan') {
       return completed(JSON.stringify({
         subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }],
@@ -3133,4 +3132,56 @@ test('two genuinely different decisions still keep two cards', async () => {
 
   assert.equal(finished.attention.items.length, 2)
   assert.deepEqual(finished.attention.items.map(item => item.source), ['subtask-1', 'subtask-2'])
+})
+
+test('equal options and near-identical wording never merge two unrelated decisions', async () => {
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }],
+      }))
+    }
+    if (spec.label === 'superagent-1') {
+      return completed('Did A.\n\n```attention\n'
+        + '{"question":"试玩日期要不要定在周六？","options":["是","否"],"reason":"需要你确认"}\n```')
+    }
+    if (spec.label === 'superagent-2') {
+      return completed('Did B.\n\n```attention\n'
+        + '{"question":"发布说明要不要只给团队看？","options":["是","否"],"reason":"需要你确认"}\n```')
+    }
+    return completed('worker result')
+  })
+  const { orchestrator } = orchestratorWith({ spawner, config: { maxParallel: 2, attempts: 1 } })
+
+  const run = await orchestrator.start({ goal: 'playtest and release', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.attention.items.length, 2, 'a shared 是/否 option set is not an identity')
+  assert.deepEqual(finished.attention.items.map(item => item.key), [undefined, undefined])
+})
+
+test('an aggregator restating a worker question without a key keeps its own card', async () => {
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }],
+      }))
+    }
+    if (spec.label === 'superagent-1') {
+      return completed('Did A.\n\n```attention\n'
+        + '{"question":"你能参加哪一个试玩时间？","options":["周六下午","周日晚上"],"reason":"需要本人到场"}\n```')
+    }
+    if (spec.label === 'superagent-aggregate') {
+      return completed('Both workers reported.\n\n```attention\n'
+        + '{"question":"试玩安排选哪个时间？","options":["周六下午","周日晚上"],"reason":"报告没有定下来"}\n```')
+    }
+    return completed('worker result')
+  })
+  const { orchestrator } = orchestratorWith({ spawner, config: { maxParallel: 2, attempts: 1 } })
+
+  const run = await orchestrator.start({ goal: 'aggregate a playtest question', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.attention.items.length, 2, 'the summary session cannot merge by similarity alone')
+  assert.deepEqual(finished.attention.items.map(item => item.source), ['subtask-1', 'aggregator'])
 })

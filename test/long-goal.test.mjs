@@ -832,7 +832,8 @@ test('a summary session reuses the answer of the decision the execution session 
   const root = await tempRoot('decision-reuse')
   const orchestrator = fakeOrchestrator()
   let goals = await manager(root, orchestrator)
-  const attention = (id, question) => ({ id, source: 'subtask-1', question, options: ['周六下午', '周日晚上'] })
+  const attention = (id, question, key) => ({ id, source: 'subtask-1', question,
+    options: ['周六下午', '周日晚上'], ...(key ? { key } : {}) })
   try {
     const goal = await goals.create({
       goal: 'playtest and camera', parentSessionId: agent.id,
@@ -841,7 +842,7 @@ test('a summary session reuses the answer of the decision the execution session 
     await goals.tick()
     let state = await goals.status(goal.id)
     const p1run = orchestrator.runs.get(state.goal.phases[0].currentRunId)
-    p1run.attention.items.push(attention('q1', '你能参加哪一个试玩时间？'))
+    p1run.attention.items.push(attention('q1', '你能参加哪一个试玩时间？', 'playtest-time'))
     p1run.status = 'completed'
     p1run.goalMode.achieved = false
     await goals.tick()
@@ -856,7 +857,7 @@ test('a summary session reuses the answer of the decision the execution session 
     assert.equal(state.goal.phases[0].status, 'completed')
     assert.equal(state.goal.phases[1].status, 'running')
     const p2run = orchestrator.runs.get(state.goal.phases[1].currentRunId)
-    p2run.attention.items.push(attention('q1', '试玩安排选哪个时间？'))
+    p2run.attention.items.push(attention('q1', '试玩安排选哪个时间？', 'playtest-time'))
     p2run.status = 'completed'
     p2run.goalMode.achieved = false
 
@@ -905,6 +906,119 @@ test('a completed phase keeps its concrete conclusion for the chat receipt acros
     goals = await manager(root, orchestrator)
     state = await goals.status(goal.id)
     assert.match(state.goal.phases[0].summary, /复验清单/, 'the conclusion must survive a restart')
+  } finally {
+    await goals.close()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
+test('the planner is told what the conversation already answered, so it is not planned again', async () => {
+  const root = await tempRoot('delivered-reply')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const dinner = '今晚三个人可以点清蒸鲈鱼、番茄炒蛋、蒜蓉西兰花，再加一个冬瓜排骨汤，人均大约八十。'
+  try {
+    const goal = await goals.create({
+      goal: '把塔防门口镜头改清楚，晚饭也帮我配一下', parentSessionId: agent.id, deliveredReply: dinner,
+    })
+    await goals.tick()
+    const planning = orchestrator.calls.start[0]
+    assert.ok(planning, 'planning must start')
+    assert.match(planning.goal, /清蒸鲈鱼/, 'the delivered answer must reach the planner')
+    assert.match(planning.goal, /Already answered directly/)
+    // The planner drops the dinner phase only because it was told the dinner
+    // answer already reached the conversation.
+    const plan = planning.goal.includes('清蒸鲈鱼')
+      ? [{ id: 'p1', title: '镜头方案', objective: '改镜头', acceptance: ['镜头通过'] }]
+      : [{ id: 'p1', title: '镜头方案', objective: '改镜头', acceptance: ['镜头通过'] },
+          { id: 'p2', title: '晚饭搭配', objective: '配菜', acceptance: ['配好'] }]
+    orchestrator.complete([...orchestrator.runs.values()].at(-1), JSON.stringify({ phases: plan }))
+    await goals.tick()
+    const state = await goals.status(goal.id)
+    assert.deepEqual(state.goal.phases.map(item => item.id), ['p1'], 'the delivered dinner must not become a phase')
+  } finally {
+    await goals.close()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
+test('two parallel sessions asking different decisions with equal options keep two cards', async () => {
+  const root = await tempRoot('decision-separation')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const attention = (id, question) => ({ id, source: 'worker', question, options: ['是', '否'] })
+  try {
+    const goal = await goals.create({ goal: 'date and audience', parentSessionId: agent.id,
+      phases: [phase('p1'), phase('p2')] })
+    await goals.tick()
+    let state = await goals.status(goal.id)
+    const p1run = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+    const p2run = orchestrator.runs.get(state.goal.phases[1].currentRunId)
+    p1run.attention.items.push(attention('q1', '试玩日期要不要定在周六？'))
+    p2run.attention.items.push(attention('q1', '发布说明要不要只给团队看？'))
+    for (const run of [p1run, p2run]) {
+      run.status = 'completed'
+      run.goalMode.achieved = false
+    }
+
+    // The first tick parks the goal on p1's question; the next one still
+    // watches the other in-flight phase.
+    await goals.tick()
+    await goals.tick()
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.decisions.length, 2, 'a shared 是/否 option set is not one decision')
+    const first = state.goal.decisions[0]
+    const second = state.goal.decisions[1]
+    await goals.answer(goal.id, first.id, 'answer', { note: '定在周六' })
+
+    assert.ok(orchestrator.calls.answer.some(call => call.runId === p1run.id && call.attentionId === 'q1'))
+    assert.ok(!orchestrator.calls.answer.some(call => call.runId === p2run.id),
+      'the other decision must not receive this answer')
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.decisions.find(item => item.id === second.id).answer, null)
+  } finally {
+    await goals.close()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a stale binding never hands the old answer to a new question', async () => {
+  const root = await tempRoot('decision-stale-link')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const attention = (id, question, key) => ({ id, source: 'worker', question, options: ['是', '否'], key })
+  try {
+    const goal = await goals.create({ goal: 'two sessions, one playtime', parentSessionId: agent.id,
+      phases: [phase('p1'), phase('p2')] })
+    await goals.tick()
+    let state = await goals.status(goal.id)
+    const p1run = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+    const p2run = orchestrator.runs.get(state.goal.phases[1].currentRunId)
+    p1run.attention.items.push(attention('q1', '你能参加哪一个试玩时间？', 'playtest-time'))
+    p2run.attention.items.push(attention('q1', '试玩安排选哪个时间？', 'playtest-time'))
+    for (const run of [p1run, p2run]) {
+      run.status = 'completed'
+      run.goalMode.achieved = false
+    }
+    await goals.tick()
+    await goals.tick()
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.decisions.length, 1, 'the same key keeps one card')
+    const decision = state.goal.decisions[0]
+    assert.ok(Array.isArray(decision.linked) && decision.linked.length === 1, 'the other session is bound to the card')
+    const link = decision.linked[0]
+
+    // That session restarted and now waits on a different question. The old
+    // card is bound to the old question id, so its answer must not land on the
+    // new one.
+    const linkedRun = orchestrator.runs.get(link.runId)
+    linkedRun.attention.items = [attention('q9', '发布说明用哪种口吻？', 'release-tone')]
+    await goals.answer(goal.id, decision.id, 'answer', { note: '周六下午可以' })
+
+    assert.ok(!orchestrator.calls.answer.some(call => call.runId === linkedRun.id && call.attentionId === 'q9'),
+      'a stale link must not answer the new question')
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.phases.find(item => item.id === link.phaseId).status, 'needs-decision')
   } finally {
     await goals.close()
     await fsp.rm(root, { recursive: true, force: true })
