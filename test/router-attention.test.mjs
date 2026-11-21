@@ -348,7 +348,9 @@ test('a finished phase is delivered once with its conclusion and evidence entry,
       return hits.length === 1 ? hits : null
     }, 'the phase receipt')
     assert.match(first[0].text, /门口留 1\.5 秒空镜/)
-    assert.match(first[0].text, /复验清单与证据/)
+    assert.match(first[0].text, /阶段「镜头方案」已交付/)
+    // The receipt button opens the evidence; phase and run ids stay out of chat.
+    assert.doesNotMatch(first[0].text, /复验清单与证据|run run-1|阶段 p1/)
     assert.equal(first[0].taskId, 'goal-playtest')
     assert.equal(first[0].phaseId, 'p1')
     assert.equal(first[0].runId, 'run-1')
@@ -373,8 +375,8 @@ test('a finished phase is delivered once with its conclusion and evidence entry,
       return messages.find(message => message.id?.startsWith('result-goal-playtest-')) ?? null
     }, 'the closing note')
     assert.match(closing.text, /未交付/)
-    assert.match(closing.text, /p2「试玩安排」failed/)
-    assert.doesNotMatch(closing.text, /p2「试玩安排」已完成/)
+    assert.match(closing.text, /「试玩安排」失败/)
+    assert.doesNotMatch(closing.text, /p2「试玩安排」|p2「试玩安排」已完成/)
     assert.equal(phaseReceipts((await router.snapshot()).messages).length, 1, 'a failed phase needs no accepted receipt')
   } finally {
     await stopAll()

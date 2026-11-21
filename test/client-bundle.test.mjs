@@ -266,12 +266,15 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   assert.equal(actions.at(-1).run.id, goal.id)
   assert.equal(actions.at(-1).phase.id, 'p2')
   button(render(), '待办').props.onClick()
-  // A phase receipt is a different button from a whole-task receipt: clicking
-  // it must open that phase's execution evidence.
+  // A phase receipt is a different button from a whole-task receipt: it is
+  // named after the phase a person knows, and clicking it opens that evidence.
   const withPhase = render()
   const phaseButton = withPhase.find(node => node.type === 'button'
-    && node.props?.title === '打开阶段 p1 的执行证据')
+    && node.props?.title === '打开这一阶段的成果与证据')
   assert.ok(phaseButton, 'the phase receipt offers its own evidence entry')
+  const receiptCopy = phaseButton.children.find(child => child?.props?.className === 'dsa-receipt-copy')
+  assert.match(receiptCopy.children[0].children.join(''), /Draft · 已交付/)
+  assert.doesNotMatch(receiptCopy.children[0].children.join(''), /p1/)
   phaseButton.props.onClick()
   assert.equal(actions.at(-1).type, 'openReceipt')
   assert.equal(actions.at(-1).message.runId, first.id)
@@ -452,7 +455,8 @@ test('the task card separates current decisions from sources and evidence, and l
   assert.ok(nodes.some(node => textOf(node).includes('兼容性 · 先查旧版')))
   assert.ok(nodes.some(node => textOf(node).includes('来源 · issues.opened')), 'an external source is shown as data')
   assert.ok(nodes.some(node => textOf(node).includes('证据 · 已完成')), 'run evidence is shown next to decisions')
-  assert.ok(nodes.some(node => (node.children ?? []).includes('已送达')), 'the receipt state is visible')
+  // One receipt card carries the state; the old "已送达" strip only repeated it.
+  assert.equal(nodes.some(node => (node.children ?? []).includes('已送达')), false, 'no duplicated receipt strip')
 })
 
 test('the task card binds and unbinds a source without calling the API by hand', async () => {
@@ -530,7 +534,7 @@ test('a phase receipt click opens that phase run, and an expired run falls back 
   assert.equal(expired.opened, 'task')
   assert.equal(expired.fellBack, true)
   assert.deepEqual(tasks, ['g1', 'g1'], 'an expired phase still lands on its task')
-  assert.match(notes.join(' '), /阶段 p1 的执行记录已失效/)
+  assert.match(notes.join(' '), /这一阶段的执行记录已失效/)
 })
 
 test('todo and phase-receipt controls stay inside a narrow, 200%-zoomed panel', async () => {
@@ -563,8 +567,62 @@ test('todo and phase-receipt controls stay inside a narrow, 200%-zoomed panel', 
       'a narrow panel must not hide the receipt')
     assert.doesNotMatch(css, /\.dsa-answer-row > button[^}]*display:none/u,
       'a narrow panel must not hide a todo action')
+    assert.match(css, /\.dsa-task-line\{[^}]*overflow-wrap:anywhere/u,
+      'the task summary wraps instead of widening the rail')
+    assert.match(css, /\.dsa-inbox-task\{[^}]*min-width:0[^}]*ellipsis/u,
+      'the inbox task label shrinks inside its row')
   } finally {
     if (originalDocument === undefined) delete globalThis.document
     else globalThis.document = originalDocument
   }
+})
+
+test('a task title shows its own words, never the phase dispatch prompt', async () => {
+  const prompt = 'This run is phase 1 of 5: 调整镜头\n\nPhase objective:\n把镜头切到敌人来的一侧。\nKeep the door open.'
+  const card = await taskCardHarness({
+    goal: prompt, title: 'This run is phase 1 of 5: 调整镜头',
+    phases: [{ id: 'p1', title: '调整镜头', status: 'completed', summary: '镜头已切换' }],
+  })
+  const deepText = node => typeof node === 'string' ? node : (node?.children ?? []).map(deepText).join('')
+  const opened = card.openRail()
+  const row = opened.find(node => node.type === 'button' && String(node.props?.className ?? '').includes('dsa-task-row'))
+  assert.ok(row, 'the task row is rendered')
+  assert.match(deepText(row), /调整镜头/)
+  assert.doesNotMatch(deepText(row), /This run is phase|Phase objective|Keep the door open/)
+  assert.doesNotMatch(String(row.props.title), /This run is phase/, 'the hover title is clean too')
+
+  const brief = opened.find(node => String(node.props?.className ?? '') === 'dsa-task-line')
+  assert.equal(brief?.children?.[0], '镜头已切换', 'the opened task leads with its latest result')
+})
+
+test('the todo badge counts one handoff once and leads with what the person must do', async () => {
+  const question = '阶段 p2（执行会话 child-9）需要你亲自完成：学习通需要扫码登录。页面：https://pan.example/login'
+  const decision = {
+    id: 'g1:decision-1', kind: 'decision', goalId: 'g1', project: { cwd: '/work/one', name: '学习通' },
+    title: 'This run is phase 1 of 5: 整理课程\n\n整段内部提示',
+    item: { id: 'decision-1', question, reason: '旧会话没有登录凭据，需要本人扫码。', options: ['answer', 'skip'],
+      source: { kind: 'human', attentionId: 'attention-1', runId: 'run-9', runtimeVerified: true } },
+  }
+  const twin = {
+    ...decision, id: 'run-9:attention-1', kind: 'question', goalId: undefined, runId: 'run-9',
+    item: { id: 'attention-1', kind: 'human', question, url: 'https://pan.example/login',
+      reason: '旧会话没有登录凭据，需要本人扫码。', handoff: {} },
+  }
+  const card = await taskCardHarness({}, {}, { inbox: [decision, twin] })
+  let nodes = card.render()
+  card.button(nodes, '待办').props.onClick()
+  nodes = card.render({ inboxOpen: true })
+  const badge = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '待办 1 项')
+  assert.ok(badge, 'two surfaces of one handoff count once')
+  const deepText = node => typeof node === 'string' ? node : (node?.children ?? []).map(deepText).join('')
+  assert.ok(nodes.some(node => deepText(node).includes('学习通需要扫码登录')), 'the card states the act itself')
+  const headline = nodes.find(node => String(node.props?.className ?? '') === 'dsa-attention-q')
+  assert.doesNotMatch(String(headline?.children?.[0]), /阶段 p2|页面/, 'the phase id and page line stay in the detail')
+  assert.equal(nodes.some(node => deepText(node).includes('整段内部提示')), false, 'the prompt never becomes a label')
+  assert.ok(card.button(nodes, '我已完成，继续'), 'the direct action is on the first screen')
+  assert.ok(nodes.some(node => (node.children ?? []).includes('原因与页面')), 'the reason stays one tap away')
+
+  const empty = card.render({ inboxOpen: true, workbench: { sessionId: 'chat-a', runs: [], goals: [card.goal], inbox: [] } })
+  assert.equal(empty.some(node => String(node.props?.['aria-label'] ?? '').startsWith('待办 ')), false,
+    'no badge without a todo')
 })
