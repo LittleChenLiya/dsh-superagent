@@ -111,6 +111,47 @@ test('only an observed tool gate creates a browser handoff', async () => {
   }
 })
 
+test('routed work investigates a routine question and continues within the same phase', async () => {
+  const questions = ['应按什么规则判定最近敌人所在的战场侧？', '是否有指定的镜头覆盖边界或构图标准？']
+  const spawner = makeSpawner(spec => {
+    if (spec.label === 'superagent-accept') return completed('{"achieved":true,"failed":[]}')
+    if (spec.prompt.includes('Investigate and resolve these work items yourself:')) {
+      assert.ok(spec.prompt.includes(questions[0]))
+      return completed('Reused the map lanes and camera anchors; test evidence verifies the base and play area are both visible.')
+    }
+    return completed(['Observed the project layout.', '', '```attention',
+      JSON.stringify({ question: questions[0], reason: questions[1] }), '```'].join('\n'))
+  })
+  const { orchestrator } = orchestratorWith({ spawner })
+  const run = await orchestrator.start({
+    mode: 'direct', goal: 'Improve the game camera and verify it', parentSessionId: parent.id, parent,
+    goalMode: { acceptance: [{ text: 'The play area and base are both visible' }], maxRounds: 2 },
+    origin: { routed: true },
+  })
+  const saved = await orchestrator.status(run.id, 5)
+  assert.equal(saved.goalMode.achieved, true)
+  assert.equal(saved.goalMode.rounds.length, 2)
+  assert.deepEqual(saved.attention?.items ?? [], [])
+  assert.equal(spawner.calls.filter(call => call.label === 'superagent-accept').length, 1)
+})
+
+test('a material choice with checked context remains actionable in routed work', async () => {
+  const question = {
+    question: 'Do you want to release this as a public build or restrict it to the private pilot?',
+    options: ['Public', 'Private pilot'],
+    blocker: { type: 'user-choice', checked: 'Read the release notes and project preferences.',
+      consequence: 'The choice determines who will receive an unreleased build.' },
+  }
+  const spawner = makeSpawner(() => completed(['Both options are prepared.', '', '```attention',
+    JSON.stringify(question), '```'].join('\n')))
+  const { orchestrator } = orchestratorWith({ spawner })
+  const run = await orchestrator.start({ mode: 'direct', goal: 'Prepare the distribution',
+    parentSessionId: parent.id, parent, origin: { routed: true } })
+  const saved = await orchestrator.status(run.id, 5)
+  assert.equal(saved.attention.items[0].blocker.type, 'user-choice')
+  assert.deepEqual(saved.attention.items[0].options, question.options)
+})
+
 /** Resolve on the first `open()`, so a test can act without sleeping. */
 function gate() {
   let open

@@ -652,7 +652,8 @@ test('a desktop goal starts unrelated work while an actual login blocks only its
   let state = await goals.get(goal.id)
   const login = orchestrator.runs.get(state.phases[0].currentRunId)
   orchestrator.fail(login, { stop: 'needs-decision' })
-  login.attention.items.push({ id: 'q1', question: 'Please log in', answer: null })
+  login.attention.items.push({ id: 'q1', question: 'Please log in', answer: null,
+    handoff: { kind: 'qr-login', url: 'http://127.0.0.1/' } })
   await goals.tick()
   state = await goals.get(goal.id)
   assert.deepEqual(state.phases.map(item => item.status), ['needs-decision', 'pending', 'running'])
@@ -671,6 +672,45 @@ test('a desktop goal starts unrelated work while an actual login blocks only its
   await goals.tick()
   state = await goals.get(goal.id)
   assert.deepEqual(state.phases.map(item => item.status), ['completed', 'running', 'completed'])
+})
+
+test('a user follow-up requeues a legacy routed phase without answering stale questions', async () => {
+  const root = await tempRoot('legacy-technical-wait')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  try {
+    const goal = await goals.create({ goal: 'Implement and test a better camera', parentSessionId: agent.id,
+      routerRequestId: 'legacy-camera', phases: [phase('camera'), phase('login')] })
+    await goals.tick()
+    const state = await goals.get(goal.id)
+    const [camera, login] = state.phases
+    const cameraRun = orchestrator.runs.get(camera.currentRunId)
+    const loginRun = orchestrator.runs.get(login.currentRunId)
+    for (const [index, run, entry] of [[1, cameraRun, camera], [2, loginRun, login]]) {
+      orchestrator.fail(run, { stop: 'needs-decision' })
+      run.attention.items.push({ id: 'q1', question: 'Old request', ...(index === 2
+        ? { handoff: { kind: 'qr-login', url: 'http://127.0.0.1/' } } : {}) })
+      entry.status = 'needs-decision'
+      state.decisions.push({ id: `d${index}`, kind: 'worker-question', phaseId: entry.id,
+        source: { runId: run.id, attentionId: 'q1', ...(index === 2 ? { kind: 'human', runtimeVerified: true } : {}) } })
+    }
+    state.status = 'needs-decision'
+    state.decisionSeq = 2
+    await fsp.writeFile(path.join(root, 'goals', `${goal.id}.json`), JSON.stringify(state))
+    await goals.instruct(goal.id, 'Untrusted source text', 'ingress-on-hold', 'camera', { fromSource: true })
+    assert.equal((await goals.get(goal.id)).phases[0].status, 'needs-decision')
+    const revised = await goals.instruct(goal.id, 'Use the current map layout', 'camera-followup', 'camera')
+    assert.deepEqual(revised.instructions.at(-1).reopened, ['camera'])
+    assert.ok(revised.decisions[0].retiredAt)
+    assert.equal(revised.decisions[1].retiredAt, undefined)
+    await goals.tick()
+    assert.match(orchestrator.calls.start.at(-1).goal, /Use the current map layout/)
+    assert.equal(orchestrator.calls.answer.length, 0)
+    assert.equal((await goals.get(goal.id)).phases[1].status, 'needs-decision')
+  } finally {
+    goals.close()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
 })
 
 test('skips a phase nothing depends on after its attempts run out, and the goal ends partial', async () => {

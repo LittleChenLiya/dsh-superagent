@@ -122,6 +122,7 @@ function orchestratorWith({
   }),
   sleep,
   toolInventory,
+  takeHumanHandoff,
   cwd,
 }) {
   const notifications = []
@@ -133,6 +134,7 @@ function orchestratorWith({
     memory,
     ...(workspace ? { workspace } : {}),
     ...(toolInventory ? { toolInventory } : {}),
+    takeHumanHandoff,
     ...(cwd ? { cwd } : {}),
     notify: run => notifications.push(run.id),
     log: () => {},
@@ -2733,12 +2735,15 @@ test('desktop dispatch investigates planner uncertainties and still surfaces an 
       }))
     }
     if (spec.label === 'superagent-1') {
-      return completed('镜头可以按现有战场分区取景。\n```attention\n'
-        + '{"question":"请在刚打开的学习通页面扫码。","reason":"打开作业页后实际跳到了二维码登录页。"}\n```')
+      return completed('镜头可以按现有战场分区取景，作业页停在登录界面。')
     }
     return completed('verified what was possible')
   })
-  const { orchestrator } = orchestratorWith({ spawner: { spawnChild } })
+  const { orchestrator } = orchestratorWith({
+    spawner: { spawnChild },
+    takeHumanHandoff: childId => childId === calls.find(call => call.label === 'superagent-1')?.childId
+      ? { kind: 'qr-login', url: 'http://127.0.0.1/assignment' } : null,
+  })
   const run = await orchestrator.start({
     goal: '取景切到敌人所在那一面，同时查看作业页',
     parentSessionId: parent.id,
@@ -2750,7 +2755,7 @@ test('desktop dispatch investigates planner uncertainties and still surfaces an 
   assert.match(calls.find(call => call.label === 'superagent-1').prompt, /check the actual state before asking/)
   assert.equal(finished.plan.needsInput, undefined)
   assert.deepEqual(finished.attention.items.map(item => [item.source, item.question]),
-    [['subtask-1', '请在刚打开的学习通页面扫码。']])
+    [['subtask-1', '请在执行浏览器中扫码登录']])
 })
 
 test('a subtask missing a declared capability is blocked and never spawns', async () => {
