@@ -1024,3 +1024,160 @@ test('a stale binding never hands the old answer to a new question', async () =>
     await fsp.rm(root, { recursive: true, force: true })
   }
 })
+
+test('a cited runtime key joins the open card across a restart and answers only its bound questions', async () => {
+  const root = await tempRoot('runtime-key-link')
+  const orchestrator = fakeOrchestrator()
+  let goals = await manager(root, orchestrator)
+  const runtimeKey = runId => `${runId.toLowerCase()}:q1`
+  try {
+    const goal = await goals.create({
+      goal: 'playtest, briefing and release', parentSessionId: agent.id, maxParallelPhases: 3,
+      phases: [phase('p1'), phase('p2'), phase('p3')],
+    })
+    await goals.tick()
+    let state = await goals.status(goal.id)
+    const p1run = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+    const p2run = orchestrator.runs.get(state.goal.phases[1].currentRunId)
+    const p3run = orchestrator.runs.get(state.goal.phases[2].currentRunId)
+    // The execution session asks naturally; the orchestrator registers the key.
+    p1run.attention.items.push({
+      id: 'q1', source: 'subtask-1', question: '试玩定在周六还是周日？', options: ['周六', '周日'], key: runtimeKey(p1run.id),
+    })
+    p1run.status = 'completed'
+    p1run.goalMode.achieved = false
+    await goals.tick()
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.decisions.length, 1)
+    const key = state.goal.decisions[0].key
+    assert.equal(key, runtimeKey(p1run.id), 'the runtime key is persisted with the card')
+
+    // The host restarts before a second session asks anything.
+    await goals.close()
+    goals = await manager(root, orchestrator)
+
+    p2run.attention.items.push({
+      id: 'q1', source: 'subtask-2', question: '试玩安排选哪个时间？', options: ['周六', '周日'], key: runtimeKey(p2run.id), refKey: key,
+    })
+    p3run.attention.items.push({
+      id: 'q1', source: 'subtask-3', question: '发布说明要不要只给团队看？', options: ['是', '否'], key: runtimeKey(p3run.id), refKey: 'missing-key',
+    })
+    for (const run of [p2run, p3run]) {
+      run.status = 'completed'
+      run.goalMode.achieved = false
+    }
+    await goals.tick()
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.decisions.length, 2, 'the cited key joins one card; the unknown key stays independent')
+    const linked = state.goal.decisions.find(item => item.key === key)
+    assert.equal(linked.linked.length, 1)
+    assert.equal(linked.linked[0].runId, p2run.id)
+    assert.equal(linked.linked[0].attentionId, 'q1')
+    const independent = state.goal.decisions.find(item => item.id !== linked.id)
+    assert.equal(independent.key, runtimeKey(p3run.id), 'an unknown citation is not trusted as identity')
+
+    await goals.answer(goal.id, linked.id, 'answer', { note: '定在周六' })
+    assert.ok(orchestrator.calls.answer.some(call => call.runId === p1run.id && call.attentionId === 'q1'))
+    assert.ok(orchestrator.calls.answer.some(call => call.runId === p2run.id && call.attentionId === 'q1'))
+    assert.ok(!orchestrator.calls.answer.some(call => call.runId === p3run.id),
+      'the unrelated question must not receive this answer')
+
+    await goals.close()
+    goals = await manager(root, orchestrator)
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.decisions.length, 2, 'the two cards and their scopes survive a restart')
+    assert.equal(state.goal.decisions.find(item => item.id === linked.id).answerText, '定在周六')
+  } finally {
+    await goals.close()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a settled runtime key is offered to the next phase and reused instead of re-asked', async () => {
+  const root = await tempRoot('runtime-key-reuse')
+  const orchestrator = fakeOrchestrator()
+  let goals = await manager(root, orchestrator)
+  try {
+    const goal = await goals.create({
+      goal: 'playtest and recap', parentSessionId: agent.id,
+      phases: [phase('p1'), phase('p2', { dependsOn: ['p1'] })],
+    })
+    await goals.tick()
+    let state = await goals.status(goal.id)
+    const p1run = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+    p1run.attention.items.push({
+      id: 'q1', source: 'subtask-1', question: '试玩定在周六还是周日？', options: ['周六', '周日'],
+      key: `${p1run.id.toLowerCase()}:q1`,
+    })
+    p1run.status = 'completed'
+    p1run.goalMode.achieved = false
+    await goals.tick()
+    state = await goals.status(goal.id)
+    const decision = state.goal.decisions[0]
+    assert.equal(decision.key, `${p1run.id.toLowerCase()}:q1`)
+    await goals.answer(goal.id, decision.id, 'answer', { note: '定在周六' })
+    orchestrator.complete(p1run, '时间已定')
+    await goals.tick()
+
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.phases[1].status, 'running')
+    const p2start = orchestrator.calls.start.at(-1)
+    assert.match(p2start.goal, new RegExp(`key "${decision.key}"`), 'the next session is given the registered key')
+    assert.match(p2start.goal, /定在周六/, 'and the confirmed answer')
+
+    await goals.close()
+    goals = await manager(root, orchestrator)
+    const p2run = orchestrator.runs.get(state.goal.phases[1].currentRunId)
+    p2run.attention.items.push({
+      id: 'q1', source: 'worker', question: '试玩安排选哪个时间？', options: ['周六', '周日'],
+      key: `${p2run.id.toLowerCase()}:q1`, refKey: decision.key,
+    })
+    p2run.status = 'completed'
+    p2run.goalMode.achieved = false
+    await goals.tick()
+    state = await goals.status(goal.id)
+    assert.equal(state.goal.decisions.length, 1, 'the cited key reuses the settled card after a restart')
+    assert.ok(orchestrator.calls.answer.some(call => call.runId === p2run.id && call.attentionId === 'q1'
+      && call.text === '定在周六'), 'the confirmed answer reaches the exact later question')
+  } finally {
+    await goals.close()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a key registered by another goal never joins this goal card', async () => {
+  const root = await tempRoot('cross-goal-key')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  try {
+    const goalA = await goals.create({ goal: 'playtest dates', parentSessionId: agent.id, phases: [phase('p1')] })
+    const goalB = await goals.create({ goal: 'release audience', parentSessionId: agent.id, phases: [phase('p1')] })
+    await goals.tick()
+    const a = await goals.status(goalA.id)
+    const b = await goals.status(goalB.id)
+    const runA = orchestrator.runs.get(a.goal.phases[0].currentRunId)
+    const runB = orchestrator.runs.get(b.goal.phases[0].currentRunId)
+    runA.attention.items.push({
+      id: 'q1', source: 'worker', question: '试玩定在哪天？', options: ['周六', '周日'], key: `${runA.id.toLowerCase()}:q1`,
+    })
+    runB.attention.items.push({
+      id: 'q1', source: 'worker', question: '试玩安排选哪个时间？', options: ['周六', '周日'],
+      key: `${runB.id.toLowerCase()}:q1`, refKey: `${runA.id.toLowerCase()}:q1`,
+    })
+    for (const run of [runA, runB]) {
+      run.status = 'completed'
+      run.goalMode.achieved = false
+    }
+    await goals.tick()
+
+    const afterA = await goals.status(goalA.id)
+    const afterB = await goals.status(goalB.id)
+    assert.equal(afterA.goal.decisions.length, 1)
+    assert.equal(afterB.goal.decisions.length, 1)
+    assert.equal(afterB.goal.decisions[0].key, `${runB.id.toLowerCase()}:q1`,
+      'a key from another goal is not accepted as identity here')
+  } finally {
+    await goals.close()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})

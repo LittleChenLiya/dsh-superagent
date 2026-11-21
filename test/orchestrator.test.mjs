@@ -3157,7 +3157,12 @@ test('equal options and near-identical wording never merge two unrelated decisio
   const finished = await orchestrator.status(run.id, 10)
 
   assert.equal(finished.attention.items.length, 2, 'a shared 是/否 option set is not an identity')
-  assert.deepEqual(finished.attention.items.map(item => item.key), [undefined, undefined])
+  // Each card still gets its own referenceable runtime key; the key must not be
+  // what merges them, since these are two unrelated decisions.
+  const keys = finished.attention.items.map(item => item.key)
+  assert.equal(new Set(keys).size, 2, 'two cards must not share a runtime key')
+  assert.ok(keys.every(key => key.startsWith(`${run.id.toLowerCase()}:`)), 'the runtime assigns the key')
+  assert.ok(finished.attention.items.every(item => !item.refKey), 'an unkeyed question cites nothing')
 })
 
 test('an aggregator restating a worker question without a key keeps its own card', async () => {
@@ -3184,4 +3189,43 @@ test('an aggregator restating a worker question without a key keeps its own card
 
   assert.equal(finished.attention.items.length, 2, 'the summary session cannot merge by similarity alone')
   assert.deepEqual(finished.attention.items.map(item => item.source), ['subtask-1', 'aggregator'])
+})
+
+test('a plain question gets a runtime key the aggregator can cite, leaving one card', async () => {
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({
+        subtasks: [{ title: 'A', prompt: 'prepare scheduling' }, { title: 'B', prompt: 'draft briefing' }],
+      }))
+    }
+    if (spec.label === 'superagent-1') {
+      // No key: the execution session asks naturally.
+      return completed('Schedule checked.\n\n```attention\n'
+        + '{"question":"试玩定在周六还是周日？","options":["周六","周日"],"reason":"需要本人选时间"}\n```')
+    }
+    if (spec.label === 'superagent-aggregate') {
+      // Cite only a key the prompt actually offered, as the audit script does.
+      const cited = [...spec.prompt.matchAll(/^- key "([^"]+)": (.+)$/gm)]
+        .find(match => match[2].includes('试玩'))
+      return completed('Both parts done.\n\n```attention\n'
+        + JSON.stringify({
+          question: '试玩安排选哪个时间？', options: ['周六', '周日'], reason: '汇总时仍未定',
+          ...(cited ? { key: cited[1] } : {}),
+        })
+        + '\n```')
+    }
+    return completed('worker result')
+  })
+  const { orchestrator } = orchestratorWith({ spawner, config: { maxParallel: 2, attempts: 1 } })
+
+  const run = await orchestrator.start({ goal: 'prepare playtest scheduling and briefing', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.attention.items.length, 1, 'citing the registered key keeps one card')
+  const [item] = finished.attention.items
+  assert.match(item.key, new RegExp(`^${run.id.toLowerCase()}:q\\d+$`), 'the runtime assigns a referenceable key')
+  assert.equal(item.refKey, undefined, 'no invented key was appended')
+  assert.deepEqual(item.askedBy, ['subtask-1', 'aggregator'])
+  const aggregate = spawner.calls.find(call => call.label === 'superagent-aggregate')
+  assert.ok(aggregate?.prompt.includes(`key "${item.key}"`), 'the registered key reached the aggregator prompt')
 })
