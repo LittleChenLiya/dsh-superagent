@@ -306,9 +306,11 @@ async function run() {
       assert(snapshot.messages.length === beforeMessages, '来源事件写入了对话')
       assert(snapshot.metrics.sourceEvents === 1, '来源事件没有进入任务图')
       assert(snapshot.metrics.classifyCalls === 0, '来源事件调用了分类器')
+      const recorded = snapshot.facts.find(fact => fact.kind === 'source')
+      assert(recorded?.phaseId === 'p1', '来源事实丢失了绑定阶段')
       const context = await sourceRouter.taskContext(tasks[0])
       assert(context.sources.length === 1, '任务卡没有来源记录')
-      return 'HTTP 202；对话不变；source 事实 1 条；classifyCalls=0'
+      return 'HTTP 202；对话不变；source 事实 1 条且归属 p1；classifyCalls=0'
     })
 
     const replay = await fetch(`${server.url}/hooks/github`, {
@@ -457,6 +459,7 @@ async function run() {
     `- 分支：\`${branch}\``, `- 基准提交：\`${base}\``, `- 当前提交：\`${head}\``,
     `- 生成时间：${report.generatedAt}`, `- 模型：${report.model}`, '',
     '> GitHub / 飞书为本地签名夹具，**未连接真实账号**。见文末。', '',
+    '> 真实 DSH 宿主演示（隔离 profile、模拟模型）另见 `host-demo-report.md`。', '',
     '## 结果', '', `${report.passed} 通过 / ${report.failed} 失败`, '',
     '| 检查 | 结果 | 证据 |', '| --- | --- | --- |',
     ...checks.map(item => `| ${item.name} | ${item.passed ? '通过' : '失败'} | ${String(item.detail ?? '').replace(/\|/gu, '\\|')} |`),

@@ -139,6 +139,9 @@ node --test test/work-graph.test.mjs test/attention-policy.test.mjs `
 $env:DSH_ACCEPTANCE_DIR='D:/Codex/dsh-superagent/total-design/acceptance'
 node scripts/demo-acceptance.mjs
 
+# 真实宿主演示（独立 profile；模型为确定性模拟）
+node D:/Codex/dsh-superagent/total-design/host-demo/runner/run.mjs
+
 git diff --check
 $env:npm_config_cache='D:/Codex/dsh-superagent/total-design/npm-cache'
 npm run check-pack
@@ -156,11 +159,51 @@ AES 加密均为本地夹具。
 - 报告：`D:/Codex/dsh-superagent/total-design/acceptance/acceptance-report.md`
   （另有 `acceptance-report.json`）
 - 覆盖：跨工作区隔离、重启后读取、阶段隔离、撤回、终态验收、证据查询、
-  旧状态迁移、GitHub 真实入站、重投去重、未绑定不派工、飞书签名/握手/加密、
+  旧状态迁移、GitHub 签名事件入站、重投去重、未绑定不派工、飞书签名/握手/加密、
   跨租户隔离、登记后崩溃恢复、回执四态。
 - 失败与修复：首次验收在 Windows 上遇到 `EPERM ... rename router.json.tmp`；
   已为 `router.json` 与 `sources.json` 的原子替换加入 `EPERM/EACCES/EBUSY`
   有限重试，复跑通过。
+
+### 真实宿主演示（2026-11-21，隔离实例）
+
+**结论：真实宿主观察通过；模型调用是模拟。** 本轮用独立 `DSH_HOME`、独立 profile、
+独立 `stateDir` 和两个独立工作区启动桌面宿主主进程（`ELECTRON_RUN_AS_NODE=1`，
+未开可见窗口），没有触碰 desktop profile、正在执行的任务和主工作区。
+对话、规划和执行由确定性 `dsh-host-demo-stub`（路由 `demo-stub`）应答，**不是真实 LLM**；
+GitHub / 飞书使用本地签名或加密夹具，**没有连接真实账号**。
+
+| 任务 | 执行线 | 阶段 | 结果 |
+| --- | --- | --- | --- |
+| `发布验收` | `session-superagent-e8ee…` / `release-project` | `p1 准备发布说明`、`p2 复核发布说明` | 两个阶段完成；阶段运行均属于该 session |
+| `反馈核查` | `session-superagent-4c3a…` / `feedback-project` | `f1 核对反馈范围` | 完成；阶段运行属于该 session |
+
+阶段输入从宿主实际发给模型的 15 次请求中核对：
+
+- p1 起始提示含 `This run is phase 1 of 2: 准备发布说明`；后续补充请求含
+  `先只检查阻断项`，不含 p2 的决定或补充。
+- p2 起始提示含 `This run is phase 2 of 2: 复核发布说明`、`复核只看差异清单`、
+  `FOLLOWUP-P2`；不含 p1 的决定或补充。
+- `router.json` 中两条决定事实的 `phaseId` 分别为 `p1` / `p2`，与工作图阶段一致。
+
+来源事件：
+
+- GitHub 签名事件 → HTTP 202，`dispatched`，source 事实归属 `p2`，正文进入 p2
+  执行线；对话新增消息 **0**。
+- 飞书握手 + AES 加密事件 → challenge 匹配、HTTP 200，`dispatched`，source 事实
+  归属 `f1`，正文进入反馈执行线；对话新增消息 **0**。
+- 两条事件均未进入对方执行线，对话中也没有事件正文。
+
+演示中发现并修复两处问题：
+
+1. 来源事件绑定到阶段时，`kind: 'source'` 事实原先不带 `phaseId`，工作图丢失阶段
+   归属；已在 `lib/router.js` 记录绑定阶段，并在合成验收中增加断言。
+2. `consolePort: 0`（系统分配端口）被日志误判为关闭；已改为只在 `null` 时提示，
+   端口 0 记为 ephemeral port。
+
+结构化观察、原始模型请求、宿主日志与状态文件在
+`D:/Codex/dsh-superagent/total-design/host-demo/`；完整报告为
+`D:/Codex/dsh-superagent/total-design/acceptance/host-demo-report.md`。
 
 ### 真实账号连通性
 
@@ -180,4 +223,6 @@ AES 加密均为本地夹具。
 - 自动开工必须显式 `autoStart`，默认关闭。
 - `package.json` 版本仍为 `0.24.0`；任务描述提到已安装 `0.25.0-dev.7`，两者不一致，
   本次未改版本号。
-- 未启动或重启真实 DSH / Electron 窗口；未改动 desktop profile、正在执行的任务或主工作区。
+- 本轮补做了隔离真实宿主演示：使用独立 `DSH_HOME`、profile、`stateDir` 和两个演示
+  工作区；未改动 desktop profile、正在执行的任务或主工作区。模型为确定性模拟，
+  GitHub / 飞书为本地签名夹具，真实账号连通性仍未验证。
