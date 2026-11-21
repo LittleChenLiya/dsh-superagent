@@ -324,17 +324,21 @@ async function run() {
       return '重投返回 duplicate=true；sourceEvents 仍为 1'
     })
 
-    const unboundBody = JSON.stringify(issuePayload({ number: 8 }))
+    // Same issue number, different repository: the binding is keyed by the real
+    // repository id, so this must remain unbound instead of updating issue 7.
+    const otherRepoBody = JSON.stringify(issuePayload({ repoId: 202, number: 7 }))
     await fetch(`${server.url}/hooks/github`, {
-      method: 'POST', headers: githubHeaders('acc-delivery-8', unboundBody), body: unboundBody,
+      method: 'POST', headers: githubHeaders('acc-delivery-other-repo', otherRepoBody), body: otherRepoBody,
     })
     await ingress.flush()
     await check('未绑定对象只登记、不派工', async () => {
       const snapshot = await ingress.snapshot()
       assert(snapshot.counts.unbound >= 1, '未绑定事件没有登记为 unbound')
       const routerSnapshot = await sourceRouter.snapshot()
-      assert(routerSnapshot.metrics.sourceEvents === 1, '未绑定事件进入了执行线')
-      return 'unbound=1；未进入执行线'
+      assert(routerSnapshot.metrics.sourceEvents === 1, '同号不同仓库的事件进入了执行线')
+      const context = await sourceRouter.taskContext(tasks[0])
+      assert(context.sources.length === 1, '同号不同仓库覆盖了原对象的来源事实')
+      return '同号不同仓库保持 unbound=1；sourceEvents 仍为 1'
     })
 
     const challengeBody = JSON.stringify({ type: 'url_verification', challenge: 'acc-challenge', token: 'acceptance-token' })

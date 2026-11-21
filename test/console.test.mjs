@@ -9,6 +9,8 @@ import { createConsole } from '../lib/console.js'
 import { createOrchestrator } from '../lib/orchestrator.js'
 import { createStore } from '../lib/store.js'
 import { createRouter } from '../lib/router.js'
+import { createSourceStore } from '../lib/sources/store.js'
+import { createSourceIngress } from '../lib/sources/ingress.js'
 import { currentFacts, putFact } from '../lib/work-context.js'
 
 const BASE_CONFIG = {
@@ -1684,5 +1686,55 @@ test('the host-origin relay carries the console API and adds the token itself', 
     await new Promise(resolve => relay.close(resolve))
     await panel.stop()
     await fsp.rm(path.dirname(state), { recursive: true, force: true })
+  }
+})
+
+test('the console binds and revokes a source with the same token it uses for everything else', async () => {
+  const { base, state } = await fixture()
+  const sourceRoot = path.join(base, 'sources')
+  await fsp.mkdir(sourceRoot, { recursive: true })
+  const store = createSourceStore({ root: sourceRoot })
+  const task = {
+    id: 'goal-empty', project: '/work/one', title: '准备发布说明', status: 'running',
+    phases: [{ id: 'p1', title: '准备发布说明', status: 'running' }],
+  }
+  const ingress = createSourceIngress({
+    store,
+    router: { submitSource: async () => ({ status: 'delivered' }) },
+    config: {
+      github: { enabled: true, instanceId: 'gh-console', secret: 'console-secret' },
+      feishu: { enabled: true, instanceId: 'fs-console', encryptKey: 'console-key', verificationToken: 'console-token' },
+    },
+    catalog: async () => ({ projects: [{ name: 'one', cwd: '/work/one' }], tasks: [task] }),
+  })
+  const panel = await startConsole(state, fakeHost().host, { sources: ingress })
+  try {
+    const anonymous = await request(panel, 'POST', '/api/console/sources/bind', {
+      source: 'github', objectId: 'github:1:issue:7', project: '/work/one', taskId: 'goal-empty', phaseId: 'p1',
+    }, null)
+    assert.equal(anonymous.status, 401, 'a binding cannot be written without the console token')
+
+    const bound = await request(panel, 'POST', '/api/console/sources/bind', {
+      source: 'github', objectId: 'github:1:issue:7', project: '/work/one', taskId: 'goal-empty', phaseId: 'p1',
+    })
+    assert.equal(bound.status, 200, bound.text)
+    const binding = bound.json.data.binding
+    assert.equal(binding.taskId, 'goal-empty')
+    assert.equal(binding.phaseId, 'p1')
+    assert.equal(binding.revokedAt, null)
+
+    const listed = await request(panel, 'GET', '/api/console/sources')
+    assert.ok(listed.json.data.bindings.some(item => item.id === binding.id), 'the card cannot see the new binding')
+
+    const unknown = await request(panel, 'POST', '/api/console/sources/unbind', { id: 'missing' })
+    assert.equal(unknown.status, 404, 'an unknown binding must not report success')
+
+    const revoked = await request(panel, 'POST', '/api/console/sources/unbind', { id: binding.id })
+    assert.equal(revoked.status, 200, revoked.text)
+    const after = await request(panel, 'GET', '/api/console/sources')
+    assert.equal(after.json.data.bindings.find(item => item.id === binding.id), undefined, 'a revoked binding must disappear from the card')
+  } finally {
+    await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
   }
 })

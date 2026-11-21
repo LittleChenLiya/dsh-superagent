@@ -455,6 +455,37 @@ test('the task card separates current decisions from sources and evidence, and l
   assert.ok(nodes.some(node => (node.children ?? []).includes('已送达')), 'the receipt state is visible')
 })
 
+test('the task card binds and unbinds a source without calling the API by hand', async () => {
+  const card = await taskCardHarness({ phases: [{ id: 'p1', title: '准备发布说明', status: 'running' }] }, {
+    project: { cwd: '/work/one', name: '工作区一' },
+    sourceBindings: [{
+      id: 'binding-1', source: 'github', objectId: 'github:1:issue:7',
+      taskId: 'goal-empty', phaseId: 'p1', autoStart: false, revoked: false,
+    }],
+  }, { sessionProjects: { 'chat-a': { cwd: '/work/one', name: '工作区一' } } })
+  const nodes = card.openRail()
+  assert.ok(nodes.some(node => (node.children ?? []).join('').includes('github:1:issue:7')),
+    'an existing binding is visible on the task card')
+  card.button(nodes, '撤销').props.onClick()
+  assert.deepEqual(card.actions.at(-1), { type: 'sourceUnbind', id: 'binding-1' })
+
+  card.button(nodes, '绑定来源').props.onClick()
+  const form = card.render()
+  const object = form.find(node => node.props?.['aria-label'] === '来源对象 ID')
+  assert.ok(object, 'the card has a visible object-id field')
+  object.props.onChange({ target: { value: 'feishu:t1:message:om_1' } })
+  const phase = card.render().find(node => node.props?.['aria-label'] === '归到哪个阶段')
+  phase.props.onChange({ target: { value: 'p1' } })
+  const bind = card.button(card.render(), '绑定')
+  await bind.props.onClick()
+  const action = card.actions.at(-1)
+  assert.equal(action.type, 'sourceBind')
+  assert.equal(action.objectId, 'feishu:t1:message:om_1')
+  assert.equal(action.taskId, 'goal-empty')
+  assert.equal(action.phaseId, 'p1')
+  assert.equal(action.project, '/work/one')
+})
+
 test('a phase receipt click opens that phase run, and an expired run falls back to the task', async () => {
   const { exports } = await materialize()
   const runs = []
