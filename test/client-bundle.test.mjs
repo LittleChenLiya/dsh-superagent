@@ -267,3 +267,155 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   assert.equal(inbox.find(node => node.props?.['aria-label'] === '任务列表')?.props.hidden, true,
     'the task list stays mounted so its search can survive a view change')
 })
+
+/** Hook storage that keeps component state across explicit re-renders. */
+function hookCache() {
+  const values = []
+  let cursor = null
+  return {
+    hooks: {
+      useState(initial) {
+        const value = typeof initial === 'function' ? initial() : initial
+        if (cursor === null) return [value, () => {}]
+        const index = cursor++
+        if (values[index] === undefined) values[index] = value
+        return [values[index], next => {
+          values[index] = typeof next === 'function' ? next(values[index]) : next
+        }]
+      },
+    },
+    begin() { cursor = 0 },
+    end() { cursor = null },
+  }
+}
+
+/** Depth-first walk over a stub element tree, rendering function components. */
+function* walkTree(tree) {
+  if (Array.isArray(tree)) {
+    for (const child of tree) yield* walkTree(child)
+  } else if (tree && typeof tree === 'object') {
+    if (typeof tree.type === 'function') {
+      yield* walkTree(tree.type({ ...tree.props, children: tree.children }))
+    } else {
+      yield tree
+      yield* walkTree(tree.children)
+    }
+  }
+}
+
+/** Mount the panel and open one task card with an empty 工作上下文. */
+async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {}) {
+  const cache = hookCache()
+  const { exports } = await materialize(null, cache.hooks)
+  let panel
+  exports.apply({
+    slots: {
+      inject: (name, callback) => callback(),
+      register: (props, component) => { if (props.name === 'main') panel = component },
+    },
+  })
+  const shell = panel()
+  const actions = []
+  const goal = {
+    id: 'goal-empty', goal: '空任务', title: '空任务', ownerSessionId: 'chat-a',
+    status: 'completed', decisions: [], phases: [], ...goalPatch,
+  }
+  const model = {
+    ...shell.props.model, phase: 'ready', sessionId: 'chat-a', selectedGoalId: goal.id, messages: [],
+    workbench: { sessionId: 'chat-a', runs: [], goals: [goal], ...benchPatch },
+    ...modelPatch,
+  }
+  const render = extra => {
+    cache.begin()
+    const seat = shell.type({ model: { ...model, ...extra }, dispatch: action => actions.push(action) })
+    const nodes = [...walkTree(seat)]
+    cache.end()
+    return nodes
+  }
+  const openRail = () => {
+    const tasks = render().find(node => node.type === 'button' && node.props?.['aria-label'] === '任务')
+    assert.ok(tasks, 'the header offers the task view')
+    tasks.props.onClick()
+    return render()
+  }
+  const button = (nodes, label) => nodes.find(node => node.type === 'button' && (node.children ?? []).includes(label))
+  const composer = nodes => nodes.find(node => node.type === 'textarea')
+  const hint = (nodes, name) => nodes.find(node => String(node.props?.className ?? '').includes(name))?.children?.[0]
+  return { render, openRail, actions, goal, button, composer, hint }
+}
+
+test('an empty task offers 加别名 and 记决定, and 加别名 only prefills the composer', async () => {
+  const card = await taskCardHarness()
+  const nodes = card.openRail()
+  assert.ok(nodes.some(node => (node.children ?? []).includes('还没有别名或已确认的决定。')),
+    'the empty context section still renders')
+  const alias = card.button(nodes, '加别名')
+  const decision = card.button(nodes, '记决定')
+  assert.ok(alias && decision, 'both record entries sit in the expanded card')
+  assert.equal(alias.props['aria-label'], '给「空任务」加别名')
+
+  alias.props.onClick()
+  assert.deepEqual(card.actions, [], 'a prefill never sends by itself')
+  const after = card.render()
+  assert.equal(card.composer(after).props.value, '/别名 goal-empty | ')
+  assert.equal(card.composer(after).props['aria-label'], '给超级智能体发消息',
+    'the command goes through the plain message entry, not a task follow-up')
+})
+
+test('记决定 prefills the decision template for the opened task', async () => {
+  const card = await taskCardHarness()
+  const nodes = card.openRail()
+  card.button(nodes, '记决定').props.onClick()
+  assert.deepEqual(card.actions, [])
+  assert.equal(card.composer(card.render()).props.value, '/决定 goal-empty | ')
+})
+
+test('an existing draft is kept intact when a record entry is used', async () => {
+  const card = await taskCardHarness()
+  let nodes = card.openRail()
+  card.composer(nodes).props.onInput({ target: { value: '已经写了一半' } })
+  nodes = card.render()
+  assert.equal(card.composer(nodes).props.value, '已经写了一半')
+
+  card.button(nodes, '加别名').props.onClick()
+  nodes = card.render()
+  assert.equal(card.composer(nodes).props.value, '已经写了一半', 'the draft is not replaced')
+  assert.match(card.hint(nodes, 'dsa-composer-hint'), /已原样保留/)
+  assert.deepEqual(card.actions, [])
+})
+
+test('a task follow-up context is kept and the record entry asks to leave it first', async () => {
+  const card = await taskCardHarness({}, {
+    reply: { id: 'goal-empty', taskId: 'goal-empty', text: '补充给 空任务' },
+  })
+  let nodes = card.openRail()
+  assert.equal(card.composer(nodes).props['aria-label'], '任务补充要求')
+  card.button(nodes, '记决定').props.onClick()
+  nodes = card.render()
+  assert.equal(card.composer(nodes).props.value, '', 'the follow-up mode keeps its empty draft')
+  assert.match(card.hint(nodes, 'dsa-composer-hint'), /取消追加/)
+  assert.deepEqual(card.actions, [])
+})
+
+test('a task outside the selected workspace is not written blind: the card asks to switch first', async () => {
+  const card = await taskCardHarness({}, {
+    project: { cwd: '/work/one', name: '工作区一' },
+  }, {
+    sessionProjects: { 'chat-a': { cwd: '/work/two', name: '工作区二' } },
+  })
+  const nodes = card.openRail()
+  card.button(nodes, '加别名').props.onClick()
+  const after = card.render()
+  assert.equal(card.composer(after).props.value, '')
+  assert.match(card.hint(after, 'dsa-record-hint'), /工作区二/)
+  assert.match(card.hint(after, 'dsa-record-hint'), /切换到/)
+  assert.deepEqual(card.actions, [])
+})
+
+test('a default workspace task requires switching back before recording from a named workspace', async () => {
+  const card = await taskCardHarness({}, { project: { cwd: '/work/one', name: '工作区一' } })
+  card.button(card.openRail(), '记决定').props.onClick()
+  const after = card.render()
+  assert.equal(card.composer(after).props.value, '')
+  assert.match(card.hint(after, 'dsa-record-hint'), /切换到「默认工作区」/)
+})
