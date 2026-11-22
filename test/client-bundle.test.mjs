@@ -725,7 +725,7 @@ test('a read todo leaves the badge but stays reachable under one line', async ()
   assert.match(nodes.map(deepText).join(''), /要接受这版试玩反馈的结论吗/, 'a read decision stays reachable, never lost')
 })
 
-test('a failed card archives to its own fold and restores on demand', async () => {
+test('a failed card closes to its own fold and restores on demand', async () => {
   const failed = {
     id: 'r-fail', goal: '回归测试', title: '回归测试', status: 'failed', parentSessionId: 'chat-a',
     report: '断言失败：登录页超时',
@@ -735,15 +735,35 @@ test('a failed card archives to its own fold and restores on demand', async () =
   let nodes = card.openRail()
   assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-grid'),
     'the failed run leads the grid')
-  card.button(nodes, '归档').props.onClick()
+  card.button(nodes, '关闭').props.onClick()
   nodes = card.render()
   assert.equal(nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-grid'), false,
-    'archiving clears the failed card from the main grid')
-  assert.ok(nodes.some(node => (node.children ?? []).includes('已归档 1 项')), 'the card folds instead of vanishing')
+    'closing clears the failed card from the main grid')
+  assert.ok(nodes.some(node => (node.children ?? []).includes('已关闭 1 项')), 'the card folds instead of vanishing')
   card.button(nodes, '恢复').props.onClick()
   nodes = card.render()
   assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-grid'),
     'restoring brings the card back')
+})
+
+test('right-clicking a card offers jump to session and close', async () => {
+  const goal = {
+    id: 'g1', goal: '写脚本', title: '写脚本', ownerSessionId: 'chat-a', status: 'running',
+    decisions: [], phases: [{ id: 'p1', title: '写脚本', status: 'running', runId: 'r1' }],
+  }
+  const run = {
+    id: 'r1', goal: '写脚本', status: 'running', parentSessionId: 'chat-a',
+    subtasks: [{ index: 0, title: '写脚本', status: 'running', childId: 'child-1' }],
+  }
+  const card = await taskCardHarness(goal, { selectedGoalId: null }, { runs: [run] })
+  let nodes = card.openRail()
+  const sessionCard = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card')
+  sessionCard.props.onContextMenu({ preventDefault() {}, clientX: 20, clientY: 30 })
+  nodes = card.render()
+  assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-card-menu'), 'right click opens a menu')
+  assert.ok(card.button(nodes, '关闭卡片'), 'the menu closes the card')
+  card.button(nodes, '跳转会话').props.onClick()
+  assert.deepEqual(card.actions.at(-1), { type: 'openSession', sessionId: 'child-1' })
 })
 
 test('the header keeps one entry and the todo view lives inside the panel', async () => {
