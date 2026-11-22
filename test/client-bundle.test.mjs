@@ -267,7 +267,9 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   button(nodes, '追加 Review').props.onClick()
   assert.equal(actions.at(-1).run.id, goal.id)
   assert.equal(actions.at(-1).phase.id, 'p2')
-  button(render(), '待办').props.onClick()
+  button(render(), '任务').props.onClick()
+  assert.ok(render({ inboxOpen: true }).some(node => String(node.props?.className ?? '').includes('dsa-inbox-empty')),
+    'the panel can show an empty todo page')
   // A phase receipt is a different button from a whole-task receipt: it is
   // named after the phase a person knows, and clicking it opens that evidence.
   const withPhase = render()
@@ -679,11 +681,13 @@ test('the todo badge counts one handoff once and leads with what the person must
       reason: '旧会话没有登录凭据，需要本人扫码。', handoff: {} },
   }
   const card = await taskCardHarness({}, {}, { inbox: [decision, twin] })
-  let nodes = card.render()
+  let nodes = card.openRail()
   card.button(nodes, '待办').props.onClick()
   nodes = card.render({ inboxOpen: true })
-  const badge = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '待办 1 项')
-  assert.ok(badge, 'two surfaces of one handoff count once')
+  const badge = nodes.find(node => String(node.props?.className ?? '') === 'dsa-rail-count')
+  assert.equal(String((badge?.children ?? []).join('')), '1', 'two surfaces of one handoff count once')
+  assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-header-dot'),
+    'outside the panel a dot still reminds without a second entry')
   const deepText = node => typeof node === 'string' ? node : (node?.children ?? []).map(deepText).join('')
   assert.ok(nodes.some(node => deepText(node).includes('学习通需要扫码登录')), 'the card states the act itself')
   const headline = nodes.find(node => String(node.props?.className ?? '') === 'dsa-attention-q')
@@ -700,19 +704,19 @@ test('the todo badge counts one handoff once and leads with what the person must
   assert.equal(liveRow.props.className, 'dsa-live-msg')
 
   const empty = card.render({ inboxOpen: true, workbench: { sessionId: 'chat-a', runs: [], goals: [card.goal], inbox: [] } })
-  assert.equal(empty.some(node => String(node.props?.['aria-label'] ?? '').startsWith('待办 ')), false,
+  assert.equal(empty.some(node => String(node.props?.className ?? '').includes('dsa-rail-count')), false,
     'no badge without a todo')
 })
 
 const deepText = node => typeof node === 'string' ? node : (node?.children ?? []).map(deepText).join('')
 
-test('the header keeps 任务 and 待办 side by side instead of hiding one behind an ellipsis', async () => {
+test('the header keeps one entry and the todo view lives inside the panel', async () => {
   const card = await taskCardHarness()
   const labels = card.render().filter(node => node.type === 'button')
     .map(node => String(node.props?.['aria-label'] ?? ''))
   assert.ok(labels.includes('任务'), 'the panel expand button is a direct control')
-  assert.ok(labels.includes('待办'), 'the todo entry is a direct control')
-  assert.equal(labels.includes('更多入口'), false, 'no ellipsis menu duplicating the todo entry')
+  assert.equal(labels.includes('待办'), false, 'the todo entry no longer competes in the header')
+  assert.equal(labels.includes('更多入口'), false, 'no ellipsis menu replaces it either')
 })
 
 test('a task card opens the conversation of the session that owns it', async () => {
@@ -861,7 +865,7 @@ test('a todo card keeps its first line within 25 characters', async () => {
     },
   }
   const card = await taskCardHarness({}, {}, { inbox: [entry] })
-  card.button(card.render(), '待办').props.onClick()
+  card.button(card.openRail(), '待办').props.onClick()
   const nodes = card.render({ inboxOpen: true })
   const task = nodes.find(node => String(node.props?.className ?? '') === 'dsa-inbox-task')
   const question = nodes.find(node => String(node.props?.className ?? '') === 'dsa-attention-q')
@@ -889,7 +893,7 @@ const decisionGoal = (summary = '') => ({
 
 const openInbox = async (entry, goal, runs) => {
   const card = await taskCardHarness(goal, {}, { inbox: [entry], runs, goals: [goal] })
-  card.button(card.render(), '待办').props.onClick()
+  card.button(card.openRail(), '待办').props.onClick()
   return { card, nodes: card.render({ inboxOpen: true }) }
 }
 
