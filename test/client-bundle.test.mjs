@@ -710,6 +710,42 @@ test('the todo badge counts one handoff once and leads with what the person must
 
 const deepText = node => typeof node === 'string' ? node : (node?.children ?? []).map(deepText).join('')
 
+test('a read todo leaves the badge but stays reachable under one line', async () => {
+  const entry = {
+    id: 'g1:decision-read', kind: 'decision', goalId: 'g1', read: true,
+    project: { cwd: '/work/one', name: '学习通' },
+    item: { id: 'decision-read', question: '要接受这版试玩反馈的结论吗？', options: ['answer'] },
+  }
+  const card = await taskCardHarness({ status: 'needs-decision' }, {}, { inbox: [entry] })
+  let nodes = card.openRail()
+  nodes = card.render({ inboxOpen: true })
+  assert.equal(nodes.some(node => String(node.props?.className ?? '') === 'dsa-rail-count'), false,
+    'read work no longer counts as new')
+  assert.ok(nodes.some(node => (node.children ?? []).includes('已读 1 条')), 'read work folds under one line')
+  assert.match(nodes.map(deepText).join(''), /要接受这版试玩反馈的结论吗/, 'a read decision stays reachable, never lost')
+})
+
+test('a failed card archives to its own fold and restores on demand', async () => {
+  const failed = {
+    id: 'r-fail', goal: '回归测试', title: '回归测试', status: 'failed', parentSessionId: 'chat-a',
+    report: '断言失败：登录页超时',
+  }
+  const card = await taskCardHarness({ status: 'completed' }, { selectedGoalId: null },
+    { runs: [failed], goals: [] })
+  let nodes = card.openRail()
+  assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-grid'),
+    'the failed run leads the grid')
+  card.button(nodes, '归档').props.onClick()
+  nodes = card.render()
+  assert.equal(nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-grid'), false,
+    'archiving clears the failed card from the main grid')
+  assert.ok(nodes.some(node => (node.children ?? []).includes('已归档 1 项')), 'the card folds instead of vanishing')
+  card.button(nodes, '恢复').props.onClick()
+  nodes = card.render()
+  assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-grid'),
+    'restoring brings the card back')
+})
+
 test('the header keeps one entry and the todo view lives inside the panel', async () => {
   const card = await taskCardHarness()
   const labels = card.render().filter(node => node.type === 'button')
