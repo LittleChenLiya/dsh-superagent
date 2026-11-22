@@ -158,8 +158,12 @@ test('one router dispatches independently scoped tasks and resumes with its deci
     await post('message', { id: 'work-ambiguous-project', text: '/方案 发版' })
     assert.match((await settled()).messages.at(-1).text, /2 项工作/)
     await post('message', { id: 'work-remove-decision', project: 'release', text: '/撤销决定 发版 | 发布方案' })
+    const revoked = await settled()
+    assert.match(revoked.messages.at(-1).text, /撤销 决定 发布方案/)
+    const beforeRead = revoked.messages.length
     await post('message', { id: 'work-read-revoked', project: 'release', text: '/方案 发版' })
-    assert.match((await settled()).messages.at(-1).text, /没有已确认的决定/)
+    assert.deepEqual((await settled()).messages.slice(beforeRead).map(message => message.role), ['user'],
+      'an empty plan stays silent')
   } finally {
     await panel?.stop()
     await fsp.rm(base, { recursive: true, force: true })

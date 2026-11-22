@@ -135,7 +135,7 @@ test('a known alias in the same workspace answers status and plan without the cl
   try {
     await router.submit({ id: 'attention-alias-1', project: 'release', text: '把准备发布说明叫做发版说明' })
     await settled(router)
-    assert.equal((await router.snapshot()).messages.at(-1).text, '已记录别名「发版说明」。')
+    assert.equal((await router.snapshot()).messages.at(-1).text, '别名 发版说明')
 
     await router.submit({ id: 'attention-status-1', project: 'release', text: '/状态 发版说明' })
     const status = await settled(router)
@@ -143,9 +143,11 @@ test('a known alias in the same workspace answers status and plan without the cl
     assert.equal(executed.at(-1).action, 'status')
     assert.equal(executed.at(-1).target, 'goal-notes')
 
+    const before = (await router.snapshot()).messages.length
     await router.submit({ id: 'attention-plan-1', project: 'release', text: '/方案 发版说明' })
     const plan = await settled(router)
-    assert.equal(plan.messages.at(-1).text, '这项任务还没有已确认的决定。')
+    assert.deepEqual(plan.messages.slice(before).map(message => message.role), ['user'],
+      'an empty plan stays silent instead of saying 还没有')
 
     assert.equal(classifyCalls, 0, 'alias status and plan reads must not call the classifier')
     assert.equal(executed.filter(command => command.action === 'task').length, 0, 'a read must never create a task')
@@ -448,7 +450,7 @@ test('asking which decisions are pending answers with the options without parkin
     const answer = snapshot.messages.at(-1)
     assert.equal(answer.role, 'assistant')
     assert.match(answer.text, /试玩定在哪个时间/)
-    assert.match(answer.text, /周六下午 \/ 周日晚上/)
+    assert.match(answer.text, /周六下午\/周日晚上/)
     assert.doesNotMatch(answer.text, /answer \/ stop/, 'the mechanics are not a person\'s choice')
     assert.equal(executed, 0, 'a read-only question must not start or park a task')
     assert.deepEqual(snapshot.messages.at(-1).taskIds, ['goal-playtest'])

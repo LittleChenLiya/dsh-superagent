@@ -161,7 +161,7 @@ test('the main panel renders its own loading seat, without a frame', async () =>
   assert.equal(tree.props.className, 'dsa-root')
   const note = tree.children[0].children[0]
   assert.equal(note.props.className, 'dsa-note')
-  assert.equal(note.children[0], '正在连接 Superagent 专属空间…')
+  assert.equal(note.children[0], '连接中')
 
   const row = registered.find(entry => entry.props.name === 'sidebar.panellist')
   const icon = row.component({ size: 16, active: true })
@@ -256,7 +256,7 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   initial.find(node => node.type === 'button'
     && String(node.props?.className ?? '').includes('dsa-task-receipt')).props.onClick()
   const nodes = render()
-  button(nodes, '补充要求').props.onClick()
+  button(nodes, '追加').props.onClick()
   button(nodes, 'feedback.md').props.onClick()
   assert.equal(actions[0].type, 'openReceipt')
   assert.equal(actions[0].message.taskId, goal.id)
@@ -264,7 +264,7 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   assert.equal(actions[2].run.parentSessionId, 'chat-b')
   assert.equal(actions[2].item.href, 'feedback.md')
   assert.ok(nodes.some(node => node.children.includes('等待 Draft')))
-  button(nodes, '补充阶段要求 Review').props.onClick()
+  button(nodes, '追加 Review').props.onClick()
   assert.equal(actions.at(-1).run.id, goal.id)
   assert.equal(actions.at(-1).phase.id, 'p2')
   button(render(), '待办').props.onClick()
@@ -273,19 +273,20 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   const withPhase = render()
   const feedCard = withPhase.find(node => node.type === 'button'
     && String(node.props?.className ?? '').includes('dsa-task-receipt'))
-  assert.equal(feedCard.props?.title, '查看报告', 'the one task card leads with the report')
+  assert.equal(feedCard.props?.title, '报告', 'the one task card leads with the report')
   const receiptCopy = feedCard.children.find(child => child?.props?.className === 'dsa-receipt-copy')
   assert.match(receiptCopy.children[0].children.join(''), /Release notes/)
   assert.doesNotMatch(receiptCopy.children[0].children.join(''), /p1/)
   assert.match(receiptCopy.children[1].children.join(''), /Draft/)
   const phaseButton = withPhase.find(node => node.type === 'button'
-    && node.props?.title === '打开这一阶段的成果与证据')
+    && node.props?.title === '证据')
   assert.ok(phaseButton, 'the old phase receipt stays openable from the same card')
   phaseButton.props.onClick()
   assert.equal(actions.at(-1).type, 'openReceipt')
   assert.equal(actions.at(-1).message.runId, first.id)
   const inbox = render({ inboxOpen: true })
-  assert.equal(inbox.some(node => node.children.includes('暂无待处理事项')), true)
+  assert.equal(inbox.some(node => node.children.includes('暂无待处理事项')), false,
+    'an empty inbox shows nothing instead of a placeholder')
   assert.equal(inbox.find(node => node.props?.['aria-label'] === '任务列表')?.props.hidden, true,
     'the task list stays mounted so its search can survive a view change')
 })
@@ -391,8 +392,8 @@ async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {})
 test('an empty task offers 加别名 and 记决定, and 加别名 only prefills the composer', async () => {
   const card = await taskCardHarness()
   let nodes = card.openRail()
-  assert.ok(nodes.some(node => (node.children ?? []).join('').includes('还没有别名或已确认的决定')),
-    'the empty context is one grey line, not a titled section')
+  assert.equal(nodes.some(node => (node.children ?? []).join('').includes('还没有别名或已确认的决定')), false,
+    'an empty context says nothing')
   nodes = card.openMore(nodes)
   const alias = card.button(nodes, '加别名')
   const decision = card.button(nodes, '记决定')
@@ -498,7 +499,7 @@ test('a task outside the selected workspace is not written blind: the card asks 
   const after = card.render()
   assert.equal(card.composer(after).props.value, '')
   assert.match(card.hint(after, 'dsa-record-hint'), /工作区二/)
-  assert.match(card.hint(after, 'dsa-record-hint'), /切换到/)
+  assert.match(card.hint(after, 'dsa-record-hint'), /切到 工作区二/)
   assert.deepEqual(card.actions, [])
 })
 
@@ -507,7 +508,7 @@ test('a default workspace task requires switching back before recording from a n
   card.button(card.openMore(card.openRail()), '记决定').props.onClick()
   const after = card.render()
   assert.equal(card.composer(after).props.value, '')
-  assert.match(card.hint(after, 'dsa-record-hint'), /切换到「默认工作区」/)
+  assert.match(card.hint(after, 'dsa-record-hint'), /切到 默认 再插入/)
 })
 
 test('the task card separates current decisions from sources and evidence, and labels a receipt', async () => {  const at = Date.now()
@@ -554,7 +555,7 @@ test('the task card binds and unbinds a source without calling the API by hand',
   card.button(nodes, '撤销').props.onClick()
   assert.deepEqual(card.actions.at(-1), { type: 'sourceUnbind', id: 'binding-1' })
 
-  card.button(nodes, '绑定来源').props.onClick()
+  card.button(nodes, '绑定').props.onClick()
   const form = card.render()
   const object = form.find(node => node.props?.['aria-label'] === '选择收到的来源')
   assert.ok(object, 'the card offers observed objects')
@@ -693,11 +694,11 @@ test('the todo badge counts one handoff once and leads with what the person must
   const headline = nodes.find(node => String(node.props?.className ?? '') === 'dsa-attention-q')
   assert.doesNotMatch(String(headline?.children?.[0]), /阶段 p2|页面/, 'the phase id and page line stay in the detail')
   assert.equal(nodes.some(node => deepText(node).includes('整段内部提示')), false, 'the prompt never becomes a label')
-  assert.ok(card.button(nodes, '我已完成，继续'), 'the direct action is on the first screen')
-  assert.ok(card.button(nodes, '在对话中登录'), 'the run browser opens inside the conversation')
-  assert.ok(nodes.some(node => (node.children ?? []).includes('原因与页面')), 'the reason stays one tap away')
+  assert.ok(card.button(nodes, '完成'), 'the direct action is on the first screen')
+  assert.ok(card.button(nodes, '登录'), 'the run browser opens inside the conversation')
+  assert.ok(nodes.some(node => (node.children ?? []).includes('原因')), 'the reason stays one tap away')
 
-  card.button(nodes, '在对话中登录').props.onClick()
+  card.button(nodes, '登录').props.onClick()
   const withLive = card.render({ inboxOpen: true })
   const liveRow = withLive.find(node => node.props?.['data-live-login'])
   assert.ok(liveRow, 'the hand-off becomes a row in the message flow')
@@ -706,4 +707,68 @@ test('the todo badge counts one handoff once and leads with what the person must
   const empty = card.render({ inboxOpen: true, workbench: { sessionId: 'chat-a', runs: [], goals: [card.goal], inbox: [] } })
   assert.equal(empty.some(node => String(node.props?.['aria-label'] ?? '').startsWith('待办 ')), false,
     'no badge without a todo')
+})
+
+const deepText = node => typeof node === 'string' ? node : (node?.children ?? []).map(deepText).join('')
+
+test('a long task title stays within 20 characters on the task row', async () => {
+  const long = '在当前工作区把发布说明和兼容性检查一起整理成可以交付的版本并通知所有相关的人'
+  const card = await taskCardHarness({ title: long, goal: long, status: 'running' })
+  const nodes = card.openRail()
+  const label = nodes.find(node => String(node.props?.className ?? '') === 'dsa-task-label')
+  assert.ok(label, 'the task row renders')
+  const text = deepText(label).trim()
+  assert.ok(text.length > 0 && text.length <= 20, `task row title is ${text.length} characters: ${text}`)
+})
+
+test('a long result stays within 60 characters on the task card', async () => {
+  const long = `已交付发布说明、兼容性检查报告和回归记录，${'另外还有一段很长的补充细节'.repeat(8)}`
+  const card = await taskCardHarness({ status: 'running' }, {
+    messages: [{ id: 'feed-long', role: 'assistant', text: long, taskId: 'goal-empty', at: Date.now() }],
+  })
+  const line = card.render().find(node => String(node.props?.className ?? '') === 'dsa-feed-line')
+  assert.ok(line, 'the task card renders its body line')
+  const text = deepText(line)
+  assert.ok(text.length > 0 && text.length <= 60, `task card body is ${text.length} characters: ${text}`)
+  assert.doesNotMatch(text, /\n/u)
+})
+
+test('the report summary is one line of at most 40 characters', async () => {
+  const output = `第一行摘要${'很长的说明'.repeat(20)}\n第二行细节\n第三行细节`
+  const card = await taskCardHarness({}, { detail: { id: 'run-report', status: 'completed', output, report: '' } })
+  const nodes = card.openRail()
+  const summary = nodes.find(node => String(node.props?.className ?? '').includes('dsa-report-summary'))
+  assert.ok(summary, 'the report renders its summary')
+  const text = deepText(summary)
+  assert.ok(text.length > 0 && text.length <= 40, `report summary is ${text.length} characters: ${text}`)
+  assert.doesNotMatch(text, /\n/u, 'the summary is the first line only')
+  assert.doesNotMatch(text, /第二行/u, 'later lines stay behind 全文')
+})
+
+test('a todo card keeps its first line within 25 characters', async () => {
+  const entry = {
+    id: 'inbox-long', kind: 'decision', goalId: 'g1',
+    project: { cwd: '/work/one', name: '学习通' },
+    title: '特别长的待办标题需要压缩到二十五个字符以内否则就会溢出',
+    item: {
+      id: 'item-1',
+      question: `阶段 p2 的执行 agent 需要你决定：${'这是很长的一段问题描述'.repeat(4)}`,
+      options: ['answer', 'skip'], reason: '', source: {},
+    },
+  }
+  const card = await taskCardHarness({}, {}, { inbox: [entry] })
+  card.button(card.render(), '待办').props.onClick()
+  const nodes = card.render({ inboxOpen: true })
+  const task = nodes.find(node => String(node.props?.className ?? '') === 'dsa-inbox-task')
+  const question = nodes.find(node => String(node.props?.className ?? '') === 'dsa-attention-q')
+  assert.ok(task && question, 'the todo card renders its first line and question')
+  assert.ok(deepText(task).length <= 25, `todo first line is ${deepText(task).length} characters`)
+  assert.ok(deepText(question).length <= 25, `todo question is ${deepText(question).length} characters`)
+})
+
+test('the panel speaks in labels, not sentence tails or empty-state filler', async () => {
+  const source = await readFile(clientPath, 'utf8')
+  for (const phrase of ['当前状态', '任务继续', '还没有', '暂无']) {
+    assert.equal(source.includes(phrase), false, `${phrase} must not reach the UI`)
+  }
 })

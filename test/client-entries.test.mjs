@@ -49,5 +49,5 @@ test('the run list is clickable instead of a dead list', () => {
   assert.ok(source.includes('onClick: () => onOpen(task.id, task.parentSessionId)'), 'each run row opens its detail in the correct scope')
   assert.ok(source.includes("className: 'dsa-rowitem'") && source.includes("type: 'button'"), 'run rows are buttons')
   assert.ok(source.includes("waiting ? 'waiting' : task.status"), 'a run waiting on a person turns amber')
-  assert.ok(source.includes("'等你决定'"), 'the waiting row says what it is waiting for')
+  assert.ok(source.includes("'待决定'"), 'the waiting row says what it is waiting for')
 })
