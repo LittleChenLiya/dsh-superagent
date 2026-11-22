@@ -380,13 +380,7 @@ async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {},
   const button = (nodes, label) => nodes.find(node => node.type === 'button' && (node.children ?? []).includes(label))
   const composer = nodes => nodes.find(node => node.type === 'textarea')
   const hint = (nodes, name) => nodes.find(node => String(node.props?.className ?? '').includes(name))?.children?.[0]
-  const openMore = nodes => {
-    const more = nodes.find(node => node.type === 'button'
-      && String(node.props?.['aria-label'] ?? '').startsWith('更多操作'))
-    assert.ok(more, 'the empty context folds its two actions behind one 更多操作 entry')
-    more.props.onClick()
-    return render()
-  }
+  const openMore = () => render()
   return { render, openRail, openMore, actions, goal, button, composer, hint }
 }
 
@@ -761,6 +755,21 @@ test('a long result stays within 60 characters on the task card', async () => {
   const text = deepText(line)
   assert.ok(text.length > 0 && text.length <= 60, `task card body is ${text.length} characters: ${text}`)
   assert.doesNotMatch(text, /\n/u)
+})
+
+test('the rail reads failure first, then current work, and never shows a bare ellipsis', async () => {
+  const card = await taskCardHarness({ status: 'needs-decision', phases: [
+    { id: 'p1', title: '构建试玩版本', status: 'running', runId: 'r1' },
+    { id: 'p2', title: '回归测试', status: 'failed', outcome: '端口 4310 被占用' },
+  ] }, {}, { runs: [{ id: 'r1', goalId: 'goal-empty', status: 'running', parentSessionId: 'chat-a' }] })
+  const nodes = card.openRail()
+  const labels = nodes.filter(node => node.type === 'button').map(node => String(node.props?.['aria-label'] ?? ''))
+  assert.equal(labels.some(label => label.startsWith('更多操作')), false, 'no bare ellipsis entry in the rail')
+  assert.equal(nodes.some(node => node === '现在'), false, 'the current phase needs no 现在 caption')
+  const text = deepText({ children: nodes })
+  assert.ok(text.indexOf('失败：回归测试') >= 0, 'the failure is on the card')
+  assert.ok(text.indexOf('失败：回归测试') < text.indexOf('构建试玩版本'),
+    'a failure reads before the phase that is running')
 })
 
 test('the report summary is one line of at most 40 characters', async () => {
