@@ -772,3 +772,87 @@ test('the panel speaks in labels, not sentence tails or empty-state filler', asy
     assert.equal(source.includes(phrase), false, `${phrase} must not reach the UI`)
   }
 })
+
+const decisionEntry = (item, goalId = 'g1') => ({
+  id: `inbox-${item.id}`, kind: 'decision', goalId, title: '发布工作台',
+  project: { cwd: '/work/one', name: '演示工作区' }, item,
+})
+
+const decisionGoal = (summary = '') => ({
+  id: 'g1', title: '发布工作台', goal: '发布工作台', status: 'needs-decision', decisions: [],
+  phases: [{ id: 'p2', title: '构建试玩版本', status: 'needs-decision', runId: 'r2', summary }],
+})
+
+const openInbox = async (entry, goal, runs) => {
+  const card = await taskCardHarness(goal, {}, { inbox: [entry], runs, goals: [goal] })
+  card.button(card.render(), '待办').props.onClick()
+  return { card, nodes: card.render({ inboxOpen: true }) }
+}
+
+test('a decision is shown together with the thing being decided', async () => {
+  const conclusion = '试玩反馈：8 人试玩，6 人认为镜头更清楚；门口空镜偏长，建议再收 0.5 秒。'
+  const goal = decisionGoal(conclusion)
+  const run = { id: 'r2', status: 'needs-decision', report: '', output: '' }
+  const { nodes } = await openInbox(decisionEntry({
+    id: 'd2', question: '要接受这版试玩反馈的结论吗？', reason: '三条结论覆盖了本周的全部反馈。',
+    source: { runId: 'r2', options: ['accept', 'retry'] }, options: ['accept', 'retry'],
+  }), goal, [run])
+  const text = nodes.map(deepText).join('\n')
+  assert.ok(text.includes(conclusion), 'the conclusion itself is on the card')
+  assert.ok(text.includes('阶段 p2 · 构建试玩版本'), 'the deciding phase is named')
+  assert.ok(text.includes('结果已出，等你验收'), 'why a person is needed is in plain words')
+  assert.ok(text.includes('三条结论覆盖了本周的全部反馈'), 'the 原因 section has real content')
+})
+
+test('missing decision material becomes a failure state with retry, never a bare question', async () => {
+  const goal = decisionGoal('')
+  const run = { id: 'r2', status: 'needs-decision', report: '', output: '' }
+  const { card, nodes } = await openInbox(decisionEntry({
+    id: 'd3', question: '要采用这份试玩反馈的结论吗？', reason: '',
+    source: { runId: 'r2', options: ['accept', 'retry'] }, options: ['accept', 'retry'],
+  }), goal, [run])
+  const text = nodes.map(deepText).join('\n')
+  assert.ok(text.includes('结论读取失败'), 'the card says the read failed')
+  assert.ok(text.includes('缺少阶段结论'), 'the card names the missing data')
+  assert.ok(card.button(nodes, '重试'), 'the card offers one retry')
+  assert.equal(card.button(nodes, '接受'), undefined, 'no blind decision without material')
+  assert.equal(nodes.some(node => (node.children ?? []).includes('原因')), false,
+    'a missing reason never renders an empty 原因 entry')
+})
+
+test('a decision without a reason hides 原因 but keeps the material', async () => {
+  const goal = decisionGoal('性能结论：首屏 1.2 秒，低于 1.5 秒目标。')
+  const run = { id: 'r2', status: 'needs-decision', report: '', output: '' }
+  const { card, nodes } = await openInbox(decisionEntry({
+    id: 'd4', question: '要采用这份性能结论吗？', reason: '',
+    source: { runId: 'r2', options: ['accept', 'retry'] }, options: ['accept', 'retry'],
+  }), goal, [run])
+  const text = nodes.map(deepText).join('\n')
+  assert.ok(text.includes('性能结论：首屏 1.2 秒'), 'the material stays visible')
+  assert.equal(nodes.some(node => (node.children ?? []).includes('原因')), false,
+    'no reason data means no 原因 entry')
+  assert.ok(card.button(nodes, '接受'), 'the decision is still actionable')
+})
+
+test('an ordinary question shows the run result instead of only the question', async () => {
+  const goal = { id: 'g1', title: '发布工作台', goal: '发布工作台', status: 'running', decisions: [], phases: [] }
+  const run = { id: 'r2', status: 'needs-decision', report: '兼容性结论：3 个浏览器全部通过。', output: '' }
+  const { nodes } = await openInbox({
+    id: 'run:r2:a1', kind: 'question', runId: 'r2', title: '构建试玩版本',
+    project: { cwd: '/work/one', name: '演示工作区' },
+    item: { id: 'a1', question: '要采用这份兼容性结论吗？', options: ['accept'], reason: '' },
+  }, goal, [run])
+  const text = nodes.map(deepText).join('\n')
+  assert.ok(text.includes('兼容性结论：3 个浏览器全部通过。'), 'the run result is the material')
+  assert.ok(!text.includes('结论读取失败'), 'a readable run never becomes a failure state')
+})
+
+test('a human hand-off without a reason hides the 原因 entry', async () => {
+  const goal = decisionGoal('')
+  const { nodes } = await openInbox(decisionEntry({
+    id: 'd5', question: '学习通需要扫码登录。', reason: '',
+    source: { kind: 'human', runtimeVerified: true }, options: ['answer', 'stop'],
+  }), goal, [])
+  assert.equal(nodes.some(node => (node.children ?? []).includes('原因')), false,
+    'no empty 原因 shell on the hand-off card')
+})
