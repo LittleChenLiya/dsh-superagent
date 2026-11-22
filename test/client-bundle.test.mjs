@@ -253,11 +253,13 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
     && (node.children.includes(label) || node.props.title === label || node.props['aria-label'] === label))
   const initial = render()
   assert.equal(initial.some(node => node.type === 'aside'), false, 'the chat starts without the task drawer')
-  button(initial, first.goal).props.onClick()
+  initial.find(node => node.type === 'button'
+    && String(node.props?.className ?? '').includes('dsa-task-receipt')).props.onClick()
   const nodes = render()
   button(nodes, '补充要求').props.onClick()
   button(nodes, 'feedback.md').props.onClick()
-  assert.equal(actions[0].taskId, goal.id)
+  assert.equal(actions[0].type, 'openReceipt')
+  assert.equal(actions[0].message.taskId, goal.id)
   assert.equal(actions[1].run.id, goal.id)
   assert.equal(actions[2].run.parentSessionId, 'chat-b')
   assert.equal(actions[2].item.href, 'feedback.md')
@@ -269,12 +271,16 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   // A phase receipt is a different button from a whole-task receipt: it is
   // named after the phase a person knows, and clicking it opens that evidence.
   const withPhase = render()
+  const feedCard = withPhase.find(node => node.type === 'button'
+    && String(node.props?.className ?? '').includes('dsa-task-receipt'))
+  assert.equal(feedCard.props?.title, '查看报告', 'the one task card leads with the report')
+  const receiptCopy = feedCard.children.find(child => child?.props?.className === 'dsa-receipt-copy')
+  assert.match(receiptCopy.children[0].children.join(''), /Release notes/)
+  assert.doesNotMatch(receiptCopy.children[0].children.join(''), /p1/)
+  assert.match(receiptCopy.children[1].children.join(''), /Draft/)
   const phaseButton = withPhase.find(node => node.type === 'button'
     && node.props?.title === '打开这一阶段的成果与证据')
-  assert.ok(phaseButton, 'the phase receipt offers its own evidence entry')
-  const receiptCopy = phaseButton.children.find(child => child?.props?.className === 'dsa-receipt-copy')
-  assert.match(receiptCopy.children[0].children.join(''), /Draft · 已交付/)
-  assert.doesNotMatch(receiptCopy.children[0].children.join(''), /p1/)
+  assert.ok(phaseButton, 'the old phase receipt stays openable from the same card')
   phaseButton.props.onClick()
   assert.equal(actions.at(-1).type, 'openReceipt')
   assert.equal(actions.at(-1).message.runId, first.id)
@@ -363,25 +369,34 @@ async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {})
     return [...walkTree(seat, cache)]
   }
   const openRail = () => {
-    const tasks = render().find(node => node.type === 'button' && node.props?.['aria-label'] === '任务')
-    assert.ok(tasks, 'the header offers the task view')
+    const tasks = render().find(node => node.type === 'button'
+      && String(node.props?.['aria-label'] ?? '').startsWith('待办'))
+    assert.ok(tasks, 'the header offers the single 待办 view')
     tasks.props.onClick()
     return render()
   }
   const button = (nodes, label) => nodes.find(node => node.type === 'button' && (node.children ?? []).includes(label))
   const composer = nodes => nodes.find(node => node.type === 'textarea')
   const hint = (nodes, name) => nodes.find(node => String(node.props?.className ?? '').includes(name))?.children?.[0]
-  return { render, openRail, actions, goal, button, composer, hint }
+  const openMore = nodes => {
+    const more = nodes.find(node => node.type === 'button'
+      && String(node.props?.['aria-label'] ?? '').startsWith('更多操作'))
+    assert.ok(more, 'the empty context folds its two actions behind one 更多操作 entry')
+    more.props.onClick()
+    return render()
+  }
+  return { render, openRail, openMore, actions, goal, button, composer, hint }
 }
 
 test('an empty task offers 加别名 and 记决定, and 加别名 only prefills the composer', async () => {
   const card = await taskCardHarness()
-  const nodes = card.openRail()
-  assert.ok(nodes.some(node => (node.children ?? []).includes('还没有别名或已确认的决定。')),
-    'the empty context section still renders')
+  let nodes = card.openRail()
+  assert.ok(nodes.some(node => (node.children ?? []).join('').includes('还没有别名或已确认的决定')),
+    'the empty context is one grey line, not a titled section')
+  nodes = card.openMore(nodes)
   const alias = card.button(nodes, '加别名')
   const decision = card.button(nodes, '记决定')
-  assert.ok(alias && decision, 'both record entries sit in the expanded card')
+  assert.ok(alias && decision, 'both record entries fold behind the overflow menu')
   assert.equal(alias.props['aria-label'], '给「空任务」加别名')
 
   alias.props.onClick()
@@ -392,9 +407,54 @@ test('an empty task offers 加别名 and 记决定, and 加别名 only prefills 
     'the command goes through the plain message entry, not a task follow-up')
 })
 
+test('the task drawer folds finished work and only searches a long list', async () => {
+  const finished = Array.from({ length: 9 }, (_, index) => ({
+    id: `done-${index}`, goal: `已完成 ${index + 1}`, title: `已完成 ${index + 1}`, ownerSessionId: 'chat-a',
+    status: 'completed', decisions: [], phases: [],
+  }))
+  const card = await taskCardHarness({}, {}, { goals: [
+    { id: 'waiting', goal: '等你决定的任务', title: '等你决定的任务', ownerSessionId: 'chat-a', status: 'needs-decision', decisions: [], phases: [] },
+    ...finished,
+  ] })
+  const nodes = card.openRail()
+  assert.ok(nodes.some(node => (node.children ?? []).includes('最近完成 9 项')),
+    'finished work collapses into one line')
+  assert.ok(nodes.some(node => String(node.props?.className ?? '').includes('dsa-task-search')),
+    'a long list reveals the search field')
+  const short = await taskCardHarness()
+  const shortNodes = short.openRail()
+  assert.equal(shortNodes.some(node => String(node.props?.className ?? '').includes('dsa-task-search')), false,
+    'a short list has no permanent search box')
+  assert.equal(shortNodes.some(node => node.type === 'button' && node.props?.['aria-label'] === '任务'), false,
+    'the header keeps only the 待办 entry')
+})
+
+test('multiple deliveries share one line until expanded', async () => {
+  const run = {
+    id: 'r1', goal: '交付', status: 'completed', parentSessionId: 'chat-a', subtasks: [], attention: [],
+    artifacts: [{ name: 'a.md', href: 'a.md' }, { name: 'b.md', href: 'b.md' }],
+  }
+  const card = await taskCardHarness({
+    status: 'completed', phases: [{ id: 'p1', title: '交付', status: 'completed', runId: 'r1' }],
+  }, {}, { runs: [run] })
+  let nodes = card.openRail()
+  const summary = nodes.find(node => String(node.props?.className ?? '').includes('dsa-file-summary'))
+  assert.ok(summary, 'two files become one summary row')
+  assert.ok((summary.children ?? []).some(child => (child.children ?? []).includes('2 个文件')))
+  assert.equal(nodes.some(node => String(node.props?.className ?? '').includes('dsa-file-card')), false,
+    'individual file cards wait behind the summary')
+  summary.props.onClick()
+  nodes = card.render()
+  const cards = nodes.filter(node => String(node.props?.className ?? '').includes('dsa-file-card'))
+  assert.ok(cards.length >= 2, 'expanding reveals both files')
+  assert.ok(cards.every(node => (node.children ?? []).some(child =>
+    (child.children ?? []).some(name => ['a.md', 'b.md'].includes(name)))),
+  'the expanded cards are the two real files')
+})
+
 test('记决定 prefills the decision template for the opened task', async () => {
   const card = await taskCardHarness()
-  const nodes = card.openRail()
+  const nodes = card.openMore(card.openRail())
   card.button(nodes, '记决定').props.onClick()
   assert.deepEqual(card.actions, [])
   assert.equal(card.composer(card.render()).props.value, '/决定 goal-empty | ')
@@ -407,7 +467,7 @@ test('an existing draft is kept intact when a record entry is used', async () =>
   nodes = card.render()
   assert.equal(card.composer(nodes).props.value, '已经写了一半')
 
-  card.button(nodes, '加别名').props.onClick()
+  card.button(card.openMore(nodes), '加别名').props.onClick()
   nodes = card.render()
   assert.equal(card.composer(nodes).props.value, '已经写了一半', 'the draft is not replaced')
   assert.match(card.hint(nodes, 'dsa-composer-hint'), /已原样保留/)
@@ -420,7 +480,7 @@ test('a task follow-up context is kept and the record entry asks to leave it fir
   })
   let nodes = card.openRail()
   assert.equal(card.composer(nodes).props['aria-label'], '任务补充要求')
-  card.button(nodes, '记决定').props.onClick()
+  card.button(card.openMore(nodes), '记决定').props.onClick()
   nodes = card.render()
   assert.equal(card.composer(nodes).props.value, '', 'the follow-up mode keeps its empty draft')
   assert.match(card.hint(nodes, 'dsa-composer-hint'), /取消追加/)
@@ -434,7 +494,7 @@ test('a task outside the selected workspace is not written blind: the card asks 
     sessionProjects: { 'chat-a': { cwd: '/work/two', name: '工作区二' } },
   })
   const nodes = card.openRail()
-  card.button(nodes, '加别名').props.onClick()
+  card.button(card.openMore(nodes), '加别名').props.onClick()
   const after = card.render()
   assert.equal(card.composer(after).props.value, '')
   assert.match(card.hint(after, 'dsa-record-hint'), /工作区二/)
@@ -444,7 +504,7 @@ test('a task outside the selected workspace is not written blind: the card asks 
 
 test('a default workspace task requires switching back before recording from a named workspace', async () => {
   const card = await taskCardHarness({}, { project: { cwd: '/work/one', name: '工作区一' } })
-  card.button(card.openRail(), '记决定').props.onClick()
+  card.button(card.openMore(card.openRail()), '记决定').props.onClick()
   const after = card.render()
   assert.equal(card.composer(after).props.value, '')
   assert.match(card.hint(after, 'dsa-record-hint'), /切换到「默认工作区」/)
