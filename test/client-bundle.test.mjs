@@ -286,35 +286,46 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
 
 /** Hook storage that keeps component state across explicit re-renders. */
 function hookCache() {
-  const values = []
-  let cursor = null
+  // State belongs to a component, not to a global cursor. A panel that grows a
+  // hook must not hand its neighbour the wrong slot.
+  const stores = new Map()
+  let current = null
+  let index = 0
   return {
     hooks: {
       useState(initial) {
         const value = typeof initial === 'function' ? initial() : initial
-        if (cursor === null) return [value, () => {}]
-        const index = cursor++
-        if (values[index] === undefined) values[index] = value
-        return [values[index], next => {
-          values[index] = typeof next === 'function' ? next(values[index]) : next
+        if (current === null) return [value, () => {}]
+        if (!stores.has(current)) stores.set(current, [])
+        const slots = stores.get(current)
+        const at = index++
+        if (slots[at] === undefined) slots[at] = value
+        return [slots[at], next => {
+          slots[at] = typeof next === 'function' ? next(slots[at]) : next
         }]
       },
     },
-    begin() { cursor = 0 },
-    end() { cursor = null },
+    enter(component) { current = component; index = 0 },
+    leave() { current = null; index = 0 },
   }
 }
 
 /** Depth-first walk over a stub element tree, rendering function components. */
-function* walkTree(tree) {
+function* walkTree(tree, cache) {
   if (Array.isArray(tree)) {
-    for (const child of tree) yield* walkTree(child)
+    for (const child of tree) yield* walkTree(child, cache)
   } else if (tree && typeof tree === 'object') {
     if (typeof tree.type === 'function') {
-      yield* walkTree(tree.type({ ...tree.props, children: tree.children }))
+      const id = tree.key != null ? `${tree.type.name}#${tree.key}` : tree.type
+      cache.enter(id)
+      try {
+        yield* walkTree(tree.type({ ...tree.props, children: tree.children }), cache)
+      } finally {
+        cache.leave()
+      }
     } else {
       yield tree
-      yield* walkTree(tree.children)
+      yield* walkTree(tree.children, cache)
     }
   }
 }
@@ -342,11 +353,14 @@ async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {})
     ...modelPatch,
   }
   const render = extra => {
-    cache.begin()
-    const seat = shell.type({ model: { ...model, ...extra }, dispatch: action => actions.push(action) })
-    const nodes = [...walkTree(seat)]
-    cache.end()
-    return nodes
+    cache.enter(shell.type)
+    let seat
+    try {
+      seat = shell.type({ model: { ...model, ...extra }, dispatch: action => actions.push(action) })
+    } finally {
+      cache.leave()
+    }
+    return [...walkTree(seat, cache)]
   }
   const openRail = () => {
     const tasks = render().find(node => node.type === 'button' && node.props?.['aria-label'] === '任务')
@@ -620,7 +634,14 @@ test('the todo badge counts one handoff once and leads with what the person must
   assert.doesNotMatch(String(headline?.children?.[0]), /阶段 p2|页面/, 'the phase id and page line stay in the detail')
   assert.equal(nodes.some(node => deepText(node).includes('整段内部提示')), false, 'the prompt never becomes a label')
   assert.ok(card.button(nodes, '我已完成，继续'), 'the direct action is on the first screen')
+  assert.ok(card.button(nodes, '在对话中登录'), 'the run browser opens inside the conversation')
   assert.ok(nodes.some(node => (node.children ?? []).includes('原因与页面')), 'the reason stays one tap away')
+
+  card.button(nodes, '在对话中登录').props.onClick()
+  const withLive = card.render({ inboxOpen: true })
+  const liveRow = withLive.find(node => node.props?.['data-live-login'])
+  assert.ok(liveRow, 'the hand-off becomes a row in the message flow')
+  assert.equal(liveRow.props.className, 'dsa-live-msg')
 
   const empty = card.render({ inboxOpen: true, workbench: { sessionId: 'chat-a', runs: [], goals: [card.goal], inbox: [] } })
   assert.equal(empty.some(node => String(node.props?.['aria-label'] ?? '').startsWith('待办 ')), false,

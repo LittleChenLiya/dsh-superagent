@@ -1738,3 +1738,87 @@ test('the console binds and revokes a source with the same token it uses for eve
     await fsp.rm(base, { recursive: true, force: true })
   }
 })
+
+test('the live browser routes stream frames and forward input only with the token', async () => {
+  const { base, state } = await fixture()
+  const viewports = []
+  let stopped = false
+  const live = {
+    async status() {
+      return { available: true, viewing: viewports.length > 0, url: 'http://127.0.0.1:8080/login', title: '登录', width: 420, height: 760 }
+    },
+    attach(listener, viewport) {
+      viewports.push(viewport)
+      listener({ type: 'state', url: 'http://127.0.0.1:8080/login', title: '登录' })
+      listener({ type: 'frame', data: 'aGk=', metadata: { deviceWidth: 420, deviceHeight: 760 } })
+      return () => {}
+    },
+    async input(body) {
+      return { echoed: body }
+    },
+    async stop() {
+      stopped = true
+    },
+  }
+  const panel = await startConsole(state, fakeHost().host, { live })
+  try {
+    const anonymous = await request(panel, 'GET', '/api/console/browser/status', undefined, null)
+    assert.equal(anonymous.status, 401, 'the live view is behind the same token as the console')
+
+    const status = await request(panel, 'GET', '/api/console/browser/status')
+    assert.equal(status.status, 200)
+    assert.equal(status.json.data.available, true)
+
+    const input = await request(panel, 'POST', '/api/console/browser/input', { kind: 'mouse', x: 1, y: 2 })
+    assert.deepEqual(input.json.data.echoed, { kind: 'mouse', x: 1, y: 2 })
+
+    const controller = new AbortController()
+    const stream = await fetch(`${panel.url}/api/console/browser/live?width=420&height=760`, {
+      headers: { authorization: `Bearer ${panel.token}` },
+      signal: controller.signal,
+    })
+    assert.equal(stream.status, 200)
+    const reader = stream.body.getReader()
+    const decoder = new TextDecoder()
+    let text = ''
+    for (let index = 0; index < 10 && !text.includes('"type":"frame"'); index += 1) {
+      const { value, done } = await reader.read()
+      if (done) break
+      text += decoder.decode(value)
+    }
+    assert.match(text, /"type":"frame"/, 'the page reaches the panel as a frame')
+    assert.deepEqual(viewports.at(-1), { width: 420, height: 760 })
+
+    const stop = await request(panel, 'POST', '/api/console/browser/stop', {})
+    assert.equal(stop.status, 200)
+    assert.equal(stopped, true, 'the answer puts the run viewport back first')
+    controller.abort()
+  } finally {
+    await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('the live stream refuses to start when the run has no browser', async () => {
+  const { base, state } = await fixture()
+  const live = {
+    async status() {
+      return { available: false, reason: '执行浏览器已关闭。' }
+    },
+    attach() {
+      throw new Error('must not attach without a browser')
+    },
+    async input() {
+      return {}
+    },
+  }
+  const panel = await startConsole(state, fakeHost().host, { live })
+  try {
+    const response = await request(panel, 'GET', '/api/console/browser/live')
+    assert.equal(response.status, 409)
+    assert.equal(response.json.error.summary, '执行浏览器已关闭。')
+  } finally {
+    await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})

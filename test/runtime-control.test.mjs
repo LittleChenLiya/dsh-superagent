@@ -552,6 +552,111 @@ test('the guard refuses browser and desktop tools for worker agents unless allow
   assert.equal(unbound.blocked, false, 'calls the guard does not own pass through')
 })
 
+/** A CDP stub that records frames, acks, and input on one page session. */
+function fakeConnection() {
+  const calls = []
+  const listeners = new Set()
+  return {
+    calls,
+    async send(method, params = {}, options = {}) {
+      calls.push({ method, params, sessionId: options.sessionId })
+      if (method === 'Page.startScreencast') {
+        queueMicrotask(() => this.emit({
+          method: 'Page.screencastFrame',
+          sessionId: 'page-1',
+          params: {
+            data: 'aGk=', metadata: { deviceWidth: 420, deviceHeight: 760 }, sessionId: 7,
+          },
+        }))
+      }
+      return {}
+    },
+    onEvent(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    emit(event) {
+      for (const listener of [...listeners]) listener(event)
+    },
+  }
+}
+
+/** A live session whose page is the fake above and whose CDP channel is ours. */
+function liveWithConnection(connection, options = {}) {
+  const page = fakePage()
+  page.sessionId = 'page-1'
+  return { live: { ...fakeLive({ page, ...options }), connection }, page }
+}
+
+test('the live view streams the run browser, forwards input, and restores the viewport', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-live-'))
+  const connection = fakeConnection()
+  const { live } = liveWithConnection(connection)
+  const { runtime } = runtimeWith(stateDir, { enabled: true }, { openBrowserImpl: async () => live })
+  try {
+    assert.equal((await runtime.live.status()).available, false, 'no browser before the first action')
+
+    const open = runtime.tools.find(tool => tool.name === 'browser_open')
+    await open.execute({ url: 'http://127.0.0.1:8080/login' })
+    const status = await runtime.live.status()
+    assert.equal(status.available, true)
+    assert.equal(status.headless, true)
+    assert.equal(status.url, 'http://127.0.0.1:8080/login')
+
+    const frames = []
+    const detach = runtime.live.attach(frame => frames.push(frame), { width: 420, height: 760 })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.ok(frames.some(frame => frame.type === 'frame'), 'the panel receives a painted frame')
+    assert.ok(connection.calls.some(call => call.method === 'Emulation.setDeviceMetricsOverride'
+      && call.params.width === 420), 'the panel width becomes the page viewport')
+    assert.ok(connection.calls.some(call => call.method === 'Page.startScreencast'))
+    assert.ok(connection.calls.some(call => call.method === 'Page.screencastFrameAck'),
+      'every frame is acknowledged')
+
+    await runtime.live.input({ kind: 'mouse', type: 'down', x: 12, y: 24, button: 'left', buttons: 1 })
+    await runtime.live.input({ kind: 'key', type: 'press', key: 'a', code: 'KeyA', keyCode: 65, text: 'a' })
+    await runtime.live.input({ kind: 'wheel', x: 10, y: 20, deltaY: 120 })
+    assert.ok(connection.calls.some(call => call.method === 'Input.dispatchMouseEvent'
+      && call.params.type === 'mousePressed' && call.params.x === 12 && call.params.y === 24))
+    assert.equal(connection.calls.filter(call => call.method === 'Input.dispatchKeyEvent').length, 2,
+      'a press is one keyDown and one keyUp')
+    assert.ok(connection.calls.some(call => call.method === 'Input.dispatchMouseEvent'
+      && call.params.type === 'mouseWheel' && call.params.deltaY === 120))
+
+    detach()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.ok(connection.calls.some(call => call.method === 'Page.stopScreencast'))
+    const restored = connection.calls.filter(call => call.method === 'Emulation.setDeviceMetricsOverride').at(-1)
+    assert.deepEqual({ width: restored.params.width, height: restored.params.height },
+      { width: 1280, height: 900 }, 'the run gets its own viewport back')
+  } finally {
+    await runtime.dispose()
+    await fsp.rm(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('an attached user tab is streamed but never resized', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-live-attach-'))
+  const connection = fakeConnection()
+  const { live } = liveWithConnection(connection, { mode: 'attach' })
+  const { runtime } = runtimeWith(stateDir, { enabled: true, browser: { attachPort: 9333 } }, {
+    attachBrowserImpl: async () => live,
+    openBrowserImpl: async () => { throw new Error('attach must not launch a browser') },
+  })
+  try {
+    const open = runtime.tools.find(tool => tool.name === 'browser_open')
+    await open.execute({ url: 'http://127.0.0.1:8080/login' })
+    const detach = runtime.live.attach(() => {}, { width: 420, height: 760 })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(connection.calls.some(call => call.method === 'Emulation.setDeviceMetricsOverride'), false,
+      'the size of the user window is theirs')
+    detach()
+  } finally {
+    await runtime.dispose()
+    await fsp.rm(stateDir, { recursive: true, force: true })
+  }
+})
+
 /** Read the auditor's JSONL through the same reader the plugin uses. */
 async function readAudit(stateDir) {
   const file = path.join(stateDir, 'audit', 'audit.jsonl')
