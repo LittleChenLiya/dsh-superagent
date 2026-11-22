@@ -371,8 +371,8 @@ async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {})
   }
   const openRail = () => {
     const tasks = render().find(node => node.type === 'button'
-      && String(node.props?.['aria-label'] ?? '').startsWith('待办'))
-    assert.ok(tasks, 'the header offers the single 待办 view')
+      && node.props?.['aria-label'] === '任务')
+    assert.ok(tasks, 'the header keeps the panel expand button')
     tasks.props.onClick()
     return render()
   }
@@ -426,8 +426,8 @@ test('the task drawer folds finished work and only searches a long list', async 
   const shortNodes = short.openRail()
   assert.equal(shortNodes.some(node => String(node.props?.className ?? '').includes('dsa-task-search')), false,
     'a short list has no permanent search box')
-  assert.equal(shortNodes.some(node => node.type === 'button' && node.props?.['aria-label'] === '任务'), false,
-    'the header keeps only the 待办 entry')
+  assert.equal(shortNodes.some(node => node.type === 'button' && node.props?.['aria-label'] === '更多入口'), false,
+    'no overflow menu hides a duplicate todo entry')
 })
 
 test('multiple deliveries share one line until expanded', async () => {
@@ -710,6 +710,15 @@ test('the todo badge counts one handoff once and leads with what the person must
 })
 
 const deepText = node => typeof node === 'string' ? node : (node?.children ?? []).map(deepText).join('')
+
+test('the header keeps 任务 and 待办 side by side instead of hiding one behind an ellipsis', async () => {
+  const card = await taskCardHarness()
+  const labels = card.render().filter(node => node.type === 'button')
+    .map(node => String(node.props?.['aria-label'] ?? ''))
+  assert.ok(labels.includes('任务'), 'the panel expand button is a direct control')
+  assert.ok(labels.includes('待办'), 'the todo entry is a direct control')
+  assert.equal(labels.includes('更多入口'), false, 'no ellipsis menu duplicating the todo entry')
+})
 
 test('a long task title stays within 20 characters on the task row', async () => {
   const long = '在当前工作区把发布说明和兼容性检查一起整理成可以交付的版本并通知所有相关的人'
