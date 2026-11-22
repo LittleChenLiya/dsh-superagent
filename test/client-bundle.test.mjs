@@ -268,8 +268,6 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   assert.equal(actions.at(-1).run.id, goal.id)
   assert.equal(actions.at(-1).phase.id, 'p2')
   button(render(), '任务').props.onClick()
-  assert.ok(render({ inboxOpen: true }).some(node => String(node.props?.className ?? '').includes('dsa-inbox-empty')),
-    'the panel can show an empty todo page')
   // A phase receipt is a different button from a whole-task receipt: it is
   // named after the phase a person knows, and clicking it opens that evidence.
   const withPhase = render()
@@ -286,11 +284,6 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   phaseButton.props.onClick()
   assert.equal(actions.at(-1).type, 'openReceipt')
   assert.equal(actions.at(-1).message.runId, first.id)
-  const inbox = render({ inboxOpen: true })
-  assert.equal(inbox.some(node => node.children.includes('暂无待处理事项')), false,
-    'an empty inbox shows nothing instead of a placeholder')
-  assert.equal(inbox.find(node => node.props?.['aria-label'] === '任务列表')?.props.hidden, true,
-    'the task list stays mounted so its search can survive a view change')
 })
 
 /** Hook storage that keeps component state across explicit re-renders. */
@@ -641,7 +634,7 @@ test('todo and phase-receipt controls stay inside a narrow, 200%-zoomed panel', 
       'a narrow panel must not hide a todo action')
     assert.match(css, /\.dsa-task-line\{[^}]*overflow-wrap:anywhere/u,
       'the task summary wraps instead of widening the rail')
-    assert.match(css, /\.dsa-inbox-task\{[^}]*min-width:0[^}]*ellipsis/u,
+    assert.match(css, /\.dsa-inbox-msg-task\{[^}]*min-width:0[^}]*ellipsis/u,
       'the inbox task label shrinks inside its row')
   } finally {
     if (originalDocument === undefined) delete globalThis.document
@@ -670,7 +663,8 @@ test('a task title shows its own words, never the phase dispatch prompt', async 
 test('the todo badge counts one handoff once and leads with what the person must do', async () => {
   const question = '阶段 p2（执行会话 child-9）需要你亲自完成：学习通需要扫码登录。页面：https://pan.example/login'
   const decision = {
-    id: 'g1:decision-1', kind: 'decision', goalId: 'g1', project: { cwd: '/work/one', name: '学习通' },
+    id: 'g1:decision-1', kind: 'decision', goalId: 'g1', sessionId: 'chat-a',
+    project: { cwd: '/work/one', name: '学习通' },
     title: 'This run is phase 1 of 5: 整理课程\n\n整段内部提示',
     item: { id: 'decision-1', question, reason: '旧会话没有登录凭据，需要本人扫码。', options: ['answer', 'skip'],
       source: { kind: 'human', attentionId: 'attention-1', runId: 'run-9', runtimeVerified: true } },
@@ -681,49 +675,32 @@ test('the todo badge counts one handoff once and leads with what the person must
       reason: '旧会话没有登录凭据，需要本人扫码。', handoff: {} },
   }
   const card = await taskCardHarness({}, {}, { inbox: [decision, twin] })
-  let nodes = card.openRail()
-  card.button(nodes, '待办').props.onClick()
-  nodes = card.render({ inboxOpen: true })
-  const badge = nodes.find(node => String(node.props?.className ?? '') === 'dsa-rail-count')
-  assert.equal(String((badge?.children ?? []).join('')), '1', 'two surfaces of one handoff count once')
+  const nodes = card.render()
+  const rows = nodes.filter(node => String(node.props?.className ?? '') === 'dsa-inbox-msg-row')
+  assert.equal(rows.length, 1, 'two surfaces of one handoff count once')
   assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-header-dot'),
     'outside the panel a dot still reminds without a second entry')
-  const deepText = node => typeof node === 'string' ? node : (node?.children ?? []).map(deepText).join('')
-  assert.ok(nodes.some(node => deepText(node).includes('学习通需要扫码登录')), 'the card states the act itself')
-  const headline = nodes.find(node => String(node.props?.className ?? '') === 'dsa-attention-q')
-  assert.doesNotMatch(String(headline?.children?.[0]), /阶段 p2|页面/, 'the phase id and page line stay in the detail')
-  assert.equal(nodes.some(node => deepText(node).includes('整段内部提示')), false, 'the prompt never becomes a label')
-  assert.ok(card.button(nodes, '完成'), 'the direct action is on the first screen')
+  const text = nodes.map(deepText).join('')
+  assert.ok(text.includes('学习通需要扫码登录'), 'the conversation states the act itself')
+  assert.equal(text.includes('整段内部提示'), false, 'the prompt never becomes a label')
+  assert.ok(card.button(nodes, '完成'), 'the direct action sits in the message flow')
   assert.ok(card.button(nodes, '登录'), 'the run browser opens inside the conversation')
   assert.ok(nodes.some(node => (node.children ?? []).includes('原因')), 'the reason stays one tap away')
+  card.button(nodes, '去会话处理').props.onClick()
+  assert.deepEqual(card.actions.at(-1), { type: 'openSession', sessionId: 'chat-a' })
 
   card.button(nodes, '登录').props.onClick()
-  const withLive = card.render({ inboxOpen: true })
+  const withLive = card.render()
   const liveRow = withLive.find(node => node.props?.['data-live-login'])
   assert.ok(liveRow, 'the hand-off becomes a row in the message flow')
   assert.equal(liveRow.props.className, 'dsa-live-msg')
 
-  const empty = card.render({ inboxOpen: true, workbench: { sessionId: 'chat-a', runs: [], goals: [card.goal], inbox: [] } })
-  assert.equal(empty.some(node => String(node.props?.className ?? '').includes('dsa-rail-count')), false,
-    'no badge without a todo')
+  const empty = card.render({ workbench: { sessionId: 'chat-a', runs: [], goals: [card.goal], inbox: [] } })
+  assert.equal(empty.some(node => String(node.props?.className ?? '').includes('dsa-header-dot')), false,
+    'no dot without a todo')
 })
 
 const deepText = node => typeof node === 'string' ? node : (node?.children ?? []).map(deepText).join('')
-
-test('a read todo leaves the badge but stays reachable under one line', async () => {
-  const entry = {
-    id: 'g1:decision-read', kind: 'decision', goalId: 'g1', read: true,
-    project: { cwd: '/work/one', name: '学习通' },
-    item: { id: 'decision-read', question: '要接受这版试玩反馈的结论吗？', options: ['answer'] },
-  }
-  const card = await taskCardHarness({ status: 'needs-decision' }, {}, { inbox: [entry] })
-  let nodes = card.openRail()
-  nodes = card.render({ inboxOpen: true })
-  assert.equal(nodes.some(node => String(node.props?.className ?? '') === 'dsa-rail-count'), false,
-    'read work no longer counts as new')
-  assert.ok(nodes.some(node => (node.children ?? []).includes('已读 1 条')), 'read work folds under one line')
-  assert.match(nodes.map(deepText).join(''), /要接受这版试玩反馈的结论吗/, 'a read decision stays reachable, never lost')
-})
 
 test('a failed card closes to its own fold and restores on demand', async () => {
   const failed = {
@@ -848,8 +825,8 @@ test('a question lives inside the session card that raised it', async () => {
     .children.find(child => child?.props?.className === 'dsa-session-actions')
     .children.find(child => child?.children?.[0] === '处理')
   handle.props.onClick()
-  assert.equal(card.actions.at(-1)?.type, 'showInbox')
-  assert.equal(card.actions.at(-1)?.open, true, '处理 opens the shared todo, not a copy')
+  assert.deepEqual(card.actions.at(-1), { type: 'openSession', sessionId: 'chat-a' },
+    '处理 jumps into the session that raised the question')
 })
 
 test('a card opens the live worker session instead of a panel-local copy', async () => {
@@ -911,7 +888,7 @@ test('the report summary is one line of at most 40 characters', async () => {
 
 test('a todo card keeps its first line within 25 characters', async () => {
   const entry = {
-    id: 'inbox-long', kind: 'decision', goalId: 'g1',
+    id: 'inbox-long', kind: 'decision', goalId: 'g1', sessionId: 'chat-a',
     project: { cwd: '/work/one', name: '学习通' },
     title: '特别长的待办标题需要压缩到二十五个字符以内否则就会溢出',
     item: {
@@ -921,13 +898,11 @@ test('a todo card keeps its first line within 25 characters', async () => {
     },
   }
   const card = await taskCardHarness({}, {}, { inbox: [entry] })
-  card.button(card.openRail(), '待办').props.onClick()
-  const nodes = card.render({ inboxOpen: true })
-  const task = nodes.find(node => String(node.props?.className ?? '') === 'dsa-inbox-task')
-  const question = nodes.find(node => String(node.props?.className ?? '') === 'dsa-attention-q')
-  assert.ok(task && question, 'the todo card renders its first line and question')
-  assert.ok(deepText(task).length <= 25, `todo first line is ${deepText(task).length} characters`)
-  assert.ok(deepText(question).length <= 25, `todo question is ${deepText(question).length} characters`)
+  const nodes = card.render()
+  const task = nodes.find(node => String(node.props?.className ?? '') === 'dsa-inbox-msg-task')
+  assert.ok(task, 'the conversation todo shows which task raised it')
+  assert.ok(deepText(task).length <= 25, `todo task label is ${deepText(task).length} characters`)
+  assert.ok(card.button(nodes, '去会话处理'), 'the row can jump into its session')
 })
 
 test('the panel speaks in labels, not sentence tails or empty-state filler', async () => {
@@ -949,8 +924,7 @@ const decisionGoal = (summary = '') => ({
 
 const openInbox = async (entry, goal, runs) => {
   const card = await taskCardHarness(goal, {}, { inbox: [entry], runs, goals: [goal] })
-  card.button(card.openRail(), '待办').props.onClick()
-  return { card, nodes: card.render({ inboxOpen: true }) }
+  return { card, nodes: card.render() }
 }
 
 test('a decision is shown together with the thing being decided', async () => {

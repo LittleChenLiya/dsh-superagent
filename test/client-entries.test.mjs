@@ -41,7 +41,7 @@ test('questions and plans are answerable from the shared inbox', () => {
   assert.ok(source.includes("call('/answer'"), 'the answer path is wired')
   assert.ok(source.includes('item.options'), 'plan confirmations render one-tap options')
   assert.ok(source.includes("item.source === 'plan'"), 'plan confirmations say so')
-  assert.ok(source.includes("call('/notices/read'"), 'pending inbox items can be marked read')
+  assert.ok(source.includes("className: 'dsa-inbox-msg'"), 'pending items are spoken in the conversation')
   assert.ok(source.includes("frame.action === 'expired'"), 'an expired approval explains itself instead of vanishing')
 })
 
