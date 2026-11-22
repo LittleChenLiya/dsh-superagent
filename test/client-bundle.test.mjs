@@ -743,6 +743,64 @@ test('right-clicking a card offers jump to session and close', async () => {
   assert.deepEqual(card.actions.at(-1), { type: 'openSession', sessionId: 'child-1' })
 })
 
+test('the card menu also opens from the keyboard, not only from a right click', async () => {
+  const goal = { id: 'g1', goal: '写脚本', title: '写脚本', ownerSessionId: 'chat-a', status: 'running', decisions: [], phases: [] }
+  const card = await taskCardHarness(goal, { selectedGoalId: null }, { runs: [] })
+  const nodes = card.openRail()
+  const sessionCard = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card')
+  let prevented = 0
+  sessionCard.props.onKeyDown({
+    key: 'F10', shiftKey: true, preventDefault() { prevented += 1 },
+    currentTarget: { getBoundingClientRect: () => ({ left: 10, bottom: 200 }) },
+  })
+  const after = card.render()
+  assert.ok(after.some(node => String(node.props?.className ?? '') === 'dsa-card-menu'), 'Shift+F10 opens the same menu')
+  assert.equal(prevented, 1)
+  assert.equal(sessionCard.children.find(child => child?.props?.className === 'dsa-session-main').props['aria-expanded'], undefined,
+    'the card button navigates; it is not a disclosure control')
+})
+
+test('a waiting card keeps its question and footer inside the fixed height', async () => {
+  const run = {
+    id: 'r-art', goal: '交付', status: 'running', parentSessionId: 'chat-a',
+    artifacts: [{ name: 'a.md', href: 'a.md' }],
+  }
+  const sibling = { id: 'r-other', goal: '另一条', title: '另一条', status: 'running', parentSessionId: 'chat-b' }
+  const entry = {
+    id: 'r-art:q1', kind: 'question', runId: 'r-art',
+    item: { id: 'q1', kind: 'human', question: '需要扫码登录', options: ['answer'] },
+  }
+  const card = await taskCardHarness({}, { selectedGoalId: null }, {
+    goals: [], runs: [run, sibling], inbox: [entry],
+    sessionProjects: { 'chat-a': { name: '学习通', cwd: '/work' }, 'chat-b': { name: '另一处', cwd: '/other' } },
+  })
+  const nodes = card.openRail()
+  const session = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card'
+    && deepText(node).includes('需要扫码登录'))
+  assert.ok(deepText(session).includes('需要扫码登录'), 'the question stays on the card')
+  assert.equal(session.children.some(child => String(child?.props?.className ?? '') === 'dsa-session-links'), false,
+    'secondary file links fold away so the fixed card does not clip its footer')
+  assert.ok(session.children.some(child => String(child?.props?.className ?? '') === 'dsa-session-foot'
+    && deepText(child).includes('学习通')), 'the project footer still renders')
+})
+
+test('a waiting card without a session offers no dead 处理 button', async () => {
+  const goal = {
+    id: 'goal-empty', goal: '等你决定', title: '等你决定', status: 'needs-decision',
+    ownerSessionId: null, decisions: [], phases: [],
+  }
+  const entry = {
+    id: 'g:q1', kind: 'decision', goalId: 'goal-empty',
+    item: { id: 'q1', question: '需要你决定', options: ['answer'] },
+  }
+  const card = await taskCardHarness(goal, { selectedGoalId: null }, { runs: [], inbox: [entry] })
+  const nodes = card.openRail()
+  const session = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card')
+  const text = deepText(session)
+  assert.ok(text.includes('需要你决定'), 'the question is still shown')
+  assert.equal(text.includes('处理'), false, 'without an owning session, no dead handle is rendered')
+})
+
 test('the header keeps one entry and the todo view lives inside the panel', async () => {
   const card = await taskCardHarness()
   const labels = card.render().filter(node => node.type === 'button')
