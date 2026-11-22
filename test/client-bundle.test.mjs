@@ -830,9 +830,10 @@ test('the rail reads failure first, then current work, and never shows a bare el
   const labels = nodes.filter(node => node.type === 'button').map(node => String(node.props?.['aria-label'] ?? ''))
   assert.equal(labels.some(label => label.startsWith('更多操作')), false, 'no bare ellipsis entry in the rail')
   assert.equal(nodes.some(node => node === '现在'), false, 'the current phase needs no 现在 caption')
-  const text = deepText({ children: nodes })
-  assert.ok(text.indexOf('失败：回归测试') >= 0, 'the failure is on the card')
-  assert.ok(text.indexOf('失败：回归测试') < text.indexOf('构建试玩版本'),
+  const cardText = deepText({ children: nodes.filter(node => String(node.props?.className ?? '').includes('dsa-session-card')) })
+  assert.ok(cardText.includes('端口 4310 被占用'), 'the failure reason is on the card')
+  assert.equal(cardText.includes('失败：回归测试'), false, 'the failure block does not repeat the title')
+  assert.ok(cardText.indexOf('回归测试') < cardText.indexOf('构建试玩版本'),
     'a failure reads before the phase that is running')
 })
 
@@ -902,7 +903,8 @@ test('a decision is shown together with the thing being decided', async () => {
   }), goal, [run])
   const text = nodes.map(deepText).join('\n')
   assert.ok(text.includes(conclusion), 'the conclusion itself is on the card')
-  assert.ok(text.includes('阶段 p2 · 构建试玩版本'), 'the deciding phase is named')
+  assert.ok(text.includes('构建试玩版本'), 'the deciding phase is named')
+  assert.equal(text.includes('阶段 p2'), false, 'internal phase ids never reach the card')
   assert.ok(text.includes('结果已出，等你验收'), 'why a person is needed is in plain words')
   assert.ok(text.includes('三条结论覆盖了本周的全部反馈'), 'the 原因 section has real content')
 })
