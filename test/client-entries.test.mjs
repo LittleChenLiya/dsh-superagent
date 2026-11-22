@@ -46,8 +46,16 @@ test('questions and plans are answerable from the shared inbox', () => {
 })
 
 test('the run list is clickable instead of a dead list', () => {
-  assert.ok(source.includes('onClick: () => onOpen(task.id, task.parentSessionId)'), 'each run row opens its detail in the correct scope')
+  assert.ok(source.includes('onOpen(card.run.id, card.run.parentSessionId)'), 'each run card opens its detail in the correct scope')
   assert.ok(source.includes("className: 'dsa-rowitem'") && source.includes("type: 'button'"), 'run rows are buttons')
   assert.ok(source.includes("waiting ? 'waiting' : task.status"), 'a run waiting on a person turns amber')
   assert.ok(source.includes("'待决定'"), 'the waiting row says what it is waiting for')
+})
+
+test('sessions are cards that fit two or three per row and carry their own question', () => {
+  assert.ok(source.includes('repeat(auto-fill,minmax(118px,1fr))'), 'the rail fits two or three cards')
+  assert.ok(source.includes('.dsa-session-card{'))
+  assert.ok(source.includes('.dsa-session-ask{'), 'a question has its own block inside the card')
+  assert.ok(source.includes('questionLine(attention.item?.question, 48)'), 'the card renders the question itself')
+  assert.ok(source.includes('正在调度 ${live.length} 个会话'), 'the rail says how many sessions are running')
 })

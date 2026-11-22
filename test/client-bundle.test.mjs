@@ -655,8 +655,8 @@ test('a task title shows its own words, never the phase dispatch prompt', async 
   })
   const deepText = node => typeof node === 'string' ? node : (node?.children ?? []).map(deepText).join('')
   const opened = card.openRail()
-  const row = opened.find(node => node.type === 'button' && String(node.props?.className ?? '').includes('dsa-task-row'))
-  assert.ok(row, 'the task row is rendered')
+  const row = opened.find(node => node.type === 'button' && String(node.props?.className ?? '').includes('dsa-session-main'))
+  assert.ok(row, 'the session card is rendered')
   assert.match(deepText(row), /调整镜头/)
   assert.doesNotMatch(deepText(row), /This run is phase|Phase objective|Keep the door open/)
   assert.doesNotMatch(String(row.props.title), /This run is phase/, 'the hover title is clean too')
@@ -739,10 +739,73 @@ test('a long task title stays within 20 characters on the task row', async () =>
   const long = '在当前工作区把发布说明和兼容性检查一起整理成可以交付的版本并通知所有相关的人'
   const card = await taskCardHarness({ title: long, goal: long, status: 'running' })
   const nodes = card.openRail()
-  const label = nodes.find(node => String(node.props?.className ?? '') === 'dsa-task-label')
-  assert.ok(label, 'the task row renders')
+  const label = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-title')
+  assert.ok(label, 'the session card renders')
   const text = deepText(label).trim()
   assert.ok(text.length > 0 && text.length <= 20, `task row title is ${text.length} characters: ${text}`)
+})
+
+test('the rail schedules sessions as cards, two or three per row', async () => {
+  const card = await taskCardHarness({
+    status: 'running',
+    phases: [
+      { id: 'p1', title: '整理素材', status: 'running' },
+      { id: 'p2', title: '写脚本', status: 'pending' },
+      { id: 'p3', title: '剪辑', status: 'pending' },
+    ],
+  })
+  const nodes = card.openRail()
+  const grid = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-grid')
+  assert.ok(grid, 'sessions share one grid')
+  const sessions = nodes.filter(node => String(node.props?.className ?? '') === 'dsa-session-card')
+  assert.equal(sessions.length, 3, 'each session phase is its own card')
+  const summary = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-summary')
+  assert.match(deepText(summary), /正在调度 3 个会话/)
+})
+
+test('a question lives inside the session card that raised it', async () => {
+  const question = '学习通需要扫码登录。页面：https://pan.example/login'
+  const goal = {
+    id: 'g1', goal: '扫码登录', title: '扫码登录', ownerSessionId: 'chat-a', status: 'needs-decision',
+    decisions: [], phases: [{ id: 'p1', title: '扫码登录', status: 'needs-decision', runId: 'r1' }],
+  }
+  const run = { id: 'r1', goal: '扫码登录', status: 'running', parentSessionId: 'chat-a' }
+  const entry = {
+    id: 'r1:a1', kind: 'question', runId: 'r1',
+    item: { id: 'a1', kind: 'human', question, options: ['answer'] },
+  }
+  const card = await taskCardHarness(goal, { selectedGoalId: null }, { runs: [run], inbox: [entry] })
+  const nodes = card.openRail()
+  const session = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card')
+  const text = deepText(session)
+  assert.match(text, /学习通需要扫码登录/, 'the card states the act itself')
+  assert.match(text, /待你决定/)
+  assert.doesNotMatch(text, /https:\/\//, 'the page line stays in the detail')
+  const summary = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-summary')
+  assert.match(deepText(summary), /1 个需要你/)
+  const handle = session.children.find(child => child?.props?.className === 'dsa-session-ask')
+    .children.find(child => child?.props?.className === 'dsa-session-actions')
+    .children.find(child => child?.children?.[0] === '处理')
+  handle.props.onClick()
+  assert.equal(card.actions.at(-1)?.type, 'showInbox')
+  assert.equal(card.actions.at(-1)?.open, true, '处理 opens the shared todo, not a copy')
+})
+
+test('a card opens the live worker session instead of a panel-local copy', async () => {
+  const goal = {
+    id: 'g1', goal: '写脚本', title: '写脚本', ownerSessionId: 'chat-a', status: 'running',
+    decisions: [], phases: [{ id: 'p1', title: '写脚本', status: 'running', runId: 'r1' }],
+  }
+  const run = {
+    id: 'r1', goal: '写脚本', status: 'running', parentSessionId: 'chat-a',
+    subtasks: [{ index: 0, title: '写脚本', status: 'running', childId: 'child-1' }],
+  }
+  const card = await taskCardHarness(goal, { selectedGoalId: null }, { runs: [run] })
+  const nodes = card.openRail()
+  const open = nodes.find(node => node.props?.['aria-label'] === '在会话中打开「写脚本」')
+  assert.ok(open, 'the card carries a direct session entry')
+  open.props.onClick()
+  assert.deepEqual(card.actions.at(-1), { type: 'openSession', sessionId: 'child-1' })
 })
 
 test('a long result stays within 60 characters on the task card', async () => {
