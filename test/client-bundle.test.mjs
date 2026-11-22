@@ -759,8 +759,9 @@ test('the rail schedules sessions as cards, two or three per row', async () => {
   assert.ok(grid, 'sessions share one grid')
   const sessions = nodes.filter(node => String(node.props?.className ?? '') === 'dsa-session-card')
   assert.equal(sessions.length, 3, 'each session phase is its own card')
-  const summary = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-summary')
-  assert.match(deepText(summary), /正在调度 3 个会话/)
+  assert.ok(!nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-summary'),
+    'the rail does not narrate a session count above the cards')
+  assert.doesNotMatch(deepText(grid), /正在调度|个需要你/, 'the cards carry the facts, not a summary line')
 })
 
 test('a question lives inside the session card that raised it', async () => {
@@ -781,8 +782,8 @@ test('a question lives inside the session card that raised it', async () => {
   assert.match(text, /学习通需要扫码登录/, 'the card states the act itself')
   assert.match(text, /待你决定/)
   assert.doesNotMatch(text, /https:\/\//, 'the page line stays in the detail')
-  const summary = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-summary')
-  assert.match(deepText(summary), /1 个需要你/)
+  assert.doesNotMatch(deepText(nodes.find(node => String(node.props?.className ?? '') === 'dsa-task-list') ?? session), /正在调度|个需要你/,
+    'the rail lets the card itself say what needs a person')
   const handle = session.children.find(child => child?.props?.className === 'dsa-session-ask')
     .children.find(child => child?.props?.className === 'dsa-session-actions')
     .children.find(child => child?.children?.[0] === '处理')

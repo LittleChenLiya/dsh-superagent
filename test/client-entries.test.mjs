@@ -57,5 +57,6 @@ test('sessions are cards that fit two or three per row and carry their own quest
   assert.ok(source.includes('.dsa-session-card{'))
   assert.ok(source.includes('.dsa-session-ask{'), 'a question has its own block inside the card')
   assert.ok(source.includes('questionLine(attention.item?.question, 48)'), 'the card renders the question itself')
-  assert.ok(source.includes('正在调度 ${live.length} 个会话'), 'the rail says how many sessions are running')
+  assert.ok(!source.includes('正在调度'), 'the rail does not narrate a session count')
+  assert.ok(!source.includes('dsa-session-summary'), 'no summary strip sits above the session cards')
 })
