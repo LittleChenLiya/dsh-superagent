@@ -338,11 +338,12 @@ function* walkTree(tree, cache) {
 }
 
 /** Mount the panel and open one task card with an empty 工作上下文. */
-async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {}) {
+async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {}, workspace = null) {
   const cache = hookCache()
   const { exports } = await materialize(null, cache.hooks)
   let panel
   exports.apply({
+    get: name => (name === 'uiWorkspace' ? workspace : undefined),
     slots: {
       inject: (name, callback) => callback(),
       register: (props, component) => { if (props.name === 'main') panel = component },
@@ -718,6 +719,26 @@ test('the header keeps 任务 and 待办 side by side instead of hiding one behi
   assert.ok(labels.includes('任务'), 'the panel expand button is a direct control')
   assert.ok(labels.includes('待办'), 'the todo entry is a direct control')
   assert.equal(labels.includes('更多入口'), false, 'no ellipsis menu duplicating the todo entry')
+})
+
+test('a task card opens the conversation of the session that owns it', async () => {
+  const opened = []
+  const card = await taskCardHarness({}, {}, {}, { openSession: id => opened.push(id) })
+  const nodes = card.openRail()
+  const open = nodes.find(node => node.type === 'button' && (node.children ?? []).includes('打开会话'))
+  assert.ok(open, 'the task card offers a direct way into its session')
+  assert.equal(open.props['aria-label'], '在会话中打开「空任务」')
+  open.props.onClick()
+  assert.deepEqual(card.actions, [{ type: 'openSession', sessionId: 'chat-a' }],
+    'the entry carries the owning session, not a panel-local detail view')
+})
+
+test('the panel still loads when the host has no workspace service', async () => {
+  const card = await taskCardHarness()
+  const nodes = card.openRail()
+  const open = nodes.find(node => node.type === 'button' && (node.children ?? []).includes('打开会话'))
+  assert.ok(open, 'the entry stays visible so the click can explain the missing host')
+  assert.doesNotThrow(() => open.props.onClick())
 })
 
 test('a long task title stays within 20 characters on the task row', async () => {
