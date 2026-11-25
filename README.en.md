@@ -76,11 +76,11 @@ Yes. The plugin runs on DeepSeek Harness; a local host started with `dsh --profi
 
 **What does it cost?**
 
-Every run pays for at least one planning call, several model calls per subtask, and one aggregation. The sample run in this document with two subtasks used 4 calls and about 4.6k input / 0.5k output tokens; longer work costs more. No prices are built in; configure `pricing` and each run prints its cost. Hard caps are `maxModelCallsPerRun` (default 80) and `maxTokensPerRun` (default 2,000,000).
+In the default planned mode, every run pays for at least one planning call, several model calls per subtask, and one aggregation. The sample run in this document with two subtasks used 4 calls and about 4.6k input / 0.5k output tokens; longer work costs more. No prices are built in; configure `pricing` and each run prints its cost. Hard caps are `maxModelCallsPerRun` (default 80) and `maxTokensPerRun` (default 2,000,000).
 
 ## When not to use it
 
-Work that one model call can answer, tasks that need sub-agents to delegate further (depth is capped at 1), and cases that need separate credentials or stronger isolation for children are not worth it. Every run also pays for one planning and one aggregation pass, so latency-sensitive single-step work is a poor fit.
+Work that one model call can answer, tasks that need sub-agents to delegate further (depth is capped at 1), and cases that need separate credentials or stronger isolation for children are not worth it. The default planned mode adds one planning and one aggregation pass, so latency-sensitive single-step work is a poor fit.
 
 ## Requirements
 
