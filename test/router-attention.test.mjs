@@ -135,7 +135,7 @@ test('a known alias in the same workspace answers status and plan without the cl
   try {
     await router.submit({ id: 'attention-alias-1', project: 'release', text: '把准备发布说明叫做发版说明' })
     await settled(router)
-    assert.equal((await router.snapshot()).messages.at(-1).text, '已记录别名「发版说明」。')
+    assert.equal((await router.snapshot()).messages.at(-1).text, '别名 发版说明')
 
     await router.submit({ id: 'attention-status-1', project: 'release', text: '/状态 发版说明' })
     const status = await settled(router)
@@ -143,9 +143,11 @@ test('a known alias in the same workspace answers status and plan without the cl
     assert.equal(executed.at(-1).action, 'status')
     assert.equal(executed.at(-1).target, 'goal-notes')
 
+    const before = (await router.snapshot()).messages.length
     await router.submit({ id: 'attention-plan-1', project: 'release', text: '/方案 发版说明' })
     const plan = await settled(router)
-    assert.equal(plan.messages.at(-1).text, '这项任务还没有已确认的决定。')
+    assert.deepEqual(plan.messages.slice(before).map(message => message.role), ['user'],
+      'an empty plan stays silent instead of saying 还没有')
 
     assert.equal(classifyCalls, 0, 'alias status and plan reads must not call the classifier')
     assert.equal(executed.filter(command => command.action === 'task').length, 0, 'a read must never create a task')
@@ -348,7 +350,9 @@ test('a finished phase is delivered once with its conclusion and evidence entry,
       return hits.length === 1 ? hits : null
     }, 'the phase receipt')
     assert.match(first[0].text, /门口留 1\.5 秒空镜/)
-    assert.match(first[0].text, /复验清单与证据/)
+    assert.match(first[0].text, /阶段「镜头方案」已交付/)
+    // The receipt button opens the evidence; phase and run ids stay out of chat.
+    assert.doesNotMatch(first[0].text, /复验清单与证据|run run-1|阶段 p1/)
     assert.equal(first[0].taskId, 'goal-playtest')
     assert.equal(first[0].phaseId, 'p1')
     assert.equal(first[0].runId, 'run-1')
@@ -373,8 +377,8 @@ test('a finished phase is delivered once with its conclusion and evidence entry,
       return messages.find(message => message.id?.startsWith('result-goal-playtest-')) ?? null
     }, 'the closing note')
     assert.match(closing.text, /未交付/)
-    assert.match(closing.text, /p2「试玩安排」failed/)
-    assert.doesNotMatch(closing.text, /p2「试玩安排」已完成/)
+    assert.match(closing.text, /「试玩安排」失败/)
+    assert.doesNotMatch(closing.text, /p2「试玩安排」|p2「试玩安排」已完成/)
     assert.equal(phaseReceipts((await router.snapshot()).messages).length, 1, 'a failed phase needs no accepted receipt')
   } finally {
     await stopAll()
@@ -446,11 +450,39 @@ test('asking which decisions are pending answers with the options without parkin
     const answer = snapshot.messages.at(-1)
     assert.equal(answer.role, 'assistant')
     assert.match(answer.text, /试玩定在哪个时间/)
-    assert.match(answer.text, /周六下午 \/ 周日晚上/)
+    assert.match(answer.text, /周六下午\/周日晚上/)
     assert.doesNotMatch(answer.text, /answer \/ stop/, 'the mechanics are not a person\'s choice')
     assert.equal(executed, 0, 'a read-only question must not start or park a task')
     assert.deepEqual(snapshot.messages.at(-1).taskIds, ['goal-playtest'])
   } finally {
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('a queued write stays in the snapshot until it is processed', async () => {
+  const { base, state } = await fixture('superagent-queued-snapshot')
+  let reject
+  const { boot, stopAll } = harness({
+    state, projects: [], tasks: [],
+    classify: () => new Promise((_, fail) => { reject = fail }),
+    execute: async () => ({ text: '' }),
+  })
+  const router = boot()
+  try {
+    await router.submit({ id: 'queued-command-0001', text: '帮我做掉新作业' })
+    const during = await until(async () => {
+      const snapshot = await router.snapshot()
+      return snapshot.pending === 1 ? snapshot : null
+    }, 'the queued write to appear in the snapshot')
+    assert.deepEqual(during.commands.map(item => item.id), ['queued-command-0001'],
+      'the panel can mark a message that is still waiting')
+    assert.equal(during.commands[0].text, '帮我做掉新作业')
+    reject(new Error('classification stopped'))
+    const after = await settled(router)
+    assert.deepEqual(after.commands, [], 'a finished write leaves the queue')
+  } finally {
+    reject?.(new Error('stop'))
     await stopAll()
     await fsp.rm(base, { recursive: true, force: true })
   }

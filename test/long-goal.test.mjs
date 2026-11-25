@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { createLongGoalManager, formatStatus, parsePhasePlan } from '../lib/long-goal.js'
+import { createLongGoalManager, formatStatus, parsePhasePlan, routedAcceptance } from '../lib/long-goal.js'
 
 function fakeOrchestrator() {
   let seq = 0
@@ -119,6 +119,19 @@ test('parses a fenced phase plan and rejects nonsense', () => {
   assert.equal(parsePhasePlan('I cannot help').phases, null)
   assert.match(parsePhasePlan('{"phases":[]}').error, /empty/)
   assert.match(parsePhasePlan('{"phases":"nope"}').error, /no "phases" array/)
+})
+
+test('routed plans only require workspace files inside the goal workspace', () => {
+  const spec = routedAcceptance([
+    { id: 'a1', text: 'local report', check: { type: 'file', path: 'reports/status.md', mustExist: true } },
+    { id: 'a2', text: 'external build', check: { type: 'file', path: 'D:\\PrismDefense\\build', mustExist: true } },
+    { id: 'a3', text: 'stale external', check: { type: 'file', path: 'D:\\PrismDefense\\docs\\report.md', mustExist: true, workspaceFile: true } },
+  ], 'C:\\Users\\tester\\profile')
+  assert.equal(spec[0].check.workspaceFile, true)
+  assert.equal(spec[1].check.workspaceFile, undefined)
+  assert.equal(spec[1].check.path, 'D:\\PrismDefense\\build')
+  assert.equal(spec[2].check.workspaceFile, undefined)
+  assert.equal(spec[2].check.mustExist, true)
 })
 
 test('a console phase receives its objective without sibling deliverables', async () => {
@@ -703,6 +716,45 @@ test('a second phase that needs a person joins the open decision instead of wait
   assert.equal(state.goal.status, 'running')
 })
 
+test('two platform login cards only resume their own phase while independent work continues', async () => {
+  const root = await tempRoot('two-platform-login')
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  try {
+    const goal = await goals.create({
+      goal: '分别处理两个网站，继续塔防',
+      parentSessionId: agent.id,
+      routerRequestId: 'routed-two-logins',
+      maxParallelPhases: 2,
+      phases: [phase('assignment'), phase('mooc'), phase('game')],
+    })
+    await goals.tick()
+    let state = await goals.get(goal.id)
+    const [assignment, mooc] = state.phases.map(entry => orchestrator.runs.get(entry.currentRunId))
+    for (const [run, id] of [[assignment, 'first-login'], [mooc, 'second-login']]) {
+      orchestrator.fail(run, { stop: 'needs-decision' })
+      run.attention.items.push({ id: 'q1', question: '扫码登录', answer: null,
+        handoff: { id, kind: 'qr-login', url: `http://127.0.0.1/${id}` } })
+    }
+    await goals.tick()
+    state = await goals.get(goal.id)
+    assert.equal(state.phases[2].status, 'running')
+    assert.deepEqual(state.decisions.map(item => [item.source.runId, item.source.handoffId]),
+      [[assignment.id, 'first-login'], [mooc.id, 'second-login']])
+    const [first, second] = state.decisions
+    await goals.answer(goal.id, second.id, 'answer', { note: '已登录', parent: agent })
+    state = await goals.get(goal.id)
+    assert.equal(state.phases[0].status, 'needs-decision')
+    assert.equal(state.phases[1].status, 'running')
+    assert.equal(state.phases[2].status, 'running')
+    assert.deepEqual(orchestrator.calls.answer.map(call => call.runId), [mooc.id])
+    await goals.answer(goal.id, first.id, 'answer', { note: '已登录', parent: agent })
+    assert.deepEqual(orchestrator.calls.answer.map(call => call.runId), [mooc.id, assignment.id])
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
 test('a desktop goal starts unrelated work while an actual login blocks only its own dependents', async () => {
   const root = await tempRoot('routed-human-wait')
   const orchestrator = fakeOrchestrator()
@@ -935,6 +987,10 @@ test('cancel stops the goal and its active phase runs', async () => {
   const after = await goals.status(goal.id)
   assert.equal(after.goal.status, 'cancelled')
   assert.deepEqual(orchestrator.calls.cancel, [runId])
+  // A non-batch goal used to leave its phase "running" forever, so the task
+  // rail kept showing a session that had already stopped.
+  assert.equal(after.goal.phases[0].status, 'cancelled', 'cancel ends the phase, batch or not')
+  assert.ok(after.goal.phases[0].finishedAt, 'the cancelled phase records when it ended')
 })
 
 test('a summary session reuses the answer of the decision the execution session already settled', async () => {

@@ -46,6 +46,25 @@ test('writing outside the workspace is refused and names the allowlist rule', ()
   assert.match(write.reasonText, /did not run/)
 })
 
+test('a run may write to a project path the user named in the request', () => {
+  const guard = createGuard({ ...BASE, config: {} })
+  guard.bindChild('child-1', { runId: 'run-1', label: 'superagent-1', allowRoots: ['D:\\PrismDefense'] })
+  const call = (name, args) => guard.checkToolCall({ name, arguments: args, agent: { id: 'child-1' } })
+  assert.equal(call('write', { file_path: 'D:\\PrismDefense\\Assets\\Scripts\\Camera.cs' }).blocked, false)
+  assert.equal(call('edit', { file_path: 'D:\\PrismDefense\\docs\\report.md', old_string: 'a', new_string: 'b' }).blocked, false)
+  assert.equal(call('write', { file_path: 'D:\\PrismDefense2\\Assets\\Camera.cs' }).blocked, true)
+  assert.equal(call('write', { file_path: 'C:\\Windows\\evil.ini' }).blocked, true)
+})
+
+test('a named root does not leak into another child or another run', () => {
+  const guard = createGuard({ ...BASE, config: {} })
+  guard.bindChild('child-1', { runId: 'run-1', allowRoots: ['D:\\PrismDefense'] })
+  guard.bindChild('child-2', { runId: 'run-2' })
+  const call = (id, file) => guard.checkToolCall({ name: 'write', arguments: { file_path: file }, agent: { id } })
+  assert.equal(call('child-1', 'D:\\PrismDefense\\a.txt').blocked, false)
+  assert.equal(call('child-2', 'D:\\PrismDefense\\a.txt').blocked, true)
+})
+
 test('system directories are writable by nobody', () => {
   const { call } = harness()
   const write = call('write', { file_path: 'C:\\Windows\\System32\\drivers\\etc\\hosts' })

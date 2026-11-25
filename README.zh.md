@@ -76,11 +76,11 @@ export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 
 **开销大概多少？**
 
-一次 run 至少包含一次规划、每个子任务若干次模型调用，以及一次汇总。文档里那条两个子任务的样例是 4 次调用、约 4.6k 输入 / 0.5k 输出 token；活越长，调用越多。默认不内置价格，在 `pricing` 里配好之后每个 run 会打印金额；另有 `maxModelCallsPerRun`（默认 80）和 `maxTokensPerRun`（默认 2,000,000）两道硬上限。
+默认的计划模式里，一次 run 至少包含一次规划、每个子任务若干次模型调用，以及一次汇总。文档里那条两个子任务的样例是 4 次调用、约 4.6k 输入 / 0.5k 输出 token；活越长，调用越多。默认不内置价格，在 `pricing` 里配好之后每个 run 会打印金额；另有 `maxModelCallsPerRun`（默认 80）和 `maxTokensPerRun`（默认 2,000,000）两道硬上限。
 
 ## 什么时候不要用它
 
-一次模型调用就能答完的活、需要子 agent 继续往下委派的任务（深度上限为 1）、需要给子 agent 单独凭据或更强隔离的场景，都不划算。它对每个 run 额外收一次规划和汇总的费用，对延迟极敏感的单步任务也不合适。
+一次模型调用就能答完的活、需要子 agent 继续往下委派的任务（深度上限为 1）、需要给子 agent 单独凭据或更强隔离的场景，都不划算。默认模式每次 run 多出一次规划和汇总的费用，对延迟极敏感的单步任务也不合适。
 
 ## 环境要求
 
@@ -465,7 +465,7 @@ cost: ¥0.0952 + $0.0248 (estimate; all models priced)
   `runtime.desktop.allowActivation: true`，每次激活都记录在
   `meta.activated` 里。
 - **worker agent。** `browser_*` 和 `desktop_*` 属于挂载插件的那个会话。护栏会以规则
-  `guard/runtime-tool` 拦下受绑定的子 agent 的调用，除非 `guard.allowRuntimeTools` 为 true。
+  声明需要浏览器的执行工作线使用自己的标签页。扫码接管卡打开这张标签页，验证通过后恢复对应执行。其他子会话的运行时调用仍受 `guard/runtime-tool` 约束，除非配置了 `guard.allowRuntimeTools`。
 
 ### 它刻意做不到的事
 

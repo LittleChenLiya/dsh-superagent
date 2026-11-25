@@ -212,6 +212,8 @@ test('human checks are recognised in both languages and ordinary pages stay quie
   assert.equal(classifyHumanGate({ text: '双重验证' }).kind, 'two-factor')
   assert.equal(classifyHumanGate({ text: 'Scan the QR code to sign in' }).kind, 'qr-login')
   assert.equal(classifyHumanGate({ text: '请扫码登录' }).kind, 'qr-login')
+  assert.equal(classifyHumanGate({ text: '验证码登录\n使用学习通APP扫码登录' }).kind, 'qr-login')
+  assert.equal(classifyHumanGate({ text: '手机扫码，安全登录\n获取验证码' }).kind, 'qr-login')
   assert.equal(classifyHumanGate({ text: '欢迎回来 登录', passwordField: true }).kind, 'login-required')
   assert.equal(classifyHumanGate({ text: 'Change password', passwordField: true }), null)
   assert.equal(classifyHumanGate({ text: 'Browse products' }), null)
@@ -230,7 +232,9 @@ test('a sign-in page stops the action as attention, not as a failure', async () 
   assert.match(result, /browser_await_human/)
   assert.match(result, /sign-in the page is waiting for/)
   assert.equal(runtime.takeHumanHandoff('worker-2'), null)
-  assert.deepEqual(runtime.takeHumanHandoff('worker-1'), {
+  const { id, ...handoff } = runtime.takeHumanHandoff('worker-1')
+  assert.ok(id)
+  assert.deepEqual(handoff, {
     kind: 'login-required', url: 'http://127.0.0.1:8080/', headless: true,
   })
   assert.equal(runtime.takeHumanHandoff('worker-1'), null)
@@ -550,6 +554,180 @@ test('the guard refuses browser and desktop tools for worker agents unless allow
 
   const unbound = blocked.checkToolCall({ name: 'browser_open', arguments: { url: 'http://127.0.0.1/' }, agent: { id: 'someone-else' } })
   assert.equal(unbound.blocked, false, 'calls the guard does not own pass through')
+
+  blocked.bindChild('browser-task', {
+    runId: 'run-3', browserScope: { runId: 'run-3', subtaskId: 'subtask-1' },
+  })
+  const call = name => blocked.checkToolCall({ name, arguments: {}, agent: { id: 'browser-task' } })
+  assert.equal(call('browser_open').blocked, false)
+  assert.equal(call('browser_await_human').blocked, false)
+  assert.equal(call('browser_script').blocked, true)
+  assert.equal(call('desktop_click').blocked, true)
+})
+
+/** A CDP stub that records frames, acks, and input on one page session. */
+function fakeConnection() {
+  const calls = []
+  const listeners = new Set()
+  return {
+    calls,
+    async send(method, params = {}, options = {}) {
+      calls.push({ method, params, sessionId: options.sessionId })
+      if (method === 'Page.startScreencast') {
+        queueMicrotask(() => this.emit({
+          method: 'Page.screencastFrame',
+          sessionId: 'page-1',
+          params: {
+            data: 'aGk=', metadata: { deviceWidth: 420, deviceHeight: 760 }, sessionId: 7,
+          },
+        }))
+      }
+      return {}
+    },
+    onEvent(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    emit(event) {
+      for (const listener of [...listeners]) listener(event)
+    },
+  }
+}
+
+/** A live session whose page is the fake above and whose CDP channel is ours. */
+function liveWithConnection(connection, options = {}) {
+  const page = fakePage()
+  page.sessionId = 'page-1'
+  return { live: { ...fakeLive({ page, ...options }), connection }, page }
+}
+
+test('concurrent login requests bind input and confirmation to the original worker tab', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-two-logins-'))
+  const connection = fakeConnection()
+  const { live } = liveWithConnection(connection)
+  let starts = 0
+  let tabs = 0
+  const gates = new Map([['page-1', true], ['page-2', true]])
+  const closed = []
+  live.openTab = async () => {
+    const id = `page-${++tabs}`
+    const page = fakePage({ gate: () => gates.get(id) ? { kind: 'qr-login', label: '扫码登录', matched: '扫码登录' } : null })
+    page.sessionId = id
+    return { page, close: async () => { closed.push(id) } }
+  }
+  const { runtime } = runtimeWith(stateDir, { enabled: true }, { openBrowserImpl: async () => {
+    starts++
+    return live
+  } })
+  const tool = name => runtime.tools.find(entry => entry.name === name)
+  const scope = runId => ({ runId, subtaskId: 'subtask-1' })
+  const open = (actor, run, platform) => runtime.withActor(actor,
+    () => tool('browser_open').execute({ url: `http://127.0.0.1/${platform}` }), scope(run))
+  try {
+    const result = await Promise.all([open('a1', 'run-a', 'course-a'), open('b1', 'run-b', 'course-b')])
+    assert.ok(result.every(value => value.startsWith('[attention]')))
+    assert.equal(starts, 1)
+    assert.equal(tabs, 2)
+    const a = runtime.takeHumanHandoff('a1')
+    const b = runtime.takeHumanHandoff('b1')
+    assert.notEqual(a.id, b.id)
+    assert.equal((await runtime.live.status(a.id)).url, 'http://127.0.0.1/course-a')
+    assert.equal((await runtime.live.status(b.id)).url, 'http://127.0.0.1/course-b')
+    assert.equal((await runtime.live.status('stale-request')).available, false)
+    await assert.rejects(async () => runtime.live.input({ kind: 'focus' }, 'stale-request'), /已失效/u)
+    await assert.rejects(runtime.verifyHumanHandoff(a.id), /仍在等待/u)
+
+    await runtime.live.input({ kind: 'focus' }, a.id)
+    assert.equal(connection.calls.at(-1).sessionId, 'page-1')
+    await runtime.live.input({ kind: 'focus' }, b.id)
+    assert.equal(connection.calls.at(-1).sessionId, 'page-2')
+    gates.set('page-1', false)
+    await runtime.verifyHumanHandoff(a.id)
+    await assert.rejects(runtime.verifyHumanHandoff(b.id), /仍在等待/u)
+    const resumed = await runtime.withActor('a2',
+      () => tool('browser_await_human').execute({ screenshot: false }), scope('run-a'))
+    assert.match(resumed, /browser_await_human: ok[\s\S]*course-a/u)
+    assert.equal(tabs, 2, 'the replacement worker uses the tab with the login')
+
+    await runtime.releaseRun('run-a')
+    assert.deepEqual(closed, ['page-1'])
+    assert.equal((await runtime.live.status(a.id)).available, false)
+    assert.equal((await runtime.live.status(b.id)).available, true)
+    gates.set('page-2', false)
+    await runtime.verifyHumanHandoff(b.id)
+  } finally {
+    await runtime.dispose()
+    await fsp.rm(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('the live view streams the run browser, forwards input, and restores the viewport', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-live-'))
+  const connection = fakeConnection()
+  const { live } = liveWithConnection(connection)
+  const { runtime } = runtimeWith(stateDir, { enabled: true }, { openBrowserImpl: async () => live })
+  try {
+    assert.equal((await runtime.live.status()).available, false, 'no browser before the first action')
+
+    const open = runtime.tools.find(tool => tool.name === 'browser_open')
+    await open.execute({ url: 'http://127.0.0.1:8080/login' })
+    const status = await runtime.live.status()
+    assert.equal(status.available, true)
+    assert.equal(status.headless, true)
+    assert.equal(status.url, 'http://127.0.0.1:8080/login')
+
+    const frames = []
+    const detach = runtime.live.attach(frame => frames.push(frame), { width: 420, height: 760 })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.ok(frames.some(frame => frame.type === 'frame'), 'the panel receives a painted frame')
+    assert.ok(connection.calls.some(call => call.method === 'Emulation.setDeviceMetricsOverride'
+      && call.params.width === 420), 'the panel width becomes the page viewport')
+    assert.ok(connection.calls.some(call => call.method === 'Page.startScreencast'))
+    assert.ok(connection.calls.some(call => call.method === 'Page.screencastFrameAck'),
+      'every frame is acknowledged')
+
+    await runtime.live.input({ kind: 'mouse', type: 'down', x: 12, y: 24, button: 'left', buttons: 1 })
+    await runtime.live.input({ kind: 'key', type: 'press', key: 'a', code: 'KeyA', keyCode: 65, text: 'a' })
+    await runtime.live.input({ kind: 'wheel', x: 10, y: 20, deltaY: 120 })
+    assert.ok(connection.calls.some(call => call.method === 'Input.dispatchMouseEvent'
+      && call.params.type === 'mousePressed' && call.params.x === 12 && call.params.y === 24))
+    assert.equal(connection.calls.filter(call => call.method === 'Input.dispatchKeyEvent').length, 2,
+      'a press is one keyDown and one keyUp')
+    assert.ok(connection.calls.some(call => call.method === 'Input.dispatchMouseEvent'
+      && call.params.type === 'mouseWheel' && call.params.deltaY === 120))
+
+    detach()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.ok(connection.calls.some(call => call.method === 'Page.stopScreencast'))
+    const restored = connection.calls.filter(call => call.method === 'Emulation.setDeviceMetricsOverride').at(-1)
+    assert.deepEqual({ width: restored.params.width, height: restored.params.height },
+      { width: 1280, height: 900 }, 'the run gets its own viewport back')
+  } finally {
+    await runtime.dispose()
+    await fsp.rm(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('an attached user tab is streamed but never resized', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-live-attach-'))
+  const connection = fakeConnection()
+  const { live } = liveWithConnection(connection, { mode: 'attach' })
+  const { runtime } = runtimeWith(stateDir, { enabled: true, browser: { attachPort: 9333 } }, {
+    attachBrowserImpl: async () => live,
+    openBrowserImpl: async () => { throw new Error('attach must not launch a browser') },
+  })
+  try {
+    const open = runtime.tools.find(tool => tool.name === 'browser_open')
+    await open.execute({ url: 'http://127.0.0.1:8080/login' })
+    const detach = runtime.live.attach(() => {}, { width: 420, height: 760 })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(connection.calls.some(call => call.method === 'Emulation.setDeviceMetricsOverride'), false,
+      'the size of the user window is theirs')
+    detach()
+  } finally {
+    await runtime.dispose()
+    await fsp.rm(stateDir, { recursive: true, force: true })
+  }
 })
 
 /** Read the auditor's JSONL through the same reader the plugin uses. */
