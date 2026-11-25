@@ -4,6 +4,127 @@ Working notes for the road to a publishable release. The checklist in
 [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md) tracks gates; this file tracks
 what was done, the evidence, and what is deliberately left.
 
+## 2026-11-25 — 0.25.0 host-integration extensions
+
+**Scoped implementation and verification record.** The uncommitted extension
+set adds five opt-in/selection surfaces:
+
+- `reviewerEnabled` / `reviewerModel` / `reviewerPreset`: an independent fresh
+  child reviews each successful worker result. Review is off by default, adds a
+  model call, and a failed or unusable verdict leaves the subtask `unverified`
+  without rerunning the worker. `reviewerPreset` is mandatory when review is
+  enabled and must explicitly restrict the reviewer; without it no reviewer
+  child is spawned and the subtask is `unverified`.
+- `observability`: off by default, metadata-only OTel events plus optional
+  session-query/token-meter snapshots. Raw goals, prompts, reports, and Session
+  logs are excluded. `superagent_audit(format: "status")` exposes integration and
+  snapshot state.
+- `mcpMemory`: off by default and registered through the host `mcpManager` as
+  `stdio` or `streamable-http` (`http` alias). The host owns connection/process
+  cleanup; the plugin does not auto-install or spawn the server.
+- `scheduleProvider: auto | local`: `auto` prefers a complete Host Schedule;
+  missing services, delegated callers, budgets, missed-run `none`, and disabled
+  human priority keep plans local. `local` always uses the plugin timer.
+- `workspaceProvider: local | host`: `host` explicitly opts into retained host
+  worktrees and forces `maxParallel=1`. Create/restore briefly switches the
+  parent cwd and then restores it. Records in `<stateDir>/workspace-host.json`
+  are protected by the cross-process lock `<stateDir>/workspace-host.json.lock`;
+  resume reuses or restores a retained checkout. Missing services report
+  unavailable isolation rather than silently selecting local.
+
+Unit/fake coverage remains in `test/orchestrator.test.mjs`,
+`test/observability.test.mjs`, `test/mcp-memory.test.mjs`,
+`test/host-schedule.test.mjs`, `test/workspace-host.test.mjs`, and
+`test/host-integrations.test.mjs`. Scoped real-host results are recorded in
+`docs/e2e-0.25.0.md`:
+
+- On Windows, `workspace-write` failed with an ACL error. A temporary
+  `danger-full-access` host then created the retained worktree and restored the
+  parent cwd; the run recorded `limits.maxParallel: 1`.
+- Host Schedule creation succeeded with ID
+  `schedule-08a772e7-1618-4b3f-8515-0480659c8ca0`. Creation only is verified;
+  later scheduled execution is not claimed.
+- Real-host `sessionQuery` worked and `tokenPressure` read `40`. No OTel endpoint
+  was configured, so reporting was `inactive`.
+
+No real-host reviewer success is claimed. MCP memory has fake/unit verification
+only; no third-party server was started. These scoped results and unit coverage
+set DONE E5 to **MET**. The final `npm test` command uses file concurrency 2 and
+passed **five consecutive runs, each 747/747 with 0 failures**; logs are
+`release-closeout/final5-test-1.log` through `final5-test-5.log`, so DONE E1 is
+**MET**. The current `check-pack` passes with **77 files and 57 entry-reachable
+files**.
+
+The three READMEs share a Host integrations example, mandatory reviewer preset,
+host-workspace concurrency/locking details, and explicit evidence boundaries.
+DONE F5 records the config/documentation comparison.
+
+## 2026-11-25 — 0.25.0 review and release-doc repair
+
+**Release state: PENDING.** The 0.25.0 code, tests, and release docs are
+uncommitted and unpushed. Real-host and browser evidence is recorded in
+`docs/e2e-0.25.0.md`; no paid model route was used.
+
+For the earlier review snapshot, the baseline was **659 tests** and nineteen
+focused regressions brought that snapshot to **678/678 passing**. The later
+host-integration extensions are not included in that count; their current
+full-suite total and result are pending mainline confirmation. The earlier
+`npm run check-pack` result was **73 files in the tarball and all 53
+entry-reachable files shipped**.
+
+Features in this unreleased set:
+
+- Phase decision cards show a conclusion and impact first, with retry/skip/stop
+  actions and collapsed technical detail.
+- The composer accepts pasted, dropped, and multi-selected files in order;
+  queued uploads retain their enqueue-time project.
+
+### Agent review round 1 — security boundaries
+
+1. **Inline SVG artifacts could execute active content.** Added a sandbox CSP
+   with no script or network capability.
+2. **Archives could import active work and later resume or answer it.** Import
+   now accepts terminal runs only and marks them `importedReadOnly`.
+3. **Linked worktree paths could escape the writable boundary.** Pool and worker
+   paths now reject symbolic links and recheck resolved paths around creation.
+4. **Sync could commit local bearer tokens.** Tracked and staged token files are
+   refused, including nested names and case variants; console-local session data
+   is ignored.
+
+### Agent review round 2 — concurrency, state, and interaction races
+
+1. **A late stop could target a newly selected conversation.** Cancel now
+   requires the click-time session id and never creates a session as a side effect.
+2. **Queued cancellation and workspace preparation races could still spawn.** The
+   queue checks cross-process cancel markers under its lock before dispatch and
+   at timeout; preparation failures settle the subtask, and abort is rechecked
+   before spawn.
+3. **Parallel phases could reuse one budget.** Budget reservations persist under
+   the goal lock across ticks/restarts and release only after terminal usage;
+   read failures no longer release a live reservation.
+4. **Source retries could overlap an active dispatch.** Retry scheduling waits for
+   the active dispatch to finish.
+5. **Stale UI responses could authorize the wrong action.** Workbench diff and
+   save confirmation are version-bound; console optimistic messages remain
+   pending until the authoritative host user event.
+
+### Evidence and remaining gate
+
+- Earlier snapshot `npm test`: five consecutive full offline runs, each
+  **678 pass / 0 fail**; no network or API key. This predates the extension tests.
+- Earlier snapshot `npm run check-pack`: **73 files / 53 entry-reachable files**,
+  pass; the current packed file set is pending mainline confirmation.
+- Two agent adversarial review rounds are recorded above; their findings are
+  covered by the focused regressions in that 678-test snapshot.
+- **MET — earlier core-path real-host smoke:** the packed core build was
+  installed into fresh headless and web profiles on DSH 0.2.2-rc.5. Tool
+  activation, a 2/2-subtask run, the HTTP control probe, active cancellation,
+  interruption/resume with preserved child ids, read-only archive import, doctor,
+  and real-browser 1440/375px panel checks passed. This does not verify the later
+  host-integration extensions. Full commands, scope, and limitations:
+  `docs/e2e-0.25.0.md`.
+- Commit and push remain pending; this pass made no commit and no push.
+
 ## 2026-11-15 — findings from the adversarial review
 
 An independent review of `4b67a27..main` reported 5 major and 5 minor findings

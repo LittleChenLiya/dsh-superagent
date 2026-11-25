@@ -36,12 +36,12 @@ dsh-superagent 把这件事接过去：你说一句目标，它负责拆、负�
 
 ### 1. 装
 
-桌面端：侧边栏 **插件** → **Add plugin** → 输入 `@xiangyixie/dsh-superagent@0.24.0` → 安装。
+桌面端：侧边栏 **插件** → **Add plugin** → 输入 `@xiangyixie/dsh-superagent@0.25.0` → 安装。
 
 命令行：
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.24.0
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.25.0
 ```
 
 装完**重启 DSH**（插件只在宿主启动时加载一次）。也可以从「发现」页添加[插件索引](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/plugin-index.json)一键安装；升级一律先 `remove` 再 `add`。
@@ -107,6 +107,9 @@ export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 | `childProvider` | 跟随父级 | 可选的子 agent provider 路由覆盖。 |
 | `childModel` | 跟随父级 | 可选的子 agent 模型覆盖。 |
 | `childPreset` | 无 | 子 agent 使用的 agent preset。preset 决定子 agent 的工具集；这个宿主没有按 run 过滤工具的能力。 |
+| `reviewerEnabled` | `false` | 每个成功 worker 回复后增加一次独立 reviewer 子 agent 调用；不通过或无法验证时子任务为 `unverified`，不重跑 worker。 |
+| `reviewerModel` | 跟随父级 | reviewer 专用模型覆盖；只有开启 reviewer 才生效。 |
+| `reviewerPreset` | 无 | 开启 reviewer 时必需，且必须显式使用受限 preset；未配置时不 spawn reviewer，子任务为 `unverified`。 |
 | `plannerPreset` | 无 | 只给 planner 子 agent 用的 preset。请用无工具的 preset：planner 只读自己的 prompt 并返回 JSON，继承来的工具反而会引出一整轮工具调用而不是计划。需要宿主组合出 `agentPresets` 注册表。 |
 | `plannerProvider` | 跟随父级 | 可选，planner 子 agent 的 provider 路由覆盖。 |
 | `plannerModel` | 跟随父级 | 可选，planner 子 agent 的模型覆盖。规划只是一次 JSON 回合，所以这里换个更强的模型，通常比 worker 跑完之后再修计划便宜。 |
@@ -132,6 +135,7 @@ export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 | `notifyRetryDelayMs` | `2000` | 上述重试的首次间隔，每次翻倍，上限 60s。 |
 | `autoResumeRounds` | `1` | 在报告失败之前，针对"看起来是暂时性"的失败再重试子任务的轮数；`0` 关闭。 |
 | `childModelFallback` | 无 | 这类重试（配额、限流、超时）时使用的模型。不设则沿用配置的路由。 |
+| `injectPollMs` | `250` | 实时插话状态的轮询间隔，单位毫秒；范围 10–1000。 |
 | `memory` | `true` | 跨 run 的笔记本。见[跨运行记忆](#跨运行记忆)。 |
 | `memoryScope` | `default` | 按 scope 分文件，让不相关的项目彼此分开。run 的笔记写在这里；`rules` 和 `profile` 会被读进每一个 run。 |
 | `memoryMaxEntries` | `60` | 压缩阈值：一次会超过它的写入会把笔记本压缩到这个条数（400 行 / 128 KB 也是硬上限）。 |
@@ -144,10 +148,27 @@ export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 | `audit` | `true` | 只追加的审计轨迹。它只观察；关掉只会去掉轨迹，不会改变 run 的行为。 |
 | `policyFile` | 存在时为 `<stateDir>/policy.json` | 权限策略文件。不设置且文件不存在就表示没有策略，即旧行为。 |
 | `auditDir` | `<stateDir>/audit` | `audit.jsonl` 及其导出文件所在目录。 |
+| `sources` | 关 | GitHub / Feishu 来源接入；凭据只写环境变量名。见[来源接入](#来源接入)。 |
+| `runtime` | 关 | 浏览器与桌面运行时控制；子键和默认值见[运行时控制](#运行时控制)。 |
+| `observability` | 见下 | 可选的宿主可观测性适配；子键与默认值如下。 |
+| `observability.enabled` | `false` | 开启宿主 OTel、会话查询与 token 计量适配；只处理元数据。 |
+| `observability.serviceName` | `dsh-superagent` | OTel resource 与 scope 名称。 |
+| `observability.endpoint` | 空 | OTel 事件导出地址；为空时不创建 reporter。 |
+| `observability.exportSessionLogs` | `false` | 兼容位；即使为 `true` 也不开启原始 Session 日志导出。 |
+| `mcpMemory` | 见下 | 可选的宿主 MCP memory 注册桥；子键与默认值如下。 |
+| `mcpMemory.enabled` | `false` | 通过宿主 `mcpManager` 注册记忆 MCP；插件不安装 server。 |
+| `mcpMemory.serverName` | `superagent-memory` | 宿主注册名，1–32 个字母、数字、`_` 或 `-`。 |
+| `mcpMemory.transport` | `stdio` | `stdio` 或 `streamable-http`；`http` 是后者别名。 |
+| `mcpMemory.command` | `npx` | stdio 命令；需要宿主环境已有可执行文件，插件不负责安装。 |
+| `mcpMemory.args` | `["-y", "@modelcontextprotocol/server-memory"]` | stdio 参数数组。 |
+| `mcpMemory.env` | `{}` | stdio 环境变量；值可用 `$NAME` 或 `{ env: "NAME" }` 引用。 |
+| `mcpMemory.url` | 空 | streamable-http 的绝对 HTTP(S) 地址，不得内嵌凭据。 |
+| `mcpMemory.headers` | `{}` | streamable-http 请求头；凭据推荐用环境变量引用。 |
 | `controlPort` | 关 | 嵌入接口的回环端口；`0` 让系统挑一个空闲端口。见 [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md)。 |
 | `workspaceIsolation` | `false` | 给每个 worker 一个自己的 git worktree，避免并行 worker 互相覆盖。见[按 worker 隔离工作区](#按-worker-隔离工作区)。 |
 | `workspaceRoot` | 会话目录（见 `workspaceBase`） | `workspaceIsolation` 打开时，worker 在其中被隔离的仓库。必须是至少有一次提交的 git 工作树。 |
 | `workspaceBase` | `session` | 隔离的基准目录。`session` 用当前会话的目录（或 git 从它解析出的仓库根），`workspaceRoot` 只有指向同一目录时才生效；`config` 恢复旧行为，始终使用 `workspaceRoot`。两者不一致时 status 打印 `workspace warning`，并在日志里说明，不会静默改用另一个项目。 |
+| `workspaceProvider` | `local` | `local` 使用内置 Git worktree；`host` 显式使用宿主保留 worktree 服务，需同时开启 `workspaceIsolation`，并强制 `maxParallel=1`。 |
 | `workbenchPort` | 关 | 本地工作区面板的回环端口；`0` 让系统挑一个空闲端口。面板自己读写文件，不经过宿主 API。 |
 | `workbenchRoot` | `process.cwd()` | 面板可以浏览和编辑的目录。它之外的任何路径都会被拒绝。 |
 | `consolePort` | 关 | 对话控制台的回环端口；`0` 让系统挑一个空闲端口。需要宿主的 `sessionController` 服务。 |
@@ -155,9 +176,43 @@ export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 | `consolePreset` | 宿主默认 | 控制台会话挂载的 agent preset id。工具跟着这个 preset 走，不跟本插件走。 |
 | `boardPort` | 关 | 任务看板的回环端口；`0` 让系统挑一个空闲端口。一个页面里放子任务卡片、待办收件箱和内置模板。见[任务看板](#任务看板)。 |
 | `boardRoot` | 先取 `consoleRoot`，再取 `workbenchRoot` | 看板自己的对话会话所加入的目录，也是从模板启动的 run 的工作目录。 |
+| `scheduleProvider` | `auto` | `auto` 优先使用完整可用的宿主 Schedule；`local` 强制使用插件定时器。不兼容的宿主计划回退本地。 |
 | `schedulerTickSeconds` | `30` | 检查活跃计划是否到点的频率，单位秒（1–3600）。没有计划之前不会武装任何东西，所以对没有定时任务的安装没有影响。 |
 | `schedulerHumanPriority` | `true` | 计划 `human_priority` 的默认值：定时 run 不能占掉最后一个空闲并发位。 |
 | `schedulerMaxConsecutiveFailures` | `3` | 连续失败多少次后计划自动暂停并只通知一次（1–20）。 |
+
+### 宿主集成
+
+以下均为可选扩展；只复制需要的行，不要整块默认开启。示例中的模型、preset、URL 和环境变量必须替换成宿主里真实存在的值：
+
+```yaml
+- id: superagent
+  config:
+    reviewerEnabled: true
+    reviewerModel: review/model
+    reviewerPreset: read-only-review
+    observability:
+      enabled: true
+      endpoint: https://otel.example.test/v1/events
+      exportSessionLogs: false
+    mcpMemory:
+      enabled: true
+      transport: streamable-http
+      url: https://memory.example.test/mcp
+      headers:
+        Authorization:
+          env: MEMORY_MCP_TOKEN
+    scheduleProvider: auto
+    workspaceIsolation: true
+    workspaceProvider: host
+```
+
+- **独立 reviewer：** 默认关闭。开启后每个成功 worker 回复多一次独立子 agent 调用，并计入同一 run 的调用预算；`reviewerModel` / `reviewerPreset` 只影响 reviewer。`reviewerPreset` 在开启 reviewer 时必需，且必须显式限制 reviewer 的工具集；未配置时不 spawn reviewer，子任务为 `unverified`。审查失败、返回无效 JSON 或无法验证时也保持 `unverified`，不会自动重跑 worker。
+- **observability：** 默认关闭，只导出标识、状态、事件类型、耗时和 token 计数等元数据；goal、prompt、报告和原始 Session 日志不会进入 OTel。`exportSessionLogs` 即使为 `true` 也不改变这条边界。endpoint 为空只关闭事件导出；宿主提供 `sessionQuery` / `tokenMeter` 时仍可生成轻量快照。
+- **MCP memory：** 默认关闭，只向宿主 `mcpManager` 注册。支持 `stdio` 与 `streamable-http`（`http` 别名）；stdio 需预先安装命令，HTTP 需提供 URL。宿主拥有连接、进程与注册清理，插件不自动安装，也不自行启动 server。
+- **调度：** `scheduleProvider: auto` 优先使用完整可用的宿主 Schedule，`local` 强制插件定时器。宿主不可用、调用来自委派子 agent，或计划含 budget、Goal 模式 budget、`miss_policy: "none"`、`human_priority: false` 时，计划留在本地并说明原因。
+- **工作区：** `workspaceProvider: host` 是显式 opt-in，需 `workspaceIsolation: true` 以及宿主 `worktrees.create/restore`、`workingDirectory.set`，并强制 `maxParallel=1`。create/restore 会短暂切换父 cwd 后恢复；`<stateDir>/workspace-host.json` 记录由跨进程锁 `<stateDir>/workspace-host.json.lock` 保护。resume 会复用已保留 checkout，必要时通过宿主恢复，再恢复父 cwd。服务缺失时明确报告隔离不可用并共享目录，不静默回退本地 worktree。
+- **状态与验证边界：** `superagent_audit(format: "status")` 显示 reviewer、observability、MCP memory、Host Schedule 与 workspace provider 状态。Windows 真实宿主中 `sessionQuery` 可用、`tokenPressure` 读到 `40`；未配置 OTel endpoint，reporting 为 `inactive`。Host Schedule 创建成功，ID 为 `schedule-08a772e7-1618-4b3f-8515-0480659c8ca0`，但不代表后续计划执行已验证。`workspace-write` 曾因 ACL 失败；临时 `danger-full-access` 宿主随后成功创建保留 worktree 并恢复父 cwd。reviewer 尚无真实宿主成功证据；MCP memory 仅有 fake/unit 验证，未启动第三方 server。当前 `check-pack` 覆盖 77 个文件、57 个入口；当前离线测试套件为 747 项，五轮连续性结果记录在 `docs/PROGRESS.md`。
 
 ### 切换模型
 
@@ -240,13 +295,15 @@ was lost. Resolve with: git -C "/home/me/projects/api" merge superagent/20261115
 
 **基准目录。** 隔离默认以当前会话所在目录为准（`workspaceBase: "session"`），也就是沙箱边界、声明的交付物和合并目标都指向的那个目录；`workspaceRoot` 只有在指向同一目录时才生效，不一致时 `superagent_status` 会打印 `workspace warning` 并说明用了哪个目录，而不是默默在另一个项目里隔离。`workspaceBase: "config"` 恢复旧行为，始终使用 `workspaceRoot`。
 
-**无法隔离时。** 如果基准目录不是 git 工作树、`PATH` 里没有 git，或者仓库还没有任何提交，run 不会失败。它退回共享目录（也就是旧行为），并且 `superagent_status` 和通知都会说明：
+**无法隔离时（本地 provider）。** 如果基准目录不是 git 工作树、`PATH` 里没有 git，或者仓库还没有任何提交，run 不会失败。它退回共享目录（也就是旧行为），并且 `superagent_status` 和通知都会说明。`workspaceProvider: host` 改查宿主 worktree 与 workingDirectory 服务，缺服务时同样共享目录并说明原因，但不会静默使用本地 provider：
 
 ```
 workspace: isolation was requested but is unavailable — /tmp/notes is not a git working tree,
 so a per-worker worktree cannot be created; workers shared /tmp/notes, so their edits can
 overwrite each other
 ```
+
+**宿主 provider 的并发与状态。** `workspaceProvider: host` 强制 `maxParallel=1`。create/restore 会短暂切换父 cwd 后恢复；`<stateDir>/workspace-host.json` 中的保留记录由跨进程锁 `<stateDir>/workspace-host.json.lock` 保护。Windows 真实 `workspace-write` 运行曾因 ACL 失败；临时 `danger-full-access` 宿主随后成功创建 worktree 并恢复父 cwd。
 
 **直说限制。** `dsh@0.2.2-rc.1` 不给子 agent 提供 `cwd` 字段，所以插件无法在 spawn 时交给 worker 一个目录。隔离是一份 prompt 约定加一个真实分支：无视 prompt 的 worker 仍然能改主 checkout，但这种改动会在任何合并之前出现在 `git status` 里，也破坏不了兄弟分支。关掉隔离时，行为与这个选项存在之前完全一致。
 
@@ -477,7 +534,7 @@ cost: ¥0.0952 + $0.0248 (estimate; all models priced)
   planner、子任务依赖图、预算、attention、持久化和 resume 还是同一套，见
   [docs/LONG-GOAL.md](docs/LONG-GOAL.md)。
 - `superagent_audit(run_id?, subtask_id?, kind?, decision?, result?, target?,
-  since?, until?, limit?, order?, format?, out_path?)` 读审计轨迹，或把匹配的事件导出成一个 JSONL 或 CSV 文件。见
+  since?, until?, limit?, order?, format?, out_path?)` 读审计轨迹，把匹配事件导出成 JSONL 或 CSV；`format: "status"` 返回宿主集成状态，传 `run_id` 时附带该会话的轻量 observability 快照。见
   [权限与审计](#权限与审计)。
 
 
@@ -511,7 +568,7 @@ superagent_schedule(action: "create", name: "nightly audit",
 
 计划保存它的时钟（`cron` 或 `every_minutes`，外加 `timezone`）、goal、
 可选的 `mode` / `goal_mode` 与 acceptance、它自己的 `budget`，以及
-`human_priority`。计划持久化到状态目录下的 `schedules.json`，并在挂载时重新加载，所以宿主重启不会丢。只有至少存在一个计划时定时器才启动；空状态目录下 `init()` 不会创建那个状态文件。
+`human_priority`。使用本地 provider 时，计划持久化到状态目录下的 `schedules.json`，并在挂载时重新加载；只有至少存在一个本地计划时插件定时器才启动。`scheduleProvider: auto` 下兼容计划由宿主 Schedule 存储和投递，不写本地计划文件，也不武装插件定时器。下面关于错过窗口、预算与人工优先的描述适用于本地计划；宿主任务遵循宿主策略。
 
 ### 错过的窗口
 
@@ -635,7 +692,7 @@ policy.json: 1 problem in the permission policy
 `torn` 并跳过；损坏的行计为 `invalid`，不会掩盖其余部分。
 
 `superagent_audit` 可按 run、子任务、kind、decision、result、目标文本和时间窗读取。用 `format: "jsonl"` 或 `format: "csv"` 时，它写出一个可交付文件（默认
-`<stateDir>/audit/audit-export-<time>.<ext>`）并返回路径。
+`<stateDir>/audit/audit-export-<time>.<ext>`）并返回路径。`format: "status"` 返回宿主集成状态；指定 `run_id` 时还返回对应会话的元数据-only observability 快照。
 
 路径/命令护栏可以挂上去，而不需要审计层知道它的规则：
 `createAuditor({ dir, policyFile }).attachGuard(request => ({ decision, reason }))`。
@@ -1108,7 +1165,7 @@ SHA-256）。`--format html` 把同样的内容写成一个自包含
 
 | 你看到的 | 含义 | 怎么办 |
 | --- | --- | --- |
-| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.24.0` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
+| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.25.0` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
 | `Cannot find module .../lib/control.js`（或 `watch.js` / `report.js` / `wizard.js`），或宿主日志里的 `[dsh-superagent] dsh-superagent failed to load because a file it imports is missing: ...` | 那个 profile 里的副本不完整——被中断的 `add` 会留下残缺的解包结果。0.14.3 起的入口会直接点名缺哪个文件。已发布的包不是原因：每个版本都带全部三十四个 `lib/` 文件。 | 删掉 profile 的 `node_modules` 下该插件的目录（带 scope 的 `@xiangyixie/dsh-superagent`，或旧 tarball 安装留下的无 scope 的 `dsh-superagent`），再用同一条 `add` 命令重装，并带上版本号。不要手工拷贝文件进去。 |
 | `[error] the model provider rejected the API key` | 启动宿主的那个进程里缺 key 环境变量。 | 导出 `DEEPSEEK_API_KEY`（默认路由）或你那条路由声明的变量，然后重启 `dsh`。 |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | profile 的路由在环境里没有凭据。 | 设置该路由对应的环境变量并重启。错误行里写了路由名，以它为准，不要照本文。 |

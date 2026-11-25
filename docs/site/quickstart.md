@@ -1,7 +1,7 @@
 # 从零到跑通第一个 run
 
 面向第一次装这个插件的人。每一步都给出命令和"应该看到什么"；命令可以直接照抄。
-版本按 `0.9.3` 写。文中出现的 run id、token 数和费用来自仓库内的真实运行记录，
+版本按 `0.25.0` 写。文中出现的 run id、token 数和费用来自仓库内的真实运行记录，
 你自己的数字会不一样。
 
 > 约定：下面用 `dsh` 指代宿主命令。如果 `dsh` 不在 `PATH` 上，把它换成
@@ -22,7 +22,7 @@ node -v
 npx @deepseek-ai/dsh@0.2.2-rc.1 --version
 ```
 
-记下这个版本号。插件支持 `>= 0.2.2-rc.1 < 0.3.0`；版本对不上时，先解决宿主，
+记下这个版本号。插件支持 `>= 0.2.2-rc.1 < 0.3.0-0`；版本对不上时，先解决宿主，
 再装插件。
 
 ---
@@ -30,7 +30,7 @@ npx @deepseek-ai/dsh@0.2.2-rc.1 --version
 ## 第 2 步：把插件装进一个 profile
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.9.3
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.25.0
 ```
 
 `web` 换成你实际用的 profile（`headless` 也可以）。三个容易踩的点：
@@ -45,7 +45,7 @@ dsh plugin --profile web add @xiangyixie/dsh-superagent@0.9.3
 
 ```bash
 npm pack
-dsh plugin --profile web add ./xiangyixie-dsh-superagent-0.9.3.tgz
+dsh plugin --profile web add ./xiangyixie-dsh-superagent-0.25.0.tgz
 ```
 
 ---
