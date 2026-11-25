@@ -86,6 +86,10 @@ withGit('init commits the state and keeps credentials, locks and temp files out'
     await write(root, 'runs/.run-4.123.1.tmp', 'half written\n')
     await write(root, '.owner', '{"hostname":"machine-a"}\n')
     await write(root, 'control.json', '{"token":"secret"}\n')
+    for (const tokenFile of ['workbench.json', 'console.json', 'board.json']) {
+      await write(root, tokenFile, '{"token":"secret"}\n')
+    }
+    await write(root, 'console-workbench.json', '{"sessions":{}}\n')
     await write(root, 'notifications.json', '{"hour":[]}\n')
     await write(root, 'memory/.gitignore', '*\n')
     await write(root, 'memory/default.jsonl', '{"note":"one","at":"2026-11-14T00:00:00Z"}\n')
@@ -110,6 +114,10 @@ withGit('init commits the state and keeps credentials, locks and temp files out'
       'runs/.run-4.123.1.tmp',
       '.owner',
       'control.json',
+      'workbench.json',
+      'console.json',
+      'console-workbench.json',
+      'board.json',
       'notifications.json',
     ]) {
       assert.ok(!tracked.includes(local), `${local} must never be pushed`)
@@ -119,6 +127,22 @@ withGit('init commits the state and keeps credentials, locks and temp files out'
     for (const pattern of IGNORE_PATTERNS) {
       assert.ok(ignore.split('\n').includes(pattern), `${pattern} is written to .gitignore`)
     }
+  })
+})
+
+withGit('sync refuses token files already tracked under different casing', async () => {
+  await withTemp(async dir => {
+    const remote = path.join(dir, 'remote.git')
+    await fsp.mkdir(remote, { recursive: true })
+    await git(remote, ['init', '--bare'])
+    const root = path.join(dir, 'state')
+    const sync = createSync(root, { hostname: 'machine-a' })
+    await sync.init({ remote })
+    await write(root, 'nested/CONSOLE.JSON', '{"token":"secret"}\n')
+    await git(root, ['add', '-f', 'nested/CONSOLE.JSON'])
+
+    await assert.rejects(() => sync.init({ remote }), /refusing to sync tracked token file.*nested\/CONSOLE\.JSON/)
+    assert.equal((await git(root, ['log', '-1', '--format=%s'])).startsWith('sync init:'), true)
   })
 })
 

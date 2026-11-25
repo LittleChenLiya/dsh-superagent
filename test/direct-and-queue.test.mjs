@@ -22,6 +22,8 @@ function memoryStore() {
   const locks = new Map()
   const store = {
     owner: null,
+    cancels,
+    locks,
     async init() {},
     async list() {
       return [...runs.values()].map(run => structuredClone(run))
@@ -145,6 +147,209 @@ async function waitFor(predicate, label = 'condition') {
   }
   throw new Error(`timed out waiting for ${label}`)
 }
+
+test('a queued run settles as failed when promotion cannot take its lock', async () => {
+  const store = memoryStore()
+  const acquireLock = store.acquireLock
+  let failLocks = false
+  store.acquireLock = async (id, holder) => {
+    if (failLocks) throw new Error('lock disk unavailable')
+    return acquireLock(id, holder)
+  }
+  const firstWorker = gate()
+  let calls = 0
+  const spawner = makeSpawner(async () => {
+    calls += 1
+    if (calls === 1) await firstWorker.opened
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({
+    store,
+    spawner,
+    config: { maxActiveRuns: 1, queueTimeoutMinutes: 30 },
+  })
+  const first = await orchestrator.start({
+    goal: 'hold the only slot', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  await waitFor(() => calls === 1, 'the first worker to start')
+  const queued = await orchestrator.start({
+    goal: 'wait for the slot', parentSessionId: parent.id, parent, mode: 'direct', queue: true,
+  })
+  assert.equal(queued.status, 'queued')
+
+  failLocks = true
+  firstWorker.open()
+  const finished = await orchestrator.status(queued.id, 10)
+
+  assert.equal((await orchestrator.status(first.id, 10)).status, 'completed')
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.queue.waiting, false)
+  assert.match(finished.error, /could not be claimed.*lock disk unavailable/)
+  assert.equal(calls, 1, 'the unclaimed run must never dispatch a child')
+})
+
+test('a queued run settles as failed when its promotion save fails once', async () => {
+  const store = memoryStore()
+  const write = store.write
+  let failPromotion = false
+  store.write = async run => {
+    if (failPromotion && run.status === 'queued' && run.queue?.waiting === false) {
+      failPromotion = false
+      throw new Error('disk full during promotion')
+    }
+    return write(run)
+  }
+  const firstWorker = gate()
+  let calls = 0
+  const spawner = makeSpawner(async () => {
+    calls += 1
+    if (calls === 1) await firstWorker.opened
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({
+    store,
+    spawner,
+    config: { maxActiveRuns: 1, queueTimeoutMinutes: 30 },
+  })
+  const first = await orchestrator.start({
+    goal: 'hold the only slot', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  await waitFor(() => calls === 1, 'the first worker to start')
+  const queued = await orchestrator.start({
+    goal: 'wait for the slot', parentSessionId: parent.id, parent, mode: 'direct', queue: true,
+  })
+
+  failPromotion = true
+  firstWorker.open()
+  const finished = await orchestrator.status(queued.id, 10)
+
+  assert.equal((await orchestrator.status(first.id, 10)).status, 'completed')
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.queue.waiting, false)
+  assert.match(finished.error, /could not be claimed.*disk full during promotion/)
+  assert.equal(calls, 1)
+})
+
+test('a cross-process cancel marker settles a queued run without spawning or retaining its lock', async () => {
+  const store = memoryStore()
+  const acquireLock = store.acquireLock
+  let queuedId = null
+  store.acquireLock = async (id, holder) => {
+    // The other process writes only the marker; the queue owner must observe it
+    // after claiming the run and before turning the queue entry into execution.
+    if (id === queuedId) await store.requestCancel(id)
+    return acquireLock(id, holder)
+  }
+  const firstWorker = gate()
+  let calls = 0
+  const spawner = makeSpawner(async () => {
+    calls += 1
+    if (calls === 1) await firstWorker.opened
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({
+    store,
+    spawner,
+    config: { maxActiveRuns: 1, queueTimeoutMinutes: 30 },
+  })
+  const first = await orchestrator.start({
+    goal: 'hold the only slot', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  await waitFor(() => calls === 1, 'the first worker to start')
+  const queued = await orchestrator.start({
+    goal: 'cancel while waiting', parentSessionId: parent.id, parent, mode: 'direct', queue: true,
+  })
+  queuedId = queued.id
+
+  firstWorker.open()
+  const finished = await orchestrator.status(queued.id, 10)
+
+  assert.equal((await orchestrator.status(first.id, 10)).status, 'completed')
+  assert.equal(finished.status, 'cancelled')
+  assert.equal(finished.queue.waiting, false)
+  assert.equal(finished.queue.cancelled, true)
+  assert.match(finished.error, /cancelled/)
+  assert.equal(calls, 1, 'the cancelled queue entry must never dispatch a child')
+  assert.equal(store.cancels.has(queued.id), false, 'terminal settlement must clear the marker')
+  assert.equal(store.locks.has(queued.id), false, 'terminal settlement must release the run lock')
+})
+
+test('a queued run stays queued until its failure can be persisted', async () => {
+  const store = memoryStore()
+  const write = store.write
+  let failPersistence = false
+  store.write = async run => {
+    if (failPersistence && ((run.status === 'queued' && run.queue?.waiting === false)
+      || (run.status === 'failed' && run.queue?.failed))) {
+      throw new Error('disk still full')
+    }
+    return write(run)
+  }
+  const firstWorker = gate()
+  let calls = 0
+  const spawner = makeSpawner(async () => {
+    calls += 1
+    if (calls === 1) await firstWorker.opened
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({
+    store,
+    spawner,
+    config: { maxActiveRuns: 1, queueTimeoutMinutes: 30 },
+  })
+  const first = await orchestrator.start({
+    goal: 'hold the only slot', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  await waitFor(() => calls === 1, 'the first worker to start')
+  const queued = await orchestrator.start({
+    goal: 'wait for the slot', parentSessionId: parent.id, parent, mode: 'direct', queue: true,
+  })
+
+  failPersistence = true
+  firstWorker.open()
+  await new Promise(resolve => setTimeout(resolve, 200))
+  assert.equal((await store.read(queued.id)).status, 'queued')
+  assert.equal((await store.read(queued.id)).queue.waiting, true)
+
+  failPersistence = false
+  const finished = await orchestrator.status(queued.id, 10)
+  assert.equal((await orchestrator.status(first.id, 10)).status, 'completed')
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.queue.waiting, false)
+  assert.equal(calls, 2, 'the retained run starts once persistence recovers')
+})
+
+test('cancelling a direct subtask aborts its worker and never retries it', async () => {
+  let calls = 0
+  let finishFirst
+  const spawnChild = async () => {
+    calls += 1
+    if (calls === 1) {
+      return {
+        childId: 'direct-first',
+        result: new Promise(resolve => { finishFirst = resolve }),
+        dispose: async () => finishFirst({ output: [], stopReason: 'cancelled', diagnostic: 'disposed' }),
+      }
+    }
+    return { childId: 'direct-retry', result: new Promise(() => {}), dispose: async () => {} }
+  }
+  const { orchestrator } = orchestratorWith({
+    spawner: { spawnChild },
+    config: { attempts: 2 },
+  })
+  const run = await orchestrator.start({
+    goal: 'do one direct task', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  await waitFor(() => calls === 1, 'the direct worker to start')
+
+  const stopped = await orchestrator.cancelSubtask(run.id, '1')
+  assert.equal(stopped.subtasks[0].status, 'cancelled')
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'cancelled')
+  assert.equal(finished.subtasks[0].status, 'cancelled')
+  assert.equal(calls, 1, 'a cancelled direct worker must not be dispatched again')
+})
 
 test('direct mode runs one worker and its reply is the report', async () => {
   const { spawnChild, calls } = makeSpawner(async () => completed('the raw answer'))
@@ -321,6 +526,83 @@ test('a queued run fails when no slot frees before queueTimeoutMinutes', async (
   // The queued run never spawned a child.
   assert.equal(calls.length, 1)
 
+  await orchestrator.cancel(first.id)
+})
+
+test('a queued timeout honours a cross-process cancel marker', async () => {
+  const timers = []
+  const store = memoryStore()
+  const { spawnChild, calls } = makeSpawner(() => new Promise(() => {}))
+  const { orchestrator } = orchestratorWith({
+    store,
+    spawner: { spawnChild },
+    config: { maxActiveRuns: 1, queueTimeoutMinutes: 30 },
+    setTimer: (fn, ms) => {
+      const timer = { fn, ms, cleared: false, unref() {} }
+      timers.push(timer)
+      return timer
+    },
+    clearTimer: timer => { if (timer) timer.cleared = true },
+  })
+  const first = await orchestrator.start({ goal: 'holds the slot', parentSessionId: parent.id, parent, mode: 'direct' })
+  await waitFor(() => calls.length === 1, 'the first worker to start')
+  const queued = await orchestrator.start({ goal: 'cancel at timeout', parentSessionId: parent.id, parent, mode: 'direct', queue: true })
+
+  await store.requestCancel(queued.id)
+  await timers[0].fn()
+  const finished = await orchestrator.status(queued.id, 10)
+  assert.equal(finished.status, 'cancelled')
+  assert.equal(finished.queue.cancelled, true)
+  assert.notEqual(finished.queue.expired, true)
+  assert.equal(store.cancels.has(queued.id), false)
+  assert.equal(store.locks.has(queued.id), false)
+  assert.equal(calls.length, 1)
+  await orchestrator.cancel(first.id)
+})
+
+test('a timed-out queued run retries its terminal write until persistence recovers', async () => {
+  const timers = []
+  const store = memoryStore()
+  const write = store.write
+  let failTerminal = false
+  store.write = async run => {
+    if (failTerminal && run.status === 'failed' && run.queue?.expired) throw new Error('disk full at timeout')
+    return write(run)
+  }
+  const { spawnChild, calls } = makeSpawner(() => new Promise(() => {}))
+  const { orchestrator } = orchestratorWith({
+    store,
+    spawner: { spawnChild },
+    config: { maxActiveRuns: 1, queueTimeoutMinutes: 30 },
+    setTimer: (fn, ms) => {
+      const timer = { fn, ms, cleared: false, unref() {} }
+      timers.push(timer)
+      return timer
+    },
+    clearTimer: timer => { if (timer) timer.cleared = true },
+  })
+  const first = await orchestrator.start({
+    goal: 'holds the slot', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  await waitFor(() => calls.length === 1, 'the first worker to start')
+  const queued = await orchestrator.start({
+    goal: 'times out while disk is full', parentSessionId: parent.id, parent, mode: 'direct', queue: true,
+  })
+
+  failTerminal = true
+  timers[0].fn()
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.equal((await store.read(queued.id)).status, 'queued')
+  assert.equal((await store.read(queued.id)).queue.waiting, true)
+
+  failTerminal = false
+  const retry = timers.find(timer => timer.ms === 1000 && !timer.cleared)
+  assert.ok(retry, 'a terminal retry must remain scheduled')
+  await retry.fn()
+  const expired = await orchestrator.status(queued.id, 10)
+  assert.equal(expired.status, 'failed')
+  assert.equal(expired.queue.expired, true)
+  assert.equal(calls.length, 1)
   await orchestrator.cancel(first.id)
 })
 

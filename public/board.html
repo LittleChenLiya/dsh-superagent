@@ -292,6 +292,7 @@
   .toast.bad { background: var(--bad); }
 
   .gate { min-height: 70vh; display: flex; align-items: center; justify-content: center; }
+  .gate[hidden] { display: none; }
   .gate .panel { width: min(520px, 100%); padding: 28px; }
   .gate h2 { margin: 0 0 6px; font-size: 18px; }
   .gate p { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
@@ -402,6 +403,11 @@
     tab: 'board',
     templateId: null,
     inboxDraft: new Map(),
+    inboxSig: '',
+    inboxRenderPending: false,
+    templateDrafts: new Map(),
+    templatesSig: '',
+    templateFormSig: '',
     source: null,
     retry: 0,
     timer: null,
@@ -465,12 +471,13 @@
   }
 
   function readToken() {
+    try { localStorage.removeItem('dsh.board.token'); } catch {}
     const fromUrl = tokenFromUrl();
     if (fromUrl) {
-      try { localStorage.setItem('dsh.board.token', fromUrl); } catch {}
+      try { sessionStorage.setItem('dsh.board.token', fromUrl); } catch {}
       return fromUrl;
     }
-    try { return localStorage.getItem('dsh.board.token') || ''; } catch { return ''; }
+    try { return sessionStorage.getItem('dsh.board.token') || ''; } catch { return ''; }
   }
 
   function showGate(message) {
@@ -494,8 +501,11 @@
     });
     let payload = null;
     try { payload = await res.json(); } catch {}
-    if (res.status === 401 || res.status === 403 && payload?.error?.id === 'unauthorized') {
+    if (res.status === 401 || res.status === 403) {
+      state.token = '';
+      try { sessionStorage.removeItem('dsh.board.token'); } catch {}
       try { localStorage.removeItem('dsh.board.token'); } catch {}
+      if (state.source) { try { state.source.close(); } catch {} }
       showGate('口令不正确或已过期，请重新粘贴。');
       throw new Error('访问口令不正确');
     }
@@ -681,10 +691,11 @@
   }
 
   function cardHtml(run, subtask, capacity) {
+    const taskName = key => esc(run.subtasks.find(item => item.key === key)?.title || key);
     const deps = subtask.dependsOn.length
-      ? `<span>依赖 ${subtask.dependsOn.map(esc).join('、')}</span>` : '';
+      ? `<span>依赖 ${subtask.dependsOn.map(taskName).join('、')}</span>` : '';
     const waiting = subtask.waitingOn.length
-      ? `<span>等待 ${subtask.waitingOn.map(esc).join('、')}</span>` : '';
+      ? `<span>等待 ${subtask.waitingOn.map(taskName).join('、')}</span>` : '';
     const usage = [
       subtask.tokens != null ? `<span>tokens <b class="mono">${esc(fmtTokens(subtask.tokens))}</b></span>` : '',
       subtask.cost ? `<span>花费 <b class="mono">${esc(fmtCost(subtask.cost))}</b></span>` : '',
@@ -824,10 +835,12 @@
     }
   }
 
-  function showReport(runId) {
-    const detail = state.detail && state.detail.run.id === runId ? state.detail : null;
-    if (!detail || !detail.report) {
-      loadDetail().then(() => showReport(runId));
+  async function showReport(runId) {
+    let detail = state.detail && state.detail.run.id === runId ? state.detail : null;
+    if (!detail) await loadDetail();
+    detail = state.detail && state.detail.run.id === runId ? state.detail : null;
+    if (!detail?.report) {
+      openModal('最终报告', '<div class="empty">这次运行还没有最终报告。</div>');
       return;
     }
     openModal('最终报告', '<pre>' + esc(detail.report) + '</pre>');
@@ -911,6 +924,15 @@
   function renderInbox() {
     const items = state.snapshot?.inbox || [];
     const root = $('inbox');
+    const sig = JSON.stringify(items);
+    if (state.inboxSig === sig) return;
+    const active = document.activeElement;
+    if (active && !active.disabled && root.contains(active) && (active.dataset.answer || active.dataset.item || active.dataset.send)) {
+      state.inboxRenderPending = true;
+      return;
+    }
+    state.inboxSig = sig;
+    state.inboxRenderPending = false;
     if (items.length === 0) {
       root.innerHTML = `<div class="panel"><div class="empty"><div class="emoji">✓</div><strong>当前没有需要你处理的事</strong>运行会自己往前走；出问题时这里会亮起来。</div></div>`;
       return;
@@ -930,13 +952,35 @@
         <div class="impact">${esc(item.impact)}</div>
         ${choices ? '<div class="answer-row">' + choices + '</div>' : ''}
         <div class="answer-box">
-          <textarea data-answer="${esc(item.id)}" placeholder="也可以直接写你的回答或补充说明"></textarea>
+          <textarea data-answer="${esc(item.id)}" placeholder="也可以直接写你的回答或补充说明">${esc(draft.text || draft.choice)}</textarea>
           <button class="btn primary" data-send="${esc(item.id)}">提交回答</button>
         </div>
       </article>`;
     }).join('') + '</div>';
 
+    const flushPending = () => {
+      if (!state.inboxRenderPending) return;
+      setTimeout(() => {
+        if (!state.inboxRenderPending) return;
+        state.inboxRenderPending = false;
+        renderInbox();
+      }, 0);
+    };
+    root.querySelectorAll('[data-answer]').forEach(area => {
+      const id = area.dataset.answer;
+      const draft = state.inboxDraft.get(id) || { text: '', choice: '' };
+      area.value = draft.text || draft.choice || '';
+      area.addEventListener('input', () => {
+        draft.text = area.value;
+        state.inboxDraft.set(id, draft);
+      });
+      area.addEventListener('blur', flushPending);
+    });
+    root.querySelectorAll('[data-send]').forEach(button => {
+      button.addEventListener('blur', flushPending);
+    });
     root.querySelectorAll('[data-choice]').forEach(button => {
+      button.addEventListener('blur', flushPending);
       button.addEventListener('click', () => {
         const id = button.dataset.item;
         const draft = state.inboxDraft.get(id) || { text: '', choice: '' };
@@ -962,6 +1006,7 @@
   async function sendInbox(itemId) {
     const card = document.querySelector('[data-inbox="' + cssEscape(itemId) + '"]');
     const area = card?.querySelector('[data-answer]');
+    const button = card?.querySelector('[data-send]');
     const draft = state.inboxDraft.get(itemId) || { choice: '' };
     const answer = (area?.value || draft.choice || '').trim();
     if (!answer) { toast('先选一个选项，或写一句你的回答', true); return; }
@@ -969,15 +1014,26 @@
     if (state.busy.has(key)) return;
     state.busy.add(key);
     if (area) area.disabled = true;
+    if (button) button.disabled = true;
+    let submitted = false;
     try {
       const data = await post('/api/board/inbox/' + encodeURIComponent(itemId) + '/answer', { answer });
+      submitted = true;
       state.inboxDraft.delete(itemId);
+      if (state.snapshot?.inbox) state.snapshot.inbox = state.snapshot.inbox.filter(item => item.id !== itemId);
+      state.inboxSig = '';
+      state.inboxRenderPending = false;
+      button?.blur();
+      renderInbox();
       toast(data?.message || '已提交，运行会从这里继续。');
     } catch (error) {
       toast(error.message, true);
     } finally {
       state.busy.delete(key);
-      if (area) area.disabled = false;
+      if (!submitted) {
+        if (area) area.disabled = false;
+        if (button) button.disabled = false;
+      }
     }
   }
 
@@ -986,19 +1042,23 @@
   function renderTemplates() {
     const templates = state.snapshot?.templates || [];
     const grid = $('tpl-grid');
-    grid.innerHTML = templates.map(template => `
-      <button class="tpl-card" data-tpl="${esc(template.id)}" aria-current="${state.templateId === template.id}">
-        <h3>${esc(template.title)}</h3>
-        <p>${esc(template.purpose)}</p>
-        <div class="tpl-tags">
-          <span class="tag">约 ${template.estimate} 个子任务</span>
-          <span class="tag">${template.params.length} 个参数</span>
-          <span class="tag">${esc(template.bestFor)}</span>
-        </div>
-      </button>`).join('');
-    grid.querySelectorAll('[data-tpl]').forEach(button => {
-      button.addEventListener('click', () => selectTemplate(button.dataset.tpl));
-    });
+    const sig = JSON.stringify([templates, state.templateId]);
+    if (state.templatesSig !== sig) {
+      state.templatesSig = sig;
+      grid.innerHTML = templates.map(template => `
+        <button class="tpl-card" data-tpl="${esc(template.id)}" aria-current="${state.templateId === template.id}">
+          <h3>${esc(template.title)}</h3>
+          <p>${esc(template.purpose)}</p>
+          <div class="tpl-tags">
+            <span class="tag">约 ${template.estimate} 个子任务</span>
+            <span class="tag">${template.params.length} 个参数</span>
+            <span class="tag">${esc(template.bestFor)}</span>
+          </div>
+        </button>`).join('');
+      grid.querySelectorAll('[data-tpl]').forEach(button => {
+        button.addEventListener('click', () => selectTemplate(button.dataset.tpl));
+      });
+    }
     if (state.templateId) renderTemplateForm();
   }
 
@@ -1016,12 +1076,24 @@
     panel.hidden = false;
     $('tpl-form-title').textContent = template.title;
     $('tpl-purpose').textContent = template.purpose + '。预计约 ' + template.estimate + ' 个子任务，规划器可能会合并步骤。';
-    $('tpl-fields').innerHTML = template.params.map(param => `
-      <div class="field">
-        <label for="p-${esc(param.name)}">${esc(param.label)}</label>
-        <p class="desc">${esc(param.hint)}${param.description ? ' · ' + esc(param.description) : ''}</p>
-        <textarea id="p-${esc(param.name)}" data-param="${esc(param.name)}" rows="3"></textarea>
-      </div>`).join('');
+    const sig = JSON.stringify([template.id, template.params]);
+    if (state.templateFormSig !== sig) {
+      state.templateFormSig = sig;
+      const draft = state.templateDrafts.get(template.id) || {};
+      $('tpl-fields').innerHTML = template.params.map(param => `
+        <div class="field">
+          <label for="p-${esc(param.name)}">${esc(param.label)}</label>
+          <p class="desc">${esc(param.hint)}${param.description ? ' · ' + esc(param.description) : ''}</p>
+          <textarea id="p-${esc(param.name)}" data-param="${esc(param.name)}" rows="3">${esc(draft[param.name] || '')}</textarea>
+        </div>`).join('');
+      $('tpl-fields').querySelectorAll('[data-param]').forEach(input => {
+        input.addEventListener('input', () => {
+          const current = state.templateDrafts.get(template.id) || {};
+          current[input.dataset.param] = input.value;
+          state.templateDrafts.set(template.id, current);
+        });
+      });
+    }
     $('tpl-start').disabled = !(state.snapshot?.capabilities.start);
     if (!state.snapshot?.capabilities.start) {
       $('tpl-note').textContent = state.snapshot?.capabilities.reason || '当前宿主不能从看板发起运行';
@@ -1081,7 +1153,7 @@
     $('gate-submit').addEventListener('click', () => {
       const value = $('gate-token').value.trim();
       if (!value) { $('gate-err').textContent = '先粘贴 token。'; return; }
-      try { localStorage.setItem('dsh.board.token', value); } catch {}
+      try { sessionStorage.setItem('dsh.board.token', value); } catch {}
       state.token = value;
       $('gate-err').textContent = '';
       connect();

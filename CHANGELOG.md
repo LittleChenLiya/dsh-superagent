@@ -8,6 +8,34 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.25.0 — 2026-11-25
+
+### 新增
+
+- 长期目标阶段决策卡先显示结论和影响；重试、跳过、停止直接可选，技术详情默认折叠，需要填写回答时才显示输入框。
+- 对话输入区支持粘贴、拖拽和多选上传，文件按顺序处理；排队中的上传保留提交时的项目，切换项目不会把路径插入新会话。
+- 新增默认关闭的独立 reviewer：`reviewerEnabled` 开启后，每个成功 worker 回复都会多一次 reviewer 子 agent 调用，可用 `reviewerModel` / `reviewerPreset` 单独路由。`reviewerPreset` 是开启 reviewer 的必需条件，不是建议；未配置时不 spawn reviewer，子任务标记为 `unverified`。审查失败或无法验证时也标记为 `unverified`，不重跑 worker。
+- 新增默认关闭的 `observability`：只导出标识、状态、耗时和 token 计数等元数据，不导出 goal、prompt、报告或原始会话日志；`superagent_audit` 的 `format: "status"` 可查看集成状态与轻量会话快照。
+- 新增默认关闭的 `mcpMemory`：通过宿主 `mcpManager` 注册，支持 `stdio` 与 `streamable-http`（`http` 别名）；连接与清理由宿主管理，插件不自动安装或启动 MCP server。
+- 新增 `scheduleProvider: auto | local`：`auto` 优先使用完整可用的宿主 Schedule；宿主不可用，或计划带 budget、`miss_policy: "none"`、`human_priority: false` 等不兼容设置时回退本地调度，`local` 强制使用插件定时器。
+- 新增 `workspaceProvider: local | host`：`host` 显式 opt-in 宿主保留 worktree 服务，创建后恢复父会话 cwd，并把工作树记录持久化以支持 resume；服务缺失时明确报告隔离不可用，不静默改用本地 worktree。host 模式强制 `maxParallel=1`；create/restore 会短暂切换父 cwd 后恢复，记录通过 `<stateDir>/workspace-host.json.lock` 跨进程加锁。
+
+### 安全与可靠性
+
+- 内联 SVG 产物改用禁止脚本和网络请求的沙箱 CSP；归档只接受终态 run，导入后标记只读，不能 resume 或 answer。
+- 工作树池和 worker 目录在创建前后校验符号链接与真实路径，拒绝把 checkout 写到沙箱边界外。
+- 状态同步拒绝已跟踪或待提交的令牌文件，包括嵌套路径和不同大小写；本地控制台会话数据也纳入忽略规则。
+- 停止当前生成必须带会话 id，过期点击不会新建会话或停止新会话。
+- 排队 run 在启动或超时结算前检查跨进程取消标记；工作区准备失败或准备期间取消，不会再卡在 `running` 或派生子 agent。
+- 长期目标预算预留跨调度 tick 和重启保留，终态后释放；读取 run 失败不会误释放仍在执行的预算。
+- 来源事件重试等待当前分发结束，且重复调度不再重置最早退避时间；工作台丢弃切换文件或编辑后的旧 diff，保存确认随内容变化失效；控制台等宿主用户事件再确认乐观消息，避免重复。
+
+### 收尾验证
+
+- Windows 真实宿主中，`workspace-write` 曾因 ACL 失败；临时使用 `danger-full-access` 后，host worktree 创建、记录落盘和父 cwd 恢复成功。Host Schedule 创建成功，ID 为 `schedule-08a772e7-1618-4b3f-8515-0480659c8ca0`；这不代表该计划的后续执行已验证。
+- 真实宿主 `sessionQuery` 可用，`tokenPressure` 读取为 `40`；未配置 OTel endpoint，因此 reporting 为 `inactive`。reviewer 尚未取得真实宿主成功证据；MCP memory 仅有 fake/unit 验证，未启动第三方 server。
+- 当前 `check-pack` 通过：tarball 共 77 个文件，57 个入口可达文件全部随包发布；最终测试命令连续五轮均为 747/747 通过、0 失败。
+
 ## 0.24.0 — 2026-11-19
 
 - 聊天里保留委托回执。工作台任务卡显示目标、阶段、报告和产物，可在当前会话内预览其他会话的交付物。

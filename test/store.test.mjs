@@ -158,15 +158,45 @@ test('a run lock lets exactly one process win', async () => {
   await fsp.rm(dir, { recursive: true, force: true })
 })
 
-test('mount cleanup drops locks of finished runs', async () => {
+test('a stale release cannot remove a replacement run lock', async () => {
   const { store, dir } = await tempStore()
-  await store.write({ id: '20260101T000000-done', createdAt: '2026-01-01T00:00:00.000Z', status: 'completed' })
-  await store.acquireLock('20260101T000000-done', { pid: 1, hostname: 'machine-a', at: 'now' })
+  const id = '20260101T000000-lock'
+  const first = { pid: 1111, hostname: 'machine-a', at: new Date().toISOString() }
+  assert.equal((await store.acquireLock(id, first)).acquired, true)
+  const replacement = { pid: 2222, hostname: 'machine-b', at: new Date().toISOString(), token: 'replacement' }
+  await fsp.writeFile(path.join(store.runsDir, `${id}.lock`), `${JSON.stringify(replacement)}\n`)
+
+  await store.releaseLock(id, first)
+
+  assert.deepEqual(await store.readLock(id), replacement)
+  await fsp.rm(dir, { recursive: true, force: true })
+})
+
+test('a legacy lock holder can still be released without token metadata', async () => {
+  const { store, dir } = await tempStore()
+  const id = '20260101T000000-legacy'
+  const holder = { pid: 4321, hostname: 'machine-b', at: new Date().toISOString() }
+  await fsp.writeFile(path.join(store.runsDir, `${id}.lock`), `${JSON.stringify(holder)}\n`)
+
+  await store.releaseLock(id, holder)
+
+  assert.equal(await store.readLock(id), null)
+  await fsp.rm(dir, { recursive: true, force: true })
+})
+
+test('mount cleanup drops locks of finished runs only after their local holder is dead', async () => {
+  const { store, dir } = await tempStore()
+  const id = '20260101T000000-done'
+  await store.write({ id, createdAt: '2026-01-01T00:00:00.000Z', status: 'completed' })
+  await store.acquireLock(id, { pid: process.pid, hostname: os.hostname(), at: new Date().toISOString() })
 
   await store.cleanup()
+  assert.ok(await store.readLock(id), 'a live process may still be publishing its terminal state')
 
-  const names = await fsp.readdir(store.runsDir)
-  assert.equal(names.includes('20260101T000000-done.lock'), false)
+  await store.releaseLock(id)
+  await store.acquireLock(id, { pid: 2147483647, hostname: os.hostname(), at: new Date().toISOString() })
+  await store.cleanup()
+  assert.equal(await store.readLock(id), null, 'a dead local holder cannot block recovery')
   await fsp.rm(dir, { recursive: true, force: true })
 })
 

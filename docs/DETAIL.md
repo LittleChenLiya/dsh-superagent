@@ -16,7 +16,7 @@ Long-horizon autonomous runs: give it one goal and it plans parallel subtasks, r
 
 The desktop app's Add plugin dialog accepts any of these three inputs:
 
-1. **Package name**: `@xiangyixie/dsh-superagent@0.14.1`
+1. **Package name**: `@xiangyixie/dsh-superagent@0.25.0`
 2. **GitHub repository**: `https://github.com/LittleChenLiya/dsh-superagent`
 3. **Local directory**: `file:` followed by the absolute path of the checkout
 

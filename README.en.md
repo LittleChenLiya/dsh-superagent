@@ -36,12 +36,12 @@ Three steps. The desktop app and the CLI install the same plugin; each step says
 
 ### 1. Install
 
-Desktop: **Plugins** → **Add plugin** → enter `@xiangyixie/dsh-superagent@0.24.0` → install.
+Desktop: **Plugins** → **Add plugin** → enter `@xiangyixie/dsh-superagent@0.25.0` → install.
 
 CLI:
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.24.0
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.25.0
 ```
 
 **Restart DSH** afterwards — plugins are loaded once at host startup. You can also add the [plugin index](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/plugin-index.json) on the **Discover** page for one-click installs; upgrades are always remove-then-add.
@@ -107,6 +107,9 @@ Row config in `<profile>/cordis.patch.yml`:
 | `childProvider` | parent's | Optional provider route override for child agents. |
 | `childModel` | parent's | Optional model override for child agents. |
 | `childPreset` | none | Agent preset for child agents. A preset owns the child's tool set; this host has no per-run tool filter. |
+| `reviewerEnabled` | `false` | Add one independent reviewer child after each successful worker reply. A failed or unverifiable review leaves the subtask `unverified` without rerunning the worker. |
+| `reviewerModel` | parent's | Model override for the reviewer only; used only when review is enabled. |
+| `reviewerPreset` | none | Required when `reviewerEnabled` is true; must be an explicitly restricted preset. Without it no reviewer child is spawned and the subtask is `unverified`. |
 | `plannerPreset` | none | Agent preset for the planner child only. Use a tool-less preset: a planner only reads its prompt and returns JSON, and inherited tools invite a tool loop instead of a plan. Requires the host to compose an `agentPresets` registry. |
 | `plannerProvider` | parent's | Optional provider route override for the planner child. |
 | `plannerModel` | parent's | Optional model override for the planner child. Planning is a single JSON turn, so a stronger model here is usually cheaper than fixing plans after workers ran. |
@@ -132,6 +135,7 @@ Row config in `<profile>/cordis.patch.yml`:
 | `notifyRetryDelayMs` | `2000` | First delay between those attempts; it doubles per attempt, capped at 60s. |
 | `autoResumeRounds` | `1` | Extra rounds that retry subtasks which failed in a way that looks transient, before the failure is reported; `0` disables. |
 | `childModelFallback` | none | Model used on such a retry (quota, rate limit, timeout). Unset keeps the configured route. |
+| `injectPollMs` | `250` | Live-injection polling interval in milliseconds; range 10–1000. |
 | `memory` | `true` | Cross-run notebook. See [Cross-run memory](#cross-run-memory). |
 | `memoryScope` | `default` | Notebook file per scope, so unrelated projects can stay apart. Run notes are written here; `rules` and `profile` are read into every run. |
 | `memoryMaxEntries` | `60` | Compaction threshold: a write that would exceed it compacts the notebook down to this many notes (400 lines / 128 KB are hard caps too). |
@@ -144,10 +148,27 @@ Row config in `<profile>/cordis.patch.yml`:
 | `audit` | `true` | Append-only audit trail. It only observes; turning it off removes the trail, never the run behaviour. |
 | `policyFile` | `<stateDir>/policy.json` when it exists | Permission policy. Unset and absent means no policy, i.e. the old behaviour. |
 | `auditDir` | `<stateDir>/audit` | Where `audit.jsonl` and its exports live. |
+| `sources` | off | GitHub / Feishu source ingress; credentials are environment names only. See [Sources](#sources). |
+| `runtime` | off | Browser and desktop runtime control; nested keys and defaults are under [Runtime control](#runtime-control). |
+| `observability` | below | Optional host observability adapter; nested keys and defaults follow. |
+| `observability.enabled` | `false` | Enable host OTel, session-query, and token-meter adapters; metadata only. |
+| `observability.serviceName` | `dsh-superagent` | OTel resource and scope name. |
+| `observability.endpoint` | empty | OTel event endpoint; no reporter is created when empty. |
+| `observability.exportSessionLogs` | `false` | Compatibility flag; even `true` never enables raw Session-log export. |
+| `mcpMemory` | below | Optional host MCP memory registration bridge; nested keys and defaults follow. |
+| `mcpMemory.enabled` | `false` | Register memory MCP through the host `mcpManager`; the plugin installs no server. |
+| `mcpMemory.serverName` | `superagent-memory` | Host registration name: 1–32 letters, digits, `_`, or `-`. |
+| `mcpMemory.transport` | `stdio` | `stdio` or `streamable-http`; `http` aliases the latter. |
+| `mcpMemory.command` | `npx` | stdio command; the executable must already exist in the host environment. The plugin does not install it. |
+| `mcpMemory.args` | `["-y", "@modelcontextprotocol/server-memory"]` | stdio argument array. |
+| `mcpMemory.env` | `{}` | stdio environment; values may reference `$NAME` or `{ env: "NAME" }`. |
+| `mcpMemory.url` | empty | Absolute HTTP(S) URL for streamable-http; embedded credentials are refused. |
+| `mcpMemory.headers` | `{}` | streamable-http headers; environment references are recommended for credentials. |
 | `controlPort` | off | Loopback port for the embedding surface; `0` picks a free one. See [docs/embedding.md](https://github.com/LittleChenLiya/dsh-superagent/blob/main/docs/embedding.md). |
 | `workspaceIsolation` | `false` | Give every worker its own git worktree so parallel workers cannot overwrite each other. See [Per-worker workspace isolation](#per-worker-workspace-isolation). |
 | `workspaceRoot` | session directory (see `workspaceBase`) | Repository the workers are isolated in when `workspaceIsolation` is on. Must be a git working tree with at least one commit. |
 | `workspaceBase` | `session` | What isolation is based on. `session` uses the current session's directory (or the repository root git resolves from it) and honours `workspaceRoot` only when it names the same directory; `config` restores the old behaviour of always using `workspaceRoot`. A mismatch prints `workspace warning` in status and in the log instead of silently isolating in another project. |
+| `workspaceProvider` | `local` | `local` uses the built-in Git worktree manager; `host` explicitly opts into the host retained-worktree service, requires `workspaceIsolation`, and forces `maxParallel=1`. |
 | `workbenchPort` | off | Loopback port for the local workspace panel; `0` picks a free one. The panel reads and edits files itself, without a host API. |
 | `workbenchRoot` | `process.cwd()` | Directory the panel may browse and edit. Every path outside it is refused. |
 | `consolePort` | off | Loopback port for the conversation console; `0` picks a free one. Requires the host `sessionController` service. |
@@ -155,9 +176,81 @@ Row config in `<profile>/cordis.patch.yml`:
 | `consolePreset` | host default | Agent preset id the console session mounts. Tools follow this preset, not this plugin. |
 | `boardPort` | off | Loopback port for the task board; `0` picks a free one. One page with subtask cards, the human inbox, and the built-in templates. See [Task board](#task-board). |
 | `boardRoot` | `consoleRoot`, then `workbenchRoot` | Directory the board's own conversation session joins, and where template-started runs work. |
+| `scheduleProvider` | `auto` | `auto` prefers a complete Host Schedule service; `local` forces the plugin timer. Plans incompatible with the host stay local. |
 | `schedulerTickSeconds` | `30` | How often a live plan is checked for a due window, in seconds (1–3600). Nothing is armed until a plan exists, so this has no effect on an install with no schedules. |
 | `schedulerHumanPriority` | `true` | Default for a plan's `human_priority`: a scheduled run may not take the last free concurrency slot. |
 | `schedulerMaxConsecutiveFailures` | `3` | Consecutive failed executions before a plan pauses itself and says so once (1–20). |
+
+### Host integrations
+
+These are optional extensions. Copy only the rows you need; do not enable the
+whole block by default. Replace the example model, preset, URLs, and environment
+variable with values that actually exist in the host:
+
+```yaml
+- id: superagent
+  config:
+    reviewerEnabled: true
+    reviewerModel: review/model
+    reviewerPreset: read-only-review
+    observability:
+      enabled: true
+      endpoint: https://otel.example.test/v1/events
+      exportSessionLogs: false
+    mcpMemory:
+      enabled: true
+      transport: streamable-http
+      url: https://memory.example.test/mcp
+      headers:
+        Authorization:
+          env: MEMORY_MCP_TOKEN
+    scheduleProvider: auto
+    workspaceIsolation: true
+    workspaceProvider: host
+```
+
+- **Independent reviewer:** off by default. Each successful worker reply adds
+  one independent child call, charged to the same run budget.
+  `reviewerModel` / `reviewerPreset` affect only the reviewer. `reviewerPreset`
+  is required whenever review is enabled and must explicitly restrict the
+  reviewer's tools. Without it, no reviewer child is spawned and the subtask is
+  `unverified`. A failed review, invalid JSON, or an unverifiable result also
+  leaves the subtask `unverified`; the worker is not rerun automatically.
+- **Observability:** off by default and metadata-only. IDs, status, event type,
+  duration, and token counts may be exported; goals, prompts, reports, and raw
+  Session logs never enter OTel. `exportSessionLogs: true` does not change that
+  boundary. An empty endpoint disables event export only; lightweight snapshots
+  still work when the host provides `sessionQuery` / `tokenMeter`.
+- **MCP memory:** off by default and registered only through the host
+  `mcpManager`. Both `stdio` and `streamable-http` (`http` alias) are supported.
+  Install a stdio command beforehand or provide an HTTP URL. The host owns the
+  connection, process, and registration cleanup; the plugin neither installs
+  nor starts the server itself.
+- **Scheduling:** `scheduleProvider: auto` prefers a complete Host Schedule
+  service; `local` forces the plugin timer. Plans stay local with a reason when
+  the host is unavailable, the caller is a delegated child, or the plan uses a
+  budget, goal-mode budget, `miss_policy: "none"`, or `human_priority: false`.
+- **Workspaces:** `workspaceProvider: host` is an explicit opt-in and requires
+  `workspaceIsolation: true` plus host `worktrees.create/restore` and
+  `workingDirectory.set`. It forces `maxParallel=1`. Creation and restoration
+  briefly switch the parent cwd and then restore it. Records in
+  `<stateDir>/workspace-host.json` are protected by the cross-process lock
+  `<stateDir>/workspace-host.json.lock`. Resume reuses a retained checkout, asks
+  the host to restore it when missing, then restores the parent cwd. Missing
+  services report isolation as unavailable and share the directory; they never
+  silently fall back to a local worktree.
+- **Status and verification boundary:** `superagent_audit(format: "status")`
+  reports reviewer, observability, MCP memory, Host Schedule, and workspace
+  provider state. On a real Windows host, `sessionQuery` worked, `tokenPressure`
+  read `40`, and reporting was `inactive` because no OTel endpoint was configured.
+  Host Schedule creation succeeded as
+  `schedule-08a772e7-1618-4b3f-8515-0480659c8ca0`; later scheduled execution is
+  not verified. `workspace-write` failed with an ACL error; a temporary
+  `danger-full-access` host then created the retained worktree and restored the
+  parent cwd. Reviewer success has not been verified on a real host. MCP memory
+  has fake/unit verification only; no third-party server was started. Current
+  `check-pack` covers 77 files and 57 entry points. The offline suite now has
+  747 tests; the five-run continuity result is recorded in `docs/PROGRESS.md`.
 
 ### Switching models
 
@@ -317,16 +410,26 @@ honoured only when it names that directory; when it does not,
 used instead of isolating inside another project. `workspaceBase: "config"`
 restores the old behaviour of always using `workspaceRoot`.
 
-**When isolation is not possible.** If the base directory is not a git working tree,
-git is not on `PATH`, or the repository has no commit yet, the run does not fail.
-It falls back to the shared directory (the previous behaviour) and both
-`superagent_status` and the notification say so:
+**When isolation is not possible (local provider).** If the base directory is not
+a git working tree, git is not on `PATH`, or the repository has no commit yet,
+the run does not fail. It falls back to the shared directory (the previous
+behaviour) and both `superagent_status` and the notification say so.
+`workspaceProvider: host` instead checks the host worktree and workingDirectory
+services; missing services likewise share the directory with a reason, but never
+silently use the local provider:
 
 ```
 workspace: isolation was requested but is unavailable — /tmp/notes is not a git working tree,
 so a per-worker worktree cannot be created; workers shared /tmp/notes, so their edits can
 overwrite each other
 ```
+
+**Host provider concurrency and state.** `workspaceProvider: host` forces
+`maxParallel=1`. Create and restore briefly switch the parent cwd, then restore
+it; retained records in `<stateDir>/workspace-host.json` are protected by the
+cross-process lock `<stateDir>/workspace-host.json.lock`. On Windows, a real
+`workspace-write` run failed with an ACL error; a temporary `danger-full-access`
+host then created the worktree and restored the parent cwd successfully.
 
 **Limits, stated plainly.** `dsh@0.2.2-rc.1` gives a child agent no `cwd` field,
 so the plugin cannot hand a worker a directory at spawn time. Isolation is a
@@ -730,9 +833,10 @@ lookup, one edit, one command, one short piece of writing — does not need a ru
   budgets, attention, persistence, and resume are the same code. See
   [docs/LONG-GOAL.md](docs/LONG-GOAL.md).
 - `superagent_audit(run_id?, subtask_id?, kind?, decision?, result?, target?,
-  since?, until?, limit?, order?, format?, out_path?)` reads the audit trail, or
-  exports the matching events as one JSONL or CSV file. See
-  [Permissions and audit](#permissions-and-audit).
+  since?, until?, limit?, order?, format?, out_path?)` reads the audit trail or
+  exports matching events as JSONL or CSV. `format: "status"` reports host
+  integration state and, with `run_id`, a lightweight observability snapshot for
+  that session. See [Permissions and audit](#permissions-and-audit).
 
 
 ## Goal mode
@@ -789,10 +893,12 @@ does not silently change an existing plan.
 
 A plan stores its clock (`cron` or `every_minutes`, plus `timezone`), the goal,
 an optional `mode` / `goal_mode` with acceptance, its own `budget`, and its
-`human_priority`. Plans persist to `schedules.json` in the state directory and
-are reloaded at mount, so a host restart keeps them. The timer starts only when
-at least one plan exists; the state file is not created by `init()` on an empty
-state directory.
+`human_priority`. With the local provider, plans persist to `schedules.json` in
+the state directory and reload at mount; the plugin timer starts only when at
+least one local plan exists. Under `scheduleProvider: auto`, compatible plans are
+stored and delivered by Host Schedule: no local plan file is written and no
+plugin timer is armed. The missed-window, budget, and human-priority descriptions
+below apply to local plans; host tasks follow host policy.
 
 ### Missed windows
 
@@ -1011,6 +1117,8 @@ not hide the rest.
 `superagent_audit` reads by run, subtask, kind, decision, result, target text, and
 time window. With `format: "jsonl"` or `format: "csv"` it writes one deliverable
 file (default `<stateDir>/audit/audit-export-<time>.<ext>`) and returns its path.
+`format: "status"` reports host integration state and, with `run_id`, a
+metadata-only observability snapshot for that session.
 
 A path/command guard can be attached without the audit layer knowing its rules:
 `createAuditor({ dir, policyFile }).attachGuard(request => ({ decision, reason }))`.
@@ -1683,7 +1791,7 @@ appears to "hang" until the ignored-abort child returns.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.24.0` and read the host log for `[dsh-superagent]` lines. |
+| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.25.0` and read the host log for `[dsh-superagent]` lines. |
 | `Cannot find module .../lib/control.js` (or `watch.js` / `report.js` / `wizard.js`), or `[dsh-superagent] dsh-superagent failed to load because a file it imports is missing: ...` in the host log | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. From 0.14.3 the entry point names the missing file itself. The published package is not the cause: every version ships all thirty-four `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |

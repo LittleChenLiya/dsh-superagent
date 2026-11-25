@@ -16,7 +16,7 @@
 
 桌面应用的「添加插件」对话框接受三种输入，任选一种：
 
-1. **包名**：`@xiangyixie/dsh-superagent@0.14.1`
+1. **包名**：`@xiangyixie/dsh-superagent@0.25.0`
 2. **GitHub 仓库**：`https://github.com/LittleChenLiya/dsh-superagent`
 3. **本地目录**：`file:` 加上插件目录的绝对路径
 

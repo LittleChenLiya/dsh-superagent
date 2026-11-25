@@ -206,7 +206,35 @@ test('prune leaves a terminal run locked by another process alone', async () => 
   await fsp.rm(dir, { recursive: true, force: true })
 })
 
-test('export writes a self-contained directory that import restores exactly', async () => {
+test('prune rechecks a candidate under the run lock before deleting it', async () => {
+  const { store, dir } = await tempStore()
+  const id = '20260101T000000-raced'
+  await store.write(runOf(id, 'completed', daysAgo(30)))
+  await writeReport(store, id, 'still needed\n')
+  const planPrune = store.planPrune.bind(store)
+  store.planPrune = async options => {
+    const plan = await planPrune(options)
+    const holder = { pid: process.pid, hostname: os.hostname(), at: new Date().toISOString() }
+    assert.equal((await store.acquireLock(id, holder)).acquired, true)
+    const resumed = await store.read(id)
+    resumed.status = 'running'
+    resumed.finishedAt = null
+    await store.write(resumed)
+    return plan
+  }
+
+  const result = await store.prune({ olderThanDays: 7 })
+
+  assert.deepEqual(result.removed, [])
+  assert.ok(result.skipped.some(entry => entry.id === id))
+  assert.equal((await store.read(id)).status, 'running')
+  assert.ok(await store.readLock(id), 'the resumed run must keep its claim')
+  await fsp.access(path.join(store.root, 'reports', `${id}.md`))
+  await store.releaseLock(id)
+  await fsp.rm(dir, { recursive: true, force: true })
+})
+
+test('export writes a self-contained directory that import restores as read-only', async () => {
   const { store, dir } = await tempStore()
   const run = fullRun()
   await store.write(run)
@@ -235,11 +263,11 @@ test('export writes a self-contained directory that import restores exactly', as
   const target = await tempStore()
   const imported = await target.store.importRun(out)
   assert.equal(imported.run.id, run.id)
-  assert.deepEqual(imported.run, run, 'the run record must survive the round trip byte for byte')
+  assert.deepEqual(imported.run, { ...run, importedReadOnly: true }, 'import preserves the record and adds read-only provenance')
   assert.equal(await fsp.readFile(path.join(target.store.root, 'reports', `${run.id}.md`), 'utf8'), '# Result\n\nArchives work.\n')
 
   await assert.rejects(() => target.store.importRun(out), /already exists.*never overwrites/)
-  assert.deepEqual(await target.store.read(run.id), run, 'a refused import must not change the local run')
+  assert.deepEqual(await target.store.read(run.id), { ...run, importedReadOnly: true }, 'a refused import must not change the local run')
 
   await fsp.rm(target.dir, { recursive: true, force: true })
   await fsp.rm(dir, { recursive: true, force: true })
@@ -254,7 +282,7 @@ test('single-file bundle and html archives both import back', async () => {
   await store.exportRun(run.id, bundle, { format: 'bundle' })
   const fromBundle = await tempStore()
   const importedBundle = await fromBundle.store.importRun(bundle)
-  assert.deepEqual(importedBundle.run, run)
+  assert.deepEqual(importedBundle.run, { ...run, importedReadOnly: true })
 
   const html = path.join(dir, 'run.html')
   await store.exportRun(run.id, html, { format: 'html' })
@@ -263,10 +291,24 @@ test('single-file bundle and html archives both import back', async () => {
   assert.ok(text.includes('id="superagent-archive"'), 'the page must embed the importable bundle')
   const fromHtml = await tempStore()
   const importedHtml = await fromHtml.store.importRun(html)
-  assert.deepEqual(importedHtml.run, run)
+  assert.deepEqual(importedHtml.run, { ...run, importedReadOnly: true })
 
   await fsp.rm(fromBundle.dir, { recursive: true, force: true })
   await fsp.rm(fromHtml.dir, { recursive: true, force: true })
+  await fsp.rm(dir, { recursive: true, force: true })
+})
+
+test('an active archive is rejected before it can be imported and resumed', async () => {
+  const { store, dir } = await tempStore()
+  const run = { ...fullRun({ status: 'running', parentSessionId: null }), goal: 'attacker controlled task' }
+  await store.write(run)
+  const bundle = path.join(dir, 'active.json')
+  await store.exportRun(run.id, bundle, { format: 'bundle' })
+  const target = await tempStore()
+
+  await assert.rejects(() => target.store.importRun(bundle), /non-terminal run status.*only finished runs/)
+  assert.equal(await target.store.read(run.id), null)
+  await fsp.rm(target.dir, { recursive: true, force: true })
   await fsp.rm(dir, { recursive: true, force: true })
 })
 
