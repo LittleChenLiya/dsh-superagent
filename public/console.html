@@ -167,6 +167,7 @@
   .chat-head h1 { margin: 0; font-size: 15px; letter-spacing: .1px; }
   .chat-head p { margin: 4px 0 0; color: var(--faint); font-size: 12px; }
   .chat-head p strong { color: var(--muted); font-weight: 600; }
+  .chat-head-actions { display: flex; align-items: center; gap: 10px; flex: none; }
   .typing { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
   .typing span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: blink 1.2s infinite; }
   .typing span:nth-child(2) { animation-delay: .18s; }
@@ -968,7 +969,7 @@
     </div>
     <div class="topbar-actions">
       <span id="conn" class="conn"><i></i><span id="connText">连接中</span></span>
-      <button id="stopAll" class="btn danger" type="button" hidden>停止这一轮</button>
+      <button id="stopAll" class="btn danger" type="button" hidden title="停止当前会话的后台任务线；当前对话生成请使用“停止当前生成”">停止全部任务线</button>
       <button id="noticeOpen" class="btn notice-btn" type="button" hidden>提醒<span id="noticeCount" class="count">0</span></button>
       <button id="newChatTop" class="btn" type="button" disabled>新对话</button>
       <button id="historyOpen" class="btn" type="button">历史</button>
@@ -989,7 +990,10 @@
           <h1>Superagent</h1>
           <p>说一句要做什么；它自己决定一步做完还是拆开并行，跑完在这里汇总</p>
         </div>
-        <div id="typing" class="typing" hidden><span></span><span></span><span></span><em id="typingText" style="font-style:normal;margin-left:3px">运行中</em></div>
+        <div class="chat-head-actions">
+          <div id="typing" class="typing" hidden><span></span><span></span><span></span><em id="typingText" style="font-style:normal;margin-left:3px">运行中</em></div>
+          <button id="stopCurrent" class="btn danger" type="button" hidden>停止当前生成</button>
+        </div>
       </div>
       <div id="messages" class="messages" aria-live="polite"></div>      <form id="composer" class="composer" autocomplete="off">
         <div class="composer-box">
@@ -1133,6 +1137,7 @@
   const connEl = $('conn')
   const connTextEl = $('connText')
   const newChatEl = $('newChatTop')
+  const stopCurrentEl = $('stopCurrent')
   const stopAllEl = $('stopAll')
   const gateEl = $('gate')
   const gateFormEl = $('gateForm')
@@ -1215,6 +1220,9 @@
     sessionsBusy: false,
     sessionNote: null,
     cancelRequested: new Set(),
+    stopCurrentBusy: false,
+    stopCurrentRequested: false,
+    stopCurrentSeq: 0,
     stopAllBusy: false,
     notices: [],
     readNotices: new Set(),
@@ -1322,7 +1330,7 @@
     modeTextEl.textContent = chat ? '已就绪' : mode === 'loading' ? '连接中' : '未连接'
     newChatEl.disabled = !chat
     inputEl.disabled = !chat
-    syncStopAll()
+    syncStopControls()
     updateSend()
   }
 
@@ -1335,9 +1343,15 @@
     STATE.running = running
     typingEl.hidden = !running
     if (label) typingTextEl.textContent = label
+    syncStopControls()
   }
 
   function setSession(sessionId) {
+    if (STATE.sessionId !== sessionId) {
+      STATE.stopCurrentSeq += 1
+      STATE.stopCurrentRequested = false
+      STATE.stopCurrentBusy = false
+    }
     STATE.sessionId = sessionId
     if (STATE.router) return
     sessionLabelEl.textContent = sessionId ? `session ${shortId(sessionId)}` : '没有会话'
@@ -2214,11 +2228,35 @@
     }
   }
 
-  function syncStopAll() {
+  function syncStopControls() {
     const active = STATE.runs.filter(run => !isTerminal(run.status))
+    const canStopCurrent = STATE.running && STATE.mode === 'chat' && !STATE.router
+    stopCurrentEl.hidden = !canStopCurrent
+    stopCurrentEl.disabled = !canStopCurrent || STATE.stopCurrentBusy || STATE.stopCurrentRequested
+    stopCurrentEl.textContent = STATE.stopCurrentBusy ? '停止中…' : STATE.stopCurrentRequested ? '已请求停止' : '停止当前生成'
     stopAllEl.hidden = active.length === 0
     stopAllEl.disabled = STATE.mode !== 'chat' || active.length === 0 || STATE.stopAllBusy
-    stopAllEl.textContent = STATE.stopAllBusy ? '停止中…' : '停止这一轮'
+    stopAllEl.textContent = STATE.stopAllBusy ? '停止中…' : '停止全部任务线'
+  }
+
+  async function stopCurrentGeneration() {
+    if (!STATE.running || STATE.mode !== 'chat' || STATE.router || STATE.stopCurrentBusy || STATE.stopCurrentRequested) return
+    const sessionId = STATE.sessionId
+    const requestId = ++STATE.stopCurrentSeq
+    STATE.stopCurrentBusy = true
+    syncStopControls()
+    try {
+      await api('/api/console/cancel', { method: 'POST' })
+      if (STATE.sessionId !== sessionId || STATE.stopCurrentSeq !== requestId) return
+      STATE.stopCurrentRequested = true
+      pushToast('已请求停止当前生成，等宿主确认。', 'ok')
+    } catch (error) {
+      if (STATE.sessionId !== sessionId || STATE.stopCurrentSeq !== requestId) return
+      pushToast(`无法停止当前生成：${messageOf(error)}`, 'err')
+    } finally {
+      if (STATE.sessionId === sessionId && STATE.stopCurrentSeq === requestId) STATE.stopCurrentBusy = false
+      syncStopControls()
+    }
   }
 
   async function stopRun(runId) {
@@ -2239,7 +2277,7 @@
     const active = STATE.runs.filter(run => !isTerminal(run.status) && !STATE.cancelRequested.has(run.id))
     if (active.length === 0) return
     STATE.stopAllBusy = true
-    syncStopAll()
+    syncStopControls()
     for (const run of active) STATE.cancelRequested.add(run.id)
     renderLanes()
     for (const run of active) {
@@ -2252,8 +2290,8 @@
     }
     STATE.stopAllBusy = false
     renderLanes()
-    syncStopAll()
-    pushToast('已请求停止这一轮。', 'ok')
+    syncStopControls()
+    pushToast('已请求停止全部后台任务线。', 'ok')
   }
 
   function stepLabel(subtask) {
@@ -2599,7 +2637,7 @@
       const run = STATE.runs.find(item => item.id === id)
       if (!run || isTerminal(run.status)) STATE.cancelRequested.delete(id)
     }
-    syncStopAll()
+    syncStopControls()
     queueRail()
     renderHistory()
   }
@@ -3247,6 +3285,9 @@
     const data = event.data && typeof event.data === 'object' ? event.data : {}
     switch (event.type) {
       case 'turn/start':
+        STATE.stopCurrentSeq += 1
+        STATE.stopCurrentRequested = false
+        STATE.stopCurrentBusy = false
         setTyping(true, '运行中')
         break
       case 'turn/end':
@@ -4226,6 +4267,9 @@
       setSession(data.sessionId)
       STATE.approvals.clear()
       STATE.cancelRequested.clear()
+      STATE.stopCurrentRequested = false
+      STATE.stopCurrentBusy = false
+      STATE.stopCurrentSeq += 1
       STATE.railDetail = null
       clearMessages()
       STATE.runs = []
@@ -4376,6 +4420,7 @@
   }
 
   newChatEl.addEventListener('click', newConversation)
+  stopCurrentEl.addEventListener('click', stopCurrentGeneration)
   stopAllEl.addEventListener('click', stopAllRuns)
   railToggleEl.addEventListener('click', () => {
     setRail(!document.body.classList.contains('rail-collapsed'))

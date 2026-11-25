@@ -575,6 +575,23 @@ test('a planner that spends its call budget is stopped and reported as unplannab
   assert.ok(disposed >= 1)
 })
 
+test('a fast planner cannot exceed the total run budget even under a larger planner cap', async () => {
+  const { spawnChild, calls } = makeSpawner(async spec => completed(spec.label === 'superagent-plan'
+    ? JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] })
+    : 'worker should not start'))
+  const { orchestrator } = orchestratorWith({
+    spawner: { spawnChild },
+    readUsage: async () => ({ inputTokens: 10, outputTokens: 2, totalTokens: 12, modelCalls: 2 }),
+    config: { maxModelCallsPerRun: 1, plannerMaxModelCalls: 5 },
+  })
+  const run = await orchestrator.start({ goal: 'respect the total budget', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.deepEqual(calls.map(call => call.label), ['superagent-plan'])
+  assert.match(finished.budgetStop?.detail ?? '', /model-call budget (reached|exceeded)/)
+})
+
 test('each planner attempt records its elapsed time, calls, and tokens', async () => {
   const { spawnChild } = makeSpawner(async spec => {
     if (spec.label === 'superagent-plan') {
@@ -1485,6 +1502,102 @@ test('the call budget still stops a run when child usage cannot be read at all',
   assert.equal(finished.usage, null)
   const stored = await store.read(run.id)
   assert.ok(Object.keys(stored.counters.unreadable).length >= 2)
+})
+
+test('an active worker is stopped when its live usage exceeds the call budget', async () => {
+  let disposed = 0
+  const spawner = {
+    spawnChild: async () => ({
+      childId: 'slow-direct',
+      result: new Promise(resolve => setTimeout(() => resolve(completed('too late')), 800)),
+      dispose: async () => { disposed += 1 },
+    }),
+  }
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    readUsage: async () => ({ inputTokens: 10, outputTokens: 2, totalTokens: 12, modelCalls: 2 }),
+    config: { maxModelCallsPerRun: 1 },
+  })
+  const run = await orchestrator.start({
+    goal: 'stay within one live call', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.notEqual(finished.subtasks[0].status, 'completed')
+  assert.match(finished.budgetStop?.detail ?? '', /model-call budget exceeded/)
+  assert.equal(finished.usage.modelCalls, 2)
+  assert.ok(disposed >= 1, 'the over-budget activation must be disposed')
+})
+
+test('a fast worker cannot complete after its final usage exceeds the budget', async () => {
+  const spawner = {
+    spawnChild: async () => ({
+      childId: 'fast-over-budget',
+      result: Promise.resolve(completed('finished too expensive')),
+      dispose: async () => {},
+    }),
+  }
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    readUsage: async () => ({ inputTokens: 10, outputTokens: 2, totalTokens: 12, modelCalls: 2 }),
+    config: { maxModelCallsPerRun: 1 },
+  })
+  const run = await orchestrator.start({
+    goal: 'finish fast but stay within budget', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.notEqual(finished.subtasks[0].status, 'completed')
+  assert.match(finished.budgetStop?.detail ?? '', /model-call budget exceeded/)
+})
+
+test('a worker that finishes exactly at the call budget is allowed to settle', async () => {
+  const spawner = {
+    spawnChild: async () => ({
+      childId: 'exact-budget',
+      result: new Promise(resolve => setTimeout(() => resolve(completed('finished at the cap')), 500)),
+      dispose: async () => {},
+    }),
+  }
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    readUsage: async () => ({ inputTokens: 10, outputTokens: 2, totalTokens: 12, modelCalls: 1 }),
+    config: { maxModelCallsPerRun: 1 },
+  })
+  const run = await orchestrator.start({
+    goal: 'finish at the cap', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.subtasks[0].status, 'completed')
+  assert.equal(finished.budgetStop ?? null, null)
+})
+
+test('an active worker is stopped when its live token usage exceeds the token budget', async () => {
+  const spawner = {
+    spawnChild: async () => ({
+      childId: 'token-heavy',
+      result: new Promise(resolve => setTimeout(() => resolve(completed('too late')), 800)),
+      dispose: async () => {},
+    }),
+  }
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    readUsage: async () => ({ inputTokens: 80, outputTokens: 40, totalTokens: 120, modelCalls: 1 }),
+    config: { maxTokensPerRun: 100 },
+  })
+  const run = await orchestrator.start({
+    goal: 'stay within one hundred tokens', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.notEqual(finished.subtasks[0].status, 'completed')
+  assert.match(finished.budgetStop?.detail ?? '', /token budget exceeded/)
+  assert.equal(finished.usage.totalTokens, 120)
 })
 
 test('usage from a failed attempt is still counted against the run', async () => {

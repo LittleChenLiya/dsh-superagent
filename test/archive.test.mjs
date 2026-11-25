@@ -206,6 +206,34 @@ test('prune leaves a terminal run locked by another process alone', async () => 
   await fsp.rm(dir, { recursive: true, force: true })
 })
 
+test('prune rechecks a candidate under the run lock before deleting it', async () => {
+  const { store, dir } = await tempStore()
+  const id = '20260101T000000-raced'
+  await store.write(runOf(id, 'completed', daysAgo(30)))
+  await writeReport(store, id, 'still needed\n')
+  const planPrune = store.planPrune.bind(store)
+  store.planPrune = async options => {
+    const plan = await planPrune(options)
+    const holder = { pid: process.pid, hostname: os.hostname(), at: new Date().toISOString() }
+    assert.equal((await store.acquireLock(id, holder)).acquired, true)
+    const resumed = await store.read(id)
+    resumed.status = 'running'
+    resumed.finishedAt = null
+    await store.write(resumed)
+    return plan
+  }
+
+  const result = await store.prune({ olderThanDays: 7 })
+
+  assert.deepEqual(result.removed, [])
+  assert.ok(result.skipped.some(entry => entry.id === id))
+  assert.equal((await store.read(id)).status, 'running')
+  assert.ok(await store.readLock(id), 'the resumed run must keep its claim')
+  await fsp.access(path.join(store.root, 'reports', `${id}.md`))
+  await store.releaseLock(id)
+  await fsp.rm(dir, { recursive: true, force: true })
+})
+
 test('export writes a self-contained directory that import restores exactly', async () => {
   const { store, dir } = await tempStore()
   const run = fullRun()

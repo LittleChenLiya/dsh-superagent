@@ -257,6 +257,20 @@
     .layout { grid-template-columns: 240px minmax(0, 1fr); }
     .side-pane { display: none; }
   }
+  @media (max-width: 600px) {
+    .topbar { gap: 8px; padding: 0 10px; }
+    .brand .sep, .brand .muted, .root { display: none; }
+    .status { margin-left: auto; }
+    .layout { grid-template-columns: 132px minmax(0, 1fr); }
+    .sidebar .pane-head { padding-inline: 8px; }
+    .editor-head { padding-inline: 10px; gap: 6px; }
+    .badges { gap: 4px; }
+    #editor { padding-inline: 12px; }
+    .editor-actions { flex-wrap: wrap; gap: 6px; padding: 8px 10px; }
+    .editor-actions .fill { display: none; }
+    .dirty { margin-right: auto; }
+    .confirm-actions { flex-wrap: wrap; }
+  }
 </style>
 </head>
 <body>
@@ -330,6 +344,8 @@
     dirty: false,
     activeRun: null,
     busy: false,
+    openRequest: 0,
+    editorVersion: 0,
   };
 
   function readToken() {
@@ -549,13 +565,17 @@
   }
 
   async function openFile(path, row) {
+    if (state.dirty && !confirm('当前文件有未保存改动，确定放弃并打开其他文件吗？')) return;
+    const requestId = ++state.openRequest;
     try {
       const info = await api('/api/file?path=' + encodeURIComponent(path));
+      if (requestId !== state.openRequest) return;
       state.file = info;
       state.file.eol = info.content !== null && info.content.includes('\r\n') ? 'crlf' : 'lf';
       state.dirty = false;
       const editor = $('editor');
       editor.value = info.content === null ? '' : normalized(info.content);
+      state.editorVersion += 1;
       editor.disabled = Boolean(info.readOnly);
       renderCrumbs(info.path);
       setFileMeta(info);
@@ -570,7 +590,7 @@
       $('sideBody').appendChild(hint);
       updateDirty();
     } catch (error) {
-      toast(error.message, true);
+      if (requestId === state.openRequest) toast(error.message, true);
     }
   }
 
@@ -606,27 +626,36 @@
   }
 
   async function saveCurrent() {
-    if (!state.file || state.file.readOnly) return;
+    if (!state.file || state.file.readOnly || state.busy) return;
+    const file = state.file;
+    const content = editorText();
+    const version = state.editorVersion;
+    const editor = $('editor');
+    const confirmSave = $('confirmSave');
     state.busy = true;
+    editor.disabled = true;
+    confirmSave.disabled = true;
     updateDirty();
     try {
       const data = await api('/api/save', {
         method: 'POST',
         body: JSON.stringify({
-          path: state.file.path,
-          content: editorText(),
-          expectedHash: state.file.hash,
-          expectedMtimeMs: state.file.mtimeMs,
+          path: file.path,
+          content,
+          expectedHash: file.hash,
+          expectedMtimeMs: file.mtimeMs,
         }),
       });
-      state.file.content = editorText();
+      if (state.file !== file) return;
+      state.file.content = content;
       state.file.hash = data.hash;
       state.file.mtimeMs = data.mtimeMs;
       state.file.size = data.size;
       $('confirm').hidden = true;
       setFileMeta(state.file);
       notice('', '');
-      toast('已保存 ' + data.path);
+      const unchanged = state.editorVersion === version && normalized(editor.value) === normalized(content);
+      toast(unchanged ? '已保存 ' + data.path : '已保存请求时的内容；之后的修改仍未保存。');
       updateDirty();
     } catch (error) {
       if (error.id === 'external-change') {
@@ -638,6 +667,8 @@
       }
     } finally {
       state.busy = false;
+      editor.disabled = Boolean(state.file && state.file.readOnly);
+      confirmSave.disabled = false;
       updateDirty();
     }
   }
@@ -821,7 +852,10 @@
   $('saveBtn').addEventListener('click', () => previewCurrent(true));
   $('cancelSave').addEventListener('click', () => { $('confirm').hidden = true; });
   $('confirmSave').addEventListener('click', saveCurrent);
-  $('editor').addEventListener('input', updateDirty);
+  $('editor').addEventListener('input', () => {
+    state.editorVersion += 1;
+    updateDirty();
+  });
   $('editor').addEventListener('keydown', event => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
       event.preventDefault();
