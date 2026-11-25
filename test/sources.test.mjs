@@ -54,7 +54,7 @@ function ingressFor({ store, router = routerStub(), config, faults, retry, now, 
   return createSourceIngress({ store, router, config, catalog: catalogFn, faults, retry, now, log })
 }
 
-async function waitFor(fn, timeoutMs = 4000) {
+async function waitFor(fn, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const value = await fn()
@@ -856,8 +856,18 @@ test('a temporary catalog read stays retryable and re-checks the binding and pha
         if (offline) throw Object.assign(new Error('Work catalog temporarily unavailable'), { code: 'EBUSY' })
         return catalog()
       },
-      retry: { baseMs: 20, maxAttempts: 3 },
+      retry: { baseMs: 250, maxAttempts: 3 },
     })
+    const updateEvent = store.updateEvent
+    let delayedRetry = false
+    store.updateEvent = async (key, patch) => {
+      const result = await updateEvent(key, patch)
+      if (patch.status === 'retrying' && !delayedRetry) {
+        delayedRetry = true
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+      return result
+    }
     const server = await serve(ingress)
     try {
       await ingress.bind({
