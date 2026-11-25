@@ -296,6 +296,12 @@ function hookCache() {
           values[index] = typeof next === 'function' ? next(values[index]) : next
         }]
       },
+      useRef(initial) {
+        if (cursor === null) return { current: initial }
+        const index = cursor++
+        if (values[index] === undefined) values[index] = { current: initial }
+        return values[index]
+      },
     },
     begin() { cursor = 0 },
     end() { cursor = null },
@@ -356,6 +362,193 @@ async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {})
   const hint = (nodes, name) => nodes.find(node => String(node.props?.className ?? '').includes(name))?.children?.[0]
   return { render, openRail, actions, goal, button, composer, hint }
 }
+
+test('a phase decision shows one conclusion and hides raw failure detail by default', async () => {
+  const decision = {
+    id: 'd1', kind: 'phase-exhausted', phaseId: 'p3',
+    question: '阶段 p3「实现结算后再来一局」失败：已用尽 2 次尝试。下游阶段 p4 依赖它。可以换一种做法重试、跳过该阶段，或停止整个目标。',
+    summary: '阶段 p3「实现结算后再来一局」自动重试已结束，仍未通过验收。',
+    impact: '下游阶段 p4 正在等待；已经完成的部分会保留。',
+    reason: '已用尽 2 次尝试',
+    detail: '# Goal not reached — stopped: no progress: the same acceptance condition failed again',
+    options: ['retry', 'skip', 'stop'], source: { runId: 'run-1', failed: ['a1'] },
+  }
+  const card = await taskCardHarness({}, {}, {
+    inbox: [{ id: 'goal:goal-empty:d1', kind: 'decision', title: '阶段失败', goalId: 'goal-empty',
+      sessionId: 'chat-a', project: null, read: false, item: decision }],
+  })
+  card.render().find(node => node.type === 'button' && (node.children ?? []).includes('待办')).props.onClick()
+  const nodes = card.render({ inboxOpen: true })
+  const attention = nodes.find(node => node.props?.className === 'dsa-attention-card')
+  assert.ok(attention, 'the decision card is present in the inbox')
+  const inner = [...walkTree(attention)]
+  assert.ok(inner.some(node => (node.children ?? []).includes(decision.summary)))
+  assert.ok(inner.some(node => (node.children ?? []).includes(decision.impact)))
+  assert.equal(inner.some(node => node.type === 'input'), false, 'retry/skip/stop must not show a note field')
+  const details = inner.find(node => node.type === 'details')
+  assert.ok(details, 'technical detail is available on demand')
+  assert.notEqual(details.props.open, true, 'technical detail starts collapsed')
+  assert.ok(inner.some(node => node.type === 'button' && (node.children ?? []).includes('换做法重试')))
+  card.button(inner, '换做法重试').props.onClick()
+  assert.deepEqual(card.actions.at(-1), {
+    type: 'goalAction', goalId: 'goal-empty', action: 'answer', owner: 'chat-a',
+    body: { decisionId: 'd1', answer: 'retry', note: '' },
+  })
+})
+
+test('the embedded composer uploads pasted images and dropped files in order', async () => {
+  const originalReader = globalThis.FileReader
+  globalThis.FileReader = class {
+    readAsDataURL(file) {
+      this.result = `data:${file.type || 'application/octet-stream'};base64,${file.data || 'ZGF0YQ=='}`
+      this.onload?.()
+    }
+  }
+  try {
+    const card = await taskCardHarness()
+    const nodes = card.render()
+    const composer = nodes.find(node => node.props?.className === 'dsa-composer')
+    const input = nodes.find(node => node.type === 'textarea')
+    assert.ok(composer?.props.onDrop, 'the composer accepts file drops')
+    assert.ok(input?.props.onPaste, 'the textarea accepts clipboard files')
+    let prevented = false
+    input.props.onPaste({
+      clipboardData: { files: [{ name: '', type: 'image/png', data: 'aW1hZ2U=' }] },
+      preventDefault: () => { prevented = true },
+    })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(prevented, true)
+    assert.match(card.actions[0].file.name, /^pasted-image-\d+-\d+\.png$/)
+    assert.equal(card.actions[0].file.data, 'aW1hZ2U=')
+
+    input.props.onPaste({
+      clipboardData: { files: [], items: [{ kind: 'file', getAsFile: () => ({ name: '', type: 'image/jpeg', data: 'anBlZw==' }) }] },
+      preventDefault() {},
+    })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.match(card.actions[1].file.name, /^pasted-image-\d+-\d+\.jpg$/)
+    assert.equal(card.actions[1].file.data, 'anBlZw==')
+
+    composer.props.onDrop({
+      dataTransfer: { files: [
+        { name: 'notes.txt', type: 'text/plain', data: 'bm90ZXM=' },
+        { name: 'data.json', type: 'application/json', data: 'anNvbg==' },
+      ], types: ['Files'] },
+      preventDefault() {}, stopPropagation() {},
+    })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(card.actions.slice(2).map(action => action.file.name), ['notes.txt', 'data.json'])
+    assert.deepEqual(card.actions.slice(2).map(action => action.file.data), ['bm90ZXM=', 'anNvbg=='])
+  } finally {
+    if (originalReader === undefined) delete globalThis.FileReader
+    else globalThis.FileReader = originalReader
+  }
+})
+
+test('queued composer uploads keep their enqueue-time workspace and disabled state', async () => {
+  const originalReader = globalThis.FileReader
+  globalThis.FileReader = class {
+    readAsDataURL(file) {
+      this.result = `data:${file.type || 'application/octet-stream'};base64,${file.data || 'ZGF0YQ=='}`
+      this.onload?.()
+    }
+  }
+  const drop = (composer, name) => composer.props.onDrop({
+    dataTransfer: { files: [{ name, type: 'text/plain', data: 'ZGF0YQ==' }], types: ['Files'] },
+    preventDefault() {}, stopPropagation() {},
+  })
+  try {
+    const card = await taskCardHarness()
+    const first = card.render({ project: { cwd: '/work/a', name: 'A' } })
+    drop(first.find(node => node.props?.className === 'dsa-composer'), 'a.txt')
+    const second = card.render({ project: { cwd: '/work/b', name: 'B' } })
+    drop(second.find(node => node.props?.className === 'dsa-composer'), 'b.txt')
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(card.actions.map(action => [action.file.name, action.project]), [
+      ['a.txt', '/work/a'], ['b.txt', '/work/b'],
+    ], 'switching workspaces must not redirect either queued batch')
+
+    const blocked = await taskCardHarness({}, { project: { cwd: '/work/a' }, sending: true })
+    drop(blocked.render().find(node => node.props?.className === 'dsa-composer'), 'blocked.txt')
+    blocked.render({ project: { cwd: '/work/b' }, sending: false })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(blocked.actions, [], 'a batch accepted while disabled must stay disabled')
+  } finally {
+    if (originalReader === undefined) delete globalThis.FileReader
+    else globalThis.FileReader = originalReader
+  }
+})
+
+test('the upload request keeps the workspace captured before a project switch', async () => {
+  const originalReader = globalThis.FileReader
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.FileReader = class {
+    readAsDataURL(file) {
+      this.result = `data:${file.type || 'application/octet-stream'};base64,${file.data || 'ZGF0YQ=='}`
+      this.onload?.()
+    }
+  }
+  globalThis.fetch = async (route, options) => {
+    requests.push({ route, body: JSON.parse(options.body) })
+    return { ok: true, status: 200, json: async () => ({ ok: true, data: { path: '/work/a/upload.txt' } }) }
+  }
+  try {
+    const cache = hookCache()
+    let currentModel = {
+      phase: 'ready', sessionId: 'chat-a', project: { cwd: '/work/a', name: 'A' },
+      capabilities: { chat: true }, messages: [], runs: [], goals: [], approvals: [], typing: false,
+      workbench: { projects: [], runs: [], goals: [], inbox: [] },
+    }
+    let shell
+    let firstPanelHook = false
+    const renderPanel = () => {
+      firstPanelHook = true
+      return shell()
+    }
+    const { exports } = await materialize(null, {
+      ...cache.hooks,
+      useState(initial) {
+        if (firstPanelHook) {
+          firstPanelHook = false
+          return [currentModel, updater => {
+            currentModel = updater(currentModel)
+            cache.begin()
+            renderPanel()
+            cache.end()
+          }]
+        }
+        return cache.hooks.useState(initial)
+      },
+      useCallback: callback => callback,
+    })
+    exports.apply({ slots: {
+      inject: (name, callback) => callback(),
+      register: (props, component) => { if (props.name === 'main') shell = component },
+    } })
+    cache.begin()
+    const seat = renderPanel()
+    const composer = [...walkTree(seat)].find(node => node.props?.className === 'dsa-composer')
+    cache.end()
+    assert.ok(composer)
+    composer.props.onDrop({
+      dataTransfer: { files: [{ name: 'upload.txt', type: 'text/plain', data: 'ZGF0YQ==' }], types: ['Files'] },
+      preventDefault() {}, stopPropagation() {},
+    })
+    await seat.props.dispatch({ type: 'selectProject', project: { cwd: '/work/b', name: 'B' } })
+    await new Promise(resolve => setImmediate(resolve))
+
+    assert.equal(requests.length, 1)
+    assert.equal(requests[0].route, '/superagent/api/console/upload')
+    assert.equal(requests[0].body.project, '/work/a', 'the request must not use the newly selected workspace')
+    assert.equal(currentModel.uploadInsert, '', 'an A upload must not be inserted into the B draft')
+  } finally {
+    if (originalReader === undefined) delete globalThis.FileReader
+    else globalThis.FileReader = originalReader
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
 
 test('an empty task offers 加别名 and 记决定, and 加别名 only prefills the composer', async () => {
   const card = await taskCardHarness()

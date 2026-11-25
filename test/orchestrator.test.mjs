@@ -97,7 +97,16 @@ function makeSpawner(handle) {
   const calls = []
   const spawnChild = async spec => {
     const childId = `child-${++seq}`
-    calls.push({ label: spec.label, prompt: spec.prompt, childId, model: spec.model ?? null, cwd: spec.cwd ?? null })
+    calls.push({
+      label: spec.label,
+      prompt: spec.prompt,
+      childId,
+      model: spec.model ?? null,
+      preset: spec.preset ?? null,
+      subtaskId: spec.subtaskId ?? null,
+      signal: spec.signal ?? null,
+      cwd: spec.cwd ?? null,
+    })
     return {
       childId,
       result: Promise.resolve().then(() => handle(spec, childId)),
@@ -151,6 +160,20 @@ function gate() {
   const opened = new Promise(resolve => { open = resolve })
   return { opened, open }
 }
+
+test('an imported archive cannot be resumed or answered by another session', async () => {
+  const store = memoryStore()
+  await store.write({
+    id: '20260101T000000-imported', status: 'interrupted', parentSessionId: null,
+    importedReadOnly: true, goal: 'untrusted archived task', subtasks: [],
+  })
+  const spawner = makeSpawner(async () => completed('must not run'))
+  const { orchestrator } = orchestratorWith({ store, spawner })
+
+  await assert.rejects(() => orchestrator.resume('20260101T000000-imported', parent), /imported from an archive and is read-only/)
+  await assert.rejects(() => orchestrator.answer('20260101T000000-imported', 'q1', 'continue', parent), /imported from an archive and is read-only/)
+  assert.deepEqual(spawner.calls, [])
+})
 
 test('plan is decomposed and subtasks run in parallel within the limit', async () => {
   let running = 0
@@ -1968,6 +1991,233 @@ test('a direct worker that returns no text is not a completion', async () => {
   assert.equal(finished.report, null)
 })
 
+test('a reviewer without an explicit restricted preset cannot pass a delivery', async () => {
+  const spawner = makeSpawner(async spec => spec.label === 'superagent-direct'
+    ? completed('direct result')
+    : completed(JSON.stringify({ verdict: 'pass', evidence: ['claim'], issues: [] })))
+  const { orchestrator } = orchestratorWith({ spawner, config: { reviewerEnabled: true } })
+  const run = await orchestrator.start({ goal: 'do one thing', parentSessionId: parent.id, parent, mode: 'direct' })
+  const finished = await orchestrator.status(run.id, 5)
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.subtasks[0].status, 'unverified')
+  assert.match(finished.subtasks[0].review.error, /reviewerPreset is required/)
+  assert.equal(spawner.calls.some(call => call.label.startsWith('superagent-review-')), false)
+})
+
+test('an independent reviewer must pass a planned deliverable before completion', async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-review-pass-'))
+  try {
+    const spawner = makeSpawner(async spec => {
+      if (spec.label === 'superagent-plan') {
+        return completed(JSON.stringify({
+          subtasks: [{
+            id: 'alpha', title: 'Write the answer', prompt: 'write out.txt with the answer',
+            deliverables: [{ path: 'out.txt', kind: 'text' }],
+          }],
+        }))
+      }
+      if (spec.label === 'superagent-1') {
+        await fsp.writeFile(path.join(root, 'out.txt'), 'verified answer\n', 'utf8')
+        return completed('worker claims the answer is written')
+      }
+      assert.equal(spec.label, 'superagent-review-1')
+      assert.equal(spec.subtaskId, 'review-alpha')
+      assert.equal(spec.model, 'review/model')
+      assert.equal(spec.preset, 'read-only-review')
+      assert.equal(spec.cwd, root)
+      assert.ok(spec.signal instanceof AbortSignal)
+      assert.match(spec.prompt, /Goal:\nwrite the answer/)
+      assert.match(spec.prompt, /Subtask title: Write the answer/)
+      assert.match(spec.prompt, /Subtask prompt:\nwrite out\.txt with the answer/)
+      assert.match(spec.prompt, /out\.txt contains the verified answer/)
+      assert.match(spec.prompt, /Workspace directory:/)
+      assert.match(spec.prompt, /worker claims the answer is written/)
+      assert.match(spec.prompt, /not evidence/)
+      assert.equal(await fsp.readFile(path.join(spec.cwd, 'out.txt'), 'utf8'), 'verified answer\n')
+      return completed(JSON.stringify({
+        verdict: 'pass', evidence: ['read out.txt: verified answer'], issues: [],
+      }))
+    })
+    const { orchestrator } = orchestratorWith({
+      spawner,
+      config: {
+        attempts: 3, workspaceRoot: root, reviewerEnabled: true,
+        reviewerModel: 'review/model', reviewerPreset: 'read-only-review',
+      },
+    })
+    const run = await orchestrator.start({
+      goal: 'write the answer', parentSessionId: parent.id, parent,
+      goalMode: {
+        acceptance: [{ id: 'answer', text: 'out.txt contains the verified answer', check: { type: 'file', path: 'out.txt' } }],
+        cwd: root,
+      },
+    })
+    const finished = await orchestrator.status(run.id, 5)
+
+    assert.equal(finished.status, 'completed')
+    assert.equal(finished.subtasks[0].status, 'completed')
+    assert.equal(finished.subtasks[0].review.verdict, 'pass')
+    assert.deepEqual(finished.subtasks[0].review.evidence, ['read out.txt: verified answer'])
+    assert.deepEqual(spawner.calls.map(call => call.label), ['superagent-plan', 'superagent-1', 'superagent-review-1'])
+    assert.equal(finished.counters.spawns, 3)
+    assert.equal(finished.usage.modelCalls, 3)
+    assert.equal(Object.keys(finished.usageByChild).length, 3)
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a failed independent review leaves the subtask unverified without rerunning the worker', async () => {
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') {
+      return completed(JSON.stringify({ subtasks: [{ id: 'alpha', title: 'A', prompt: 'do A' }] }))
+    }
+    if (spec.label === 'superagent-1') return completed('worker says A is done')
+    return completed(JSON.stringify({
+      verdict: 'fail', evidence: ['inspected workspace: expected file absent'], issues: ['required file is missing'],
+    }))
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner, config: { attempts: 3, autoResumeRounds: 2, reviewerEnabled: true, reviewerPreset: 'read-only-review' },
+  })
+  const run = await orchestrator.start({ goal: 'do A', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 5)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.subtasks[0].status, 'unverified')
+  assert.equal(finished.subtasks[0].attempts, 1)
+  assert.equal(finished.subtasks[0].review.verdict, 'fail')
+  assert.deepEqual(finished.subtasks[0].review.issues, ['required file is missing'])
+  assert.match(finished.subtasks[0].unverifiedReason, /independent review failed: required file is missing/)
+  assert.equal(spawner.calls.filter(call => call.label === 'superagent-1').length, 1)
+  assert.equal(finished.counters.spawns, 3)
+  assert.equal(finished.usage.modelCalls, 3)
+})
+
+for (const [name, reply] of [
+  ['malformed JSON', 'not JSON'],
+  ['an invalid schema', JSON.stringify({ verdict: 'pass', evidence: 'not an array', issues: [] })],
+]) {
+  test(`a reviewer returning ${name} cannot complete a direct run`, async () => {
+    const spawner = makeSpawner(async spec => (
+      spec.label === 'superagent-direct' ? completed('direct result') : completed(reply)
+    ))
+    const { orchestrator } = orchestratorWith({ spawner, config: { attempts: 3, reviewerEnabled: true, reviewerPreset: 'read-only-review' } })
+    const run = await orchestrator.start({
+      goal: 'do one thing', parentSessionId: parent.id, parent, mode: 'direct',
+    })
+    const finished = await orchestrator.status(run.id, 5)
+
+    assert.equal(finished.status, 'failed')
+    assert.equal(finished.subtasks[0].status, 'unverified')
+    assert.equal(finished.subtasks[0].review.verdict, null)
+    assert.match(finished.subtasks[0].review.error, /malformed JSON|invalid verdict schema/)
+    assert.equal(finished.report, null)
+    assert.equal(spawner.calls.filter(call => call.label === 'superagent-direct').length, 1)
+  })
+}
+
+test('a reviewer result exception is unverified and its usage is still counted', async () => {
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-direct') return completed('direct result')
+    throw new Error('review service crashed')
+  })
+  const { orchestrator } = orchestratorWith({ spawner, config: { attempts: 2, reviewerEnabled: true, reviewerPreset: 'read-only-review' } })
+  const run = await orchestrator.start({
+    goal: 'do one thing', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  const finished = await orchestrator.status(run.id, 5)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.subtasks[0].status, 'unverified')
+  assert.match(finished.subtasks[0].review.error, /review service crashed/)
+  assert.equal(finished.counters.spawns, 2)
+  assert.equal(finished.usage.modelCalls, 2)
+  assert.equal(spawner.calls.filter(call => call.label === 'superagent-direct').length, 1)
+})
+
+test('a reviewer spawn exception cannot default to a pass', async () => {
+  const base = makeSpawner(async () => completed('direct result'))
+  const spawner = {
+    calls: base.calls,
+    spawnChild: async spec => {
+      if (spec.label === 'superagent-review-1') throw new Error('cannot spawn reviewer')
+      return base.spawnChild(spec)
+    },
+  }
+  const { orchestrator } = orchestratorWith({ spawner, config: { attempts: 2, reviewerEnabled: true, reviewerPreset: 'read-only-review' } })
+  const run = await orchestrator.start({
+    goal: 'do one thing', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  const finished = await orchestrator.status(run.id, 5)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.subtasks[0].status, 'unverified')
+  assert.equal(finished.subtasks[0].review.childId, null)
+  assert.match(finished.subtasks[0].review.error, /cannot spawn reviewer/)
+  assert.equal(finished.report, null)
+})
+
+test('cancelling a run aborts its independent reviewer and never completes the worker result', async () => {
+  const reviewerStarted = gate()
+  const spawner = makeSpawner(async spec => {
+    if (spec.label === 'superagent-direct') return completed('direct result')
+    reviewerStarted.open()
+    return new Promise(() => {})
+  })
+  const { orchestrator } = orchestratorWith({ spawner, config: { attempts: 3, reviewerEnabled: true, reviewerPreset: 'read-only-review' } })
+  const run = await orchestrator.start({
+    goal: 'do one thing', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  await reviewerStarted.opened
+  await orchestrator.cancel(run.id)
+  const finished = await orchestrator.status(run.id, 5)
+
+  assert.equal(finished.status, 'cancelled')
+  assert.equal(finished.subtasks[0].status, 'pending')
+  assert.equal(finished.subtasks[0].review.status, 'cancelled')
+  assert.equal(finished.subtasks[0].review.verdict, null)
+  assert.equal(finished.report, null)
+  assert.equal(finished.counters.spawns, 2)
+  assert.equal(finished.usage.modelCalls, 2)
+  assert.equal(spawner.calls.filter(call => call.label === 'superagent-direct').length, 1)
+})
+
+test('direct mode forms its report only after an independent review passes', async () => {
+  const spawner = makeSpawner(async spec => (
+    spec.label === 'superagent-direct'
+      ? completed('reviewed direct answer')
+      : completed(JSON.stringify({ verdict: 'pass', evidence: ['ran the acceptance check'], issues: [] }))
+  ))
+  const { orchestrator } = orchestratorWith({ spawner, config: { reviewerEnabled: true, reviewerPreset: 'read-only-review' } })
+  const run = await orchestrator.start({
+    goal: 'answer directly', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  const finished = await orchestrator.status(run.id, 5)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.report, 'reviewed direct answer')
+  assert.deepEqual(spawner.calls.map(call => call.label), ['superagent-direct', 'superagent-review-1'])
+})
+
+test('disabled independent review preserves the original direct spawn and report behavior', async () => {
+  const spawner = makeSpawner(async () => completed('unreviewed direct answer'))
+  const { orchestrator } = orchestratorWith({
+    spawner, config: { reviewerEnabled: false, reviewerModel: 'unused/model', reviewerPreset: 'unused/preset' },
+  })
+  const run = await orchestrator.start({
+    goal: 'answer directly', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  const finished = await orchestrator.status(run.id, 5)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.report, 'unreviewed direct answer')
+  assert.equal(finished.subtasks[0].review, undefined)
+  assert.deepEqual(spawner.calls.map(call => call.label), ['superagent-direct'])
+  assert.equal(finished.counters.spawns, 1)
+  assert.equal(finished.usage.modelCalls, 1)
+})
+
 test('a declared deliverable must exist before the subtask counts as completed', async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-deliverable-'))
   try {
@@ -2476,6 +2726,73 @@ function twoTaskSpawner(handler = async () => completed('done')) {
     return handler(spec)
   })
 }
+
+test('a throwing workspace preparation fails the subtask instead of leaving it running', async () => {
+  const spawner = makeSpawner(async () => completed('must not spawn'))
+  const workspace = fakeWorkspace()
+  workspace.prepare = async () => { throw new Error('worktree disk unavailable') }
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    workspace,
+    config: { workspaceIsolation: true, attempts: 1 },
+  })
+
+  const run = await orchestrator.start({ goal: 'prepare a workspace', parentSessionId: parent.id, parent, mode: 'direct' })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.subtasks[0].status, 'failed')
+  assert.match(finished.subtasks[0].error, /worktree disk unavailable/)
+  assert.equal(spawner.calls.length, 0)
+})
+
+test('a created but unusable workspace retries instead of falling back to the shared directory', async () => {
+  const spawner = makeSpawner(async () => completed('must not spawn'))
+  const workspace = fakeWorkspace()
+  workspace.prepare = async () => ({
+    ok: false, dir: '/state/workspaces/created/w1', branch: 'superagent/created-w1', base: '/repo',
+    reused: false, reason: 'cannot restore the parent working directory',
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    workspace,
+    config: { workspaceIsolation: true, attempts: 1 },
+  })
+
+  const run = await orchestrator.start({ goal: 'do not lose the checkout', parentSessionId: parent.id, parent, mode: 'direct' })
+  const finished = await orchestrator.status(run.id, 10)
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.subtasks[0].status, 'failed')
+  assert.match(finished.subtasks[0].error, /created but could not be used.*retrying/)
+  assert.equal(spawner.calls.length, 0)
+})
+
+test('a board cancellation during workspace preparation prevents the later spawn', async () => {
+  const preparing = gate()
+  const releasePreparation = gate()
+  const spawner = makeSpawner(async () => completed('must not spawn'))
+  const workspace = fakeWorkspace()
+  workspace.prepare = async () => {
+    preparing.open()
+    await releasePreparation.opened
+    return { ok: true, dir: '/state/workspaces/late/w1', branch: 'superagent/late-w1', base: '/repo', reused: false }
+  }
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    workspace,
+    config: { workspaceIsolation: true, attempts: 1 },
+  })
+
+  const run = await orchestrator.start({ goal: 'cancel during preparation', parentSessionId: parent.id, parent, mode: 'direct' })
+  await preparing.opened
+  await orchestrator.cancelSubtask(run.id, '1')
+  releasePreparation.open()
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'cancelled')
+  assert.equal(finished.subtasks[0].status, 'cancelled')
+  assert.equal(spawner.calls.length, 0, 'preparation finishing after cancel must not dispatch a worker')
+})
 
 test('workspace isolation is off by default and leaves the worker prompt alone', async () => {
   const spawner = twoTaskSpawner()

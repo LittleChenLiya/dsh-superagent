@@ -674,12 +674,36 @@ test('a running turn can be stopped through the host session controller', async 
     const fake = fakeHost()
     panel = await startConsole(state, fake.host)
     await request(panel, 'POST', '/api/console/session', {})
-    const stopped = await request(panel, 'POST', '/api/console/cancel', {})
+    const stopped = await request(panel, 'POST', '/api/console/cancel', { sessionId: 'session-console' })
     assert.equal(stopped.status, 200)
     assert.deepEqual(stopped.json.data, { canceling: true })
     assert.deepEqual(fake.cancels, ['session-console'], 'the stop button must reach the host, not just the page')
   } finally {
     if (panel) await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('a late stop request cannot cancel the newly selected conversation', async () => {
+  const { base, state } = await fixture()
+  let panel = null
+  try {
+    const fake = fakeHost()
+    let created = 0
+    fake.host.createSession = async () => ({ sessionId: `session-${++created}` })
+    panel = await startConsole(state, fake.host)
+    assert.equal((await request(panel, 'POST', '/api/console/session', {})).json.data.sessionId, 'session-1')
+    assert.equal((await request(panel, 'POST', '/api/console/session', {})).json.data.sessionId, 'session-2')
+
+    const late = await request(panel, 'POST', '/api/console/cancel', { sessionId: 'session-1' })
+    assert.equal(late.status, 409)
+    assert.equal(late.json.error.id, 'session-mismatch')
+    assert.deepEqual(fake.cancels, [], 'a stale click-time id must never reach the new session')
+    assert.equal((await request(panel, 'POST', '/api/console/cancel', {})).status, 400)
+    assert.equal((await request(panel, 'POST', '/api/console/cancel', { sessionId: 'session-2' })).status, 200)
+    assert.deepEqual(fake.cancels, ['session-2'])
+  } finally {
+    await panel?.stop()
     await fsp.rm(base, { recursive: true, force: true })
   }
 })
@@ -692,7 +716,7 @@ test('stopping a turn fails loudly when the host offers no cancel', async () => 
     delete fake.host.cancelTurn
     panel = await startConsole(state, fake.host)
     await request(panel, 'POST', '/api/console/session', {})
-    const stopped = await request(panel, 'POST', '/api/console/cancel', {})
+    const stopped = await request(panel, 'POST', '/api/console/cancel', { sessionId: 'session-console' })
     assert.equal(stopped.status, 501)
     assert.equal(stopped.json.ok, false)
     assert.equal(stopped.json.error.id, 'cancel-unsupported')
@@ -1089,12 +1113,14 @@ test('the artifact route only opens files a run report names', async () => {
   const outDir = path.join(base, 'out')
   await fsp.mkdir(outDir, { recursive: true })
   const reportFile = path.join(outDir, 'report.html')
+  const svgFile = path.join(outDir, 'malicious.svg')
   await fsp.writeFile(reportFile, '<h1>ok</h1>')
+  await fsp.writeFile(svgFile, '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch(location)</script></svg>')
   const secret = path.join(base, 'secret.txt')
   await fsp.writeFile(secret, 'nope')
   const { host } = fakeHost()
-  host.listRuns = async () => [{ id: 'run-1', report: `wrote ${reportFile}` }]
-  host.readRun = async (sessionId, runId) => (runId === 'run-1' ? { id: 'run-1', report: `wrote ${reportFile}` } : null)
+  host.listRuns = async () => [{ id: 'run-1', report: `wrote ${reportFile} and ${svgFile}` }]
+  host.readRun = async (sessionId, runId) => (runId === 'run-1' ? { id: 'run-1', report: `wrote ${reportFile} and ${svgFile}` } : null)
   let panel = null
   try {
     panel = await startConsole(state, host)
@@ -1104,6 +1130,11 @@ test('the artifact route only opens files a run report names', async () => {
     assert.equal(listed.status, 200)
     assert.match(listed.headers.get('content-security-policy') ?? '', /sandbox/)
     assert.match(await listed.text(), /<h1>ok<\/h1>/)
+    const svg = await fetch(`${panel.url}/api/console/artifact?path=${encodeURIComponent(svgFile)}&runId=run-1&token=${encodeURIComponent(panel.token)}`)
+    assert.equal(svg.status, 200)
+    assert.match(svg.headers.get('content-security-policy') ?? '', /sandbox/)
+    assert.doesNotMatch(svg.headers.get('content-security-policy') ?? '', /allow-same-origin|allow-scripts|script-src|connect-src/,
+      'inline SVG must not execute scripts or make network requests')
     const denied = await fetch(`${panel.url}/api/console/artifact?path=${encodeURIComponent(secret)}&token=${encodeURIComponent(panel.token)}`)
     assert.equal(denied.status, 403)
     const unauthorized = await fetch(`${panel.url}/api/console/artifact?path=${encodeURIComponent(reportFile)}`)

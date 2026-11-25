@@ -1,6 +1,6 @@
 {
   "name": "@xiangyixie/dsh-superagent",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "description": "长周期自主执行插件：一个目标拆成可并行的子任务，交付一份合并报告，重启后仍可继续。",
   "author": "Admire (LittleChenLiya)",
   "type": "module",
@@ -69,6 +69,10 @@
     "lib/watch.js",
     "lib/report.js",
     "lib/workspace.js",
+    "lib/workspace-host.js",
+    "lib/observability.js",
+    "lib/mcp-memory.js",
+    "lib/host-schedule.js",
     "lib/doctor.js",
     "lib/browser.js",
     "lib/desktop.js",
@@ -108,7 +112,7 @@
     "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "scripts": {
-    "test": "node --test test/lock.test.mjs test/orchestrator.test.mjs test/direct-and-queue.test.mjs test/dialog.test.mjs test/workspace.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/overhead.test.mjs test/guard.test.mjs test/goal.test.mjs test/cron.test.mjs test/schedule.test.mjs test/audit.test.mjs test/inject.test.mjs test/sync.test.mjs test/workbench.test.mjs test/usage.test.mjs test/cost.test.mjs test/ledger.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/user-memory.test.mjs test/notify.test.mjs test/templates.test.mjs test/archive.test.mjs test/doctor.test.mjs test/pack.test.mjs test/runtime-control.test.mjs test/console.test.mjs test/ui-regressions.test.mjs test/router-attention.test.mjs test/work-graph.test.mjs test/attention-policy.test.mjs test/github-events.test.mjs test/sources.test.mjs test/client-bundle.test.mjs test/client-entries.test.mjs test/wizard.test.mjs test/board.test.mjs test/long-goal.test.mjs",
+    "test": "node --test --test-concurrency=2 test/lock.test.mjs test/orchestrator.test.mjs test/direct-and-queue.test.mjs test/dialog.test.mjs test/workspace.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/overhead.test.mjs test/guard.test.mjs test/goal.test.mjs test/cron.test.mjs test/schedule.test.mjs test/audit.test.mjs test/inject.test.mjs test/sync.test.mjs test/workbench.test.mjs test/usage.test.mjs test/cost.test.mjs test/ledger.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/user-memory.test.mjs test/notify.test.mjs test/templates.test.mjs test/archive.test.mjs test/doctor.test.mjs test/pack.test.mjs test/runtime-control.test.mjs test/console.test.mjs test/ui-regressions.test.mjs test/router-attention.test.mjs test/work-graph.test.mjs test/attention-policy.test.mjs test/github-events.test.mjs test/sources.test.mjs test/client-bundle.test.mjs test/client-entries.test.mjs test/wizard.test.mjs test/board.test.mjs test/long-goal.test.mjs test/observability.test.mjs test/mcp-memory.test.mjs test/host-schedule.test.mjs test/workspace-host.test.mjs test/host-integrations.test.mjs",
     "check-pack": "node scripts/check-pack.mjs"
   },
   "keywords": [

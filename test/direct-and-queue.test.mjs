@@ -22,6 +22,8 @@ function memoryStore() {
   const locks = new Map()
   const store = {
     owner: null,
+    cancels,
+    locks,
     async init() {},
     async list() {
       return [...runs.values()].map(run => structuredClone(run))
@@ -226,6 +228,50 @@ test('a queued run settles as failed when its promotion save fails once', async 
   assert.equal(finished.queue.waiting, false)
   assert.match(finished.error, /could not be claimed.*disk full during promotion/)
   assert.equal(calls, 1)
+})
+
+test('a cross-process cancel marker settles a queued run without spawning or retaining its lock', async () => {
+  const store = memoryStore()
+  const acquireLock = store.acquireLock
+  let queuedId = null
+  store.acquireLock = async (id, holder) => {
+    // The other process writes only the marker; the queue owner must observe it
+    // after claiming the run and before turning the queue entry into execution.
+    if (id === queuedId) await store.requestCancel(id)
+    return acquireLock(id, holder)
+  }
+  const firstWorker = gate()
+  let calls = 0
+  const spawner = makeSpawner(async () => {
+    calls += 1
+    if (calls === 1) await firstWorker.opened
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({
+    store,
+    spawner,
+    config: { maxActiveRuns: 1, queueTimeoutMinutes: 30 },
+  })
+  const first = await orchestrator.start({
+    goal: 'hold the only slot', parentSessionId: parent.id, parent, mode: 'direct',
+  })
+  await waitFor(() => calls === 1, 'the first worker to start')
+  const queued = await orchestrator.start({
+    goal: 'cancel while waiting', parentSessionId: parent.id, parent, mode: 'direct', queue: true,
+  })
+  queuedId = queued.id
+
+  firstWorker.open()
+  const finished = await orchestrator.status(queued.id, 10)
+
+  assert.equal((await orchestrator.status(first.id, 10)).status, 'completed')
+  assert.equal(finished.status, 'cancelled')
+  assert.equal(finished.queue.waiting, false)
+  assert.equal(finished.queue.cancelled, true)
+  assert.match(finished.error, /cancelled/)
+  assert.equal(calls, 1, 'the cancelled queue entry must never dispatch a child')
+  assert.equal(store.cancels.has(queued.id), false, 'terminal settlement must clear the marker')
+  assert.equal(store.locks.has(queued.id), false, 'terminal settlement must release the run lock')
 })
 
 test('a queued run stays queued until its failure can be persisted', async () => {
@@ -480,6 +526,37 @@ test('a queued run fails when no slot frees before queueTimeoutMinutes', async (
   // The queued run never spawned a child.
   assert.equal(calls.length, 1)
 
+  await orchestrator.cancel(first.id)
+})
+
+test('a queued timeout honours a cross-process cancel marker', async () => {
+  const timers = []
+  const store = memoryStore()
+  const { spawnChild, calls } = makeSpawner(() => new Promise(() => {}))
+  const { orchestrator } = orchestratorWith({
+    store,
+    spawner: { spawnChild },
+    config: { maxActiveRuns: 1, queueTimeoutMinutes: 30 },
+    setTimer: (fn, ms) => {
+      const timer = { fn, ms, cleared: false, unref() {} }
+      timers.push(timer)
+      return timer
+    },
+    clearTimer: timer => { if (timer) timer.cleared = true },
+  })
+  const first = await orchestrator.start({ goal: 'holds the slot', parentSessionId: parent.id, parent, mode: 'direct' })
+  await waitFor(() => calls.length === 1, 'the first worker to start')
+  const queued = await orchestrator.start({ goal: 'cancel at timeout', parentSessionId: parent.id, parent, mode: 'direct', queue: true })
+
+  await store.requestCancel(queued.id)
+  await timers[0].fn()
+  const finished = await orchestrator.status(queued.id, 10)
+  assert.equal(finished.status, 'cancelled')
+  assert.equal(finished.queue.cancelled, true)
+  assert.notEqual(finished.queue.expired, true)
+  assert.equal(store.cancels.has(queued.id), false)
+  assert.equal(store.locks.has(queued.id), false)
+  assert.equal(calls.length, 1)
   await orchestrator.cancel(first.id)
 })
 

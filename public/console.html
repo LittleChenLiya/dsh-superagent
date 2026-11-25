@@ -2246,7 +2246,7 @@
     STATE.stopCurrentBusy = true
     syncStopControls()
     try {
-      await api('/api/console/cancel', { method: 'POST' })
+      await api('/api/console/cancel', { method: 'POST', body: { sessionId } })
       if (STATE.sessionId !== sessionId || STATE.stopCurrentSeq !== requestId) return
       STATE.stopCurrentRequested = true
       pushToast('已请求停止当前生成，等宿主确认。', 'ok')
@@ -3215,15 +3215,9 @@
         applySessionState(frame.state)
         break
       case 'accepted':
-        for (let i = STATE.messages.length - 1; i >= 0; i -= 1) {
-          const message = STATE.messages[i]
-          if (message.role === 'user' && message.pending && message.text === frame.text) {
-            message.pending = false
-            message.at = Date.now()
-            refreshMessage(message)
-            break
-          }
-        }
+        // Acceptance only confirms the POST. Keep the optimistic row pending
+        // until the authoritative user/message event settles it, or that event
+        // appends the same text a second time.
         break
       case 'approval': {
         const approval = frame.approval
@@ -4244,8 +4238,8 @@
         method: 'POST',
         body: { sessionId: STATE.sessionId, text, mode: STATE.sendMode },
       })
-      optimistic.pending = false
-      refreshMessage(optimistic)
+      // The POST response can beat the host's user/message event. Settling here
+      // makes the late authoritative event append a duplicate message.
     } catch (error) {
       optimistic.pending = false
       optimistic.failed = true

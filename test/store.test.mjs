@@ -184,15 +184,19 @@ test('a legacy lock holder can still be released without token metadata', async 
   await fsp.rm(dir, { recursive: true, force: true })
 })
 
-test('mount cleanup drops locks of finished runs', async () => {
+test('mount cleanup drops locks of finished runs only after their local holder is dead', async () => {
   const { store, dir } = await tempStore()
-  await store.write({ id: '20260101T000000-done', createdAt: '2026-01-01T00:00:00.000Z', status: 'completed' })
-  await store.acquireLock('20260101T000000-done', { pid: 1, hostname: 'machine-a', at: 'now' })
+  const id = '20260101T000000-done'
+  await store.write({ id, createdAt: '2026-01-01T00:00:00.000Z', status: 'completed' })
+  await store.acquireLock(id, { pid: process.pid, hostname: os.hostname(), at: new Date().toISOString() })
 
   await store.cleanup()
+  assert.ok(await store.readLock(id), 'a live process may still be publishing its terminal state')
 
-  const names = await fsp.readdir(store.runsDir)
-  assert.equal(names.includes('20260101T000000-done.lock'), false)
+  await store.releaseLock(id)
+  await store.acquireLock(id, { pid: 2147483647, hostname: os.hostname(), at: new Date().toISOString() })
+  await store.cleanup()
+  assert.equal(await store.readLock(id), null, 'a dead local holder cannot block recovery')
   await fsp.rm(dir, { recursive: true, force: true })
 })
 

@@ -346,6 +346,8 @@
     busy: false,
     openRequest: 0,
     editorVersion: 0,
+    confirmVersion: null,
+    confirmFile: null,
   };
 
   function readToken() {
@@ -595,19 +597,24 @@
   }
 
   async function previewCurrent(showConfirm) {
-    if (!state.file || state.file.readOnly) return false;
+    if (!state.file || state.file.readOnly || state.busy) return false;
+    const file = state.file;
+    const version = state.editorVersion;
     state.busy = true;
     updateDirty();
     try {
       const data = await api('/api/preview', {
         method: 'POST',
-        body: JSON.stringify({ path: state.file.path, content: editorText() }),
+        body: JSON.stringify({ path: file.path, content: editorText() }),
       });
+      if (state.file !== file || state.editorVersion !== version) return false;
       if (!showConfirm) {
         $('sideTitle').textContent = 'Diff';
         $('sideBody').textContent = '';
         renderDiff($('sideBody'), data.diff);
       } else {
+        state.confirmVersion = version;
+        state.confirmFile = file;
         $('confirm').hidden = false;
         $('confirmStats').textContent = data.identical
           ? '没有改动'
@@ -617,7 +624,7 @@
       }
       return true;
     } catch (error) {
-      toast(error.message, true);
+      if (state.file === file && state.editorVersion === version) toast(error.message, true);
       return false;
     } finally {
       state.busy = false;
@@ -630,6 +637,7 @@
     const file = state.file;
     const content = editorText();
     const version = state.editorVersion;
+    if ($('confirm').hidden || state.confirmVersion !== version || state.confirmFile !== file) return false;
     const editor = $('editor');
     const confirmSave = $('confirmSave');
     state.busy = true;
@@ -854,6 +862,7 @@
   $('confirmSave').addEventListener('click', saveCurrent);
   $('editor').addEventListener('input', () => {
     state.editorVersion += 1;
+    $('confirm').hidden = true;
     updateDirty();
   });
   $('editor').addEventListener('keydown', event => {

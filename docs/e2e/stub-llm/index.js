@@ -19,6 +19,7 @@ const PLANNER_MARK = 'You are the planner for a long-horizon autonomous run.'
 const WORKER_MARK = 'You are one worker in a long-horizon autonomous run.'
 const DIRECT_MARK = 'You are completing one task directly in an autonomous run.'
 const AGGREGATOR_MARK = 'You are the aggregator of a long-horizon autonomous run.'
+const REVIEWER_MARK = 'You are an independent reviewer.'
 
 const GOAL = 'Compare two sorting strategies on the stub fixture and report one number for each.'
 
@@ -148,6 +149,14 @@ class StubAdapter {
     const text = allText(messages)
     const toolResults = messages.filter(message => message?.role === 'tool')
 
+    if (text.includes(REVIEWER_MARK)) {
+      await delay(20)
+      yield* textChunks(JSON.stringify({ verdict: 'pass', evidence: ['stub reviewer checked the acceptance contract'], issues: [] }))
+      yield usageChunk(30, 10)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+
     if (text.includes(PLANNER_MARK)) {
       await delay(30)
       yield* textChunks(planText())
@@ -241,6 +250,95 @@ class StubAdapter {
     const turn = turnOf(messages)
     const kind = /\[e2e:([a-z-]+)/.exec(turn.text)?.[1] ?? 'plain'
     const step = turn.steps.length
+    if (kind === 'keepalive') {
+      if (step === 0) {
+        yield* toolChunks('call-superagent-help', 'superagent_help', {})
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      await delay(Number(process.env.E2E_KEEPALIVE_MS ?? 120000))
+      yield* textChunks('keepalive complete')
+      yield usageChunk(20, 5)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (kind === 'status-host') {
+      if (step === 0) {
+        yield* toolChunks('call-superagent-help', 'superagent_help', {})
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step === 1) {
+        yield* toolChunks('call-host-status', 'superagent_audit', { format: 'status' })
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      yield* textChunks(`host status smoke: ${lastToolText(messages)}`)
+      yield usageChunk(30, 8)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (kind === 'schedule-host') {
+      if (step === 0) {
+        yield* toolChunks('call-superagent-help', 'superagent_help', {})
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step === 1) {
+        yield* toolChunks('call-host-schedule', 'superagent_schedule', {
+          action: 'create', name: 'host-smoke', goal: 'Run the host schedule smoke check.', every_minutes: 5,
+        })
+        yield usageChunk(50, 10)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      yield* textChunks(`host schedule smoke: ${lastToolText(messages)}`)
+      yield usageChunk(30, 8)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (kind === 'review-direct') {
+      if (step === 0) {
+        yield* toolChunks('call-superagent-help', 'superagent_help', {})
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step === 1) {
+        yield* toolChunks('call-review-direct', 'superagent_start', {
+          goal: 'Verify the independent reviewer and host workspace adapter.', mode: 'direct', wait_seconds: 60,
+        })
+        yield usageChunk(50, 10)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      yield* textChunks(`review direct smoke: ${lastToolText(messages).split('\n').slice(0, 6).join(' | ')}`)
+      yield usageChunk(30, 8)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
+    if (kind === 'start-wait-help') {
+      if (step === 0) {
+        yield* toolChunks('call-superagent-help', 'superagent_help', {})
+        yield usageChunk(40, 8)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      if (step === 1) {
+        yield* toolChunks('call-start-wait', 'superagent_start', { goal: GOAL, wait_seconds: 150 })
+        yield usageChunk(60, 12)
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+        return
+      }
+      yield* textChunks(`stub finished: ${lastToolText(messages).split('\n').slice(0, 4).join(' | ')}`)
+      yield usageChunk(80, 16)
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
     if (kind === 'start-wait') {
       if (step === 0) {
         yield* toolChunks('call-start-wait', 'superagent_start', { goal: GOAL, wait_seconds: 150 })

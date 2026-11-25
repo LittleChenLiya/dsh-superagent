@@ -106,9 +106,38 @@ test('a repository outside the sandbox boundary gets a pool inside the boundary'
   assert.equal((await git(repo, ['status', '--porcelain'])).trim(), '')
 })
 
+test('a linked worktree pool cannot redirect writes outside the sandbox', async () => {
+  const repo = await makeRepo()
+  const outside = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-ws-outside-'))
+  const link = path.join(repo, 'linked-pool')
+  await fsp.symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir')
+  const manager = createWorkspaceManager({ root: 'linked-pool', baseDir: repo, sleep: () => Promise.resolve() })
+
+  const verdict = await manager.probe()
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.reason, /symbolic link|outside the sandbox boundary/)
+  assert.deepEqual(await fsp.readdir(outside), [], 'probing must not write through the link')
+  const work = await manager.prepare({ runId: 'run-link', index: 1 })
+  assert.equal(work.ok, false)
+  assert.deepEqual(await fsp.readdir(outside), [])
+})
+
+test('a linked worker directory cannot redirect a checkout outside the sandbox', async () => {
+  const repo = await makeRepo()
+  const outside = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-worker-outside-'))
+  const manager = managerFor(repo)
+  assert.equal((await manager.probe()).ok, true)
+  await fsp.symlink(outside, path.join(manager.root, 'run-deep'), process.platform === 'win32' ? 'junction' : 'dir')
+
+  const work = await manager.prepare({ runId: 'run-deep', index: 1 })
+  assert.equal(work.ok, false)
+  assert.match(work.reason, /symbolic link|outside the sandbox boundary/)
+  assert.deepEqual(await fsp.readdir(outside), [], 'no checkout may be created through the linked worker directory')
+})
+
 test('a resume keeps a checkout recorded under the previous pool location', async () => {
   const repo = await makeRepo()
-  const legacyRoot = path.join(path.dirname(repo), `${path.basename(repo)}-old-worktrees`)
+  const legacyRoot = path.join(repo, '.old-worktrees')
   const legacy = await createWorkspaceManager({ root: legacyRoot, baseDir: repo, sleep: () => Promise.resolve() })
     .prepare({ runId: 'run-old', index: 1 })
   assert.equal(legacy.ok, true, legacy.reason)

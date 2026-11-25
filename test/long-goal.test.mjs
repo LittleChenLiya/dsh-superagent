@@ -543,6 +543,72 @@ test('a whole-goal budget stops dispatch before the next phase starts', async ()
   assert.match(state.goal.stoppedReason.detail, /model-call budget/)
 })
 
+test('parallel phases share an atomic budget reservation across ticks and restarts', async t => {
+  const root = await tempRoot('parallel-budget')
+  t.after(() => fsp.rm(root, { recursive: true, force: true }))
+  const orchestrator = fakeOrchestrator()
+  let goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'one shared model call',
+    parentSessionId: agent.id,
+    maxParallelPhases: 2,
+    budget: { maxModelCalls: 1 },
+    phases: [phase('p1'), phase('p2')],
+  })
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  assert.equal(orchestrator.calls.start.length, 1, 'two phases must not each receive the same last model call')
+  assert.deepEqual(state.goal.phases[0].budgetReservation, { maxModelCalls: 1 })
+  assert.equal(state.goal.phases[1].budgetReservation, undefined)
+  const firstRun = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+  // A queued or otherwise unreadable run has no usage yet. Its reservation,
+  // not a second usage refresh, must still occupy the shared allowance.
+  firstRun.usage = { modelCalls: 0, totalTokens: 0 }
+  await goals.close()
+
+  goals = await manager(root, orchestrator)
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(orchestrator.calls.start.length, 1, 'the reservation must survive a manager restart')
+  assert.equal(state.goal.status, 'running')
+
+  firstRun.usage = { modelCalls: 1, totalTokens: 100 }
+  orchestrator.complete(firstRun)
+  await goals.tick()
+  state = await goals.status(goal.id)
+  assert.equal(state.goal.phases[0].budgetReservation, undefined, 'terminal usage releases the reservation')
+  assert.equal(state.goal.status, 'budget-stopped')
+  assert.equal(state.goal.phases[1].status, 'pending')
+  assert.equal(orchestrator.calls.start.length, 1)
+  assert.match(state.goal.stoppedReason.detail, /model-call budget/)
+  await goals.close()
+})
+
+test('a run read error cannot release a live budget reservation', async () => {
+  const root = await tempRoot('budget-read-error')
+  const orchestrator = fakeOrchestrator()
+  let goals = await manager(root, orchestrator)
+  try {
+    const goal = await goals.create({
+      goal: 'keep the only reservation', parentSessionId: agent.id,
+      budget: { maxModelCalls: 1 }, phases: [phase('p1'), phase('p2')],
+    })
+    await goals.tick()
+    const status = orchestrator.status
+    orchestrator.status = async () => { throw new Error('EACCES: cannot read state for unknown run r-1') }
+    await goals.tick()
+    orchestrator.status = status
+
+    const state = await goals.status(goal.id)
+    assert.equal(orchestrator.calls.start.length, 1, 'a transient read failure must not dispatch the same phase again')
+    assert.deepEqual(state.goal.phases[0].budgetReservation, { maxModelCalls: 1 })
+    assert.equal(state.goal.phases[0].status, 'running')
+  } finally {
+    goals.close()
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
 test('a worker question is answered through the run attention path', async () => {
   const root = await tempRoot('question')
   const orchestrator = fakeOrchestrator()
@@ -766,6 +832,9 @@ test('a phase with a dependent still asks a person instead of skipping', async (
   assert.equal(state.goal.status, 'needs-decision')
   assert.equal(state.goal.decisions[0].kind, 'phase-exhausted')
   assert.match(state.goal.decisions[0].question, /下游阶段 p2 依赖它/)
+  assert.match(state.goal.decisions[0].summary, /阶段 p1「Title p1」自动重试已结束/)
+  assert.match(state.goal.decisions[0].impact, /下游阶段 p2 正在等待/)
+  assert.match(state.goal.decisions[0].detail, /export still broken/)
   assert.equal(state.goal.phases[0].status, 'failed')
 })
 

@@ -162,8 +162,39 @@ async function loadWorkbench(overrides = {}) {
     'confirm', 'sideTitle', 'sideBody', 'toast', 'conn', 'connText',
   ])
   const context = contextFor(document, overrides)
-  vm.runInContext(withoutBoot(script, 'state, openFile, saveCurrent, updateDirty'), context)
+  vm.runInContext(withoutBoot(script, 'state, openFile, previewCurrent, saveCurrent, updateDirty'), context)
   return { ui: context.__test, document }
+}
+
+async function loadConsoleMessageHarness(overrides = {}) {
+  const { script } = await pageScript('console.html')
+  const frameStart = script.indexOf('  function handleFrame(frame) {')
+  const frameEnd = script.indexOf('  function upsertTool', frameStart)
+  const sendStart = script.indexOf('  async function sendMessage() {')
+  const sendEnd = script.indexOf('  async function newConversation()', sendStart)
+  assert.ok(frameStart >= 0 && frameEnd > frameStart && sendStart >= 0 && sendEnd > sendStart)
+  const messages = []
+  const STATE = {
+    messages, currentAssistant: null, toolCalls: new Map(), approvals: new Map(), cancelRequested: new Set(),
+    messageSeq: 0, sending: false, router: false, mode: 'chat', sessionId: 'session-a', sendMode: 'queue',
+  }
+  const inputEl = new Element('textarea')
+  inputEl.value = 'hello'
+  const sandbox = {
+    STATE, inputEl,
+    contentText: content => typeof content === 'string' ? content : (content ?? []).map(part => part.text).join(''),
+    addMessage(role, text, options = {}) {
+      const message = { id: `m${++STATE.messageSeq}`, role, text, at: options.at ?? Date.now(), ...options }
+      messages.push(message)
+      return message
+    },
+    refreshMessage() {}, removeEmpty() {}, setTyping() {}, autoGrow() {}, updateSend() {}, pushToast() {},
+    ...overrides,
+  }
+  vm.createContext(sandbox)
+  vm.runInContext(`${script.slice(frameStart, frameEnd)}\n${script.slice(sendStart, sendEnd)}
+    globalThis.__test = { handleFrame, handleSessionEvent, sendMessage }`, sandbox)
+  return { ui: sandbox.__test, STATE, messages, inputEl }
 }
 
 async function loadBoard(overrides = {}) {
@@ -194,6 +225,9 @@ test('workbench disables the editor while saving and does not mark newer text sa
   const editor = document.getElementById('editor')
   ui.state.file = { path: 'a.txt', content: 'one', hash: 'old', mtimeMs: 1, size: 3, readOnly: false, eol: 'lf' }
   editor.value = 'two'
+  ui.state.confirmVersion = ui.state.editorVersion
+  ui.state.confirmFile = ui.state.file
+  document.getElementById('confirm').hidden = false
   ui.updateDirty()
 
   const saving = ui.saveCurrent()
@@ -231,6 +265,62 @@ test('workbench ignores a slow file response that finishes after the latest sele
 
   assert.equal(ui.state.file.path, 'second.txt')
   assert.equal(ui.state.file.content, 'second')
+})
+
+test('workbench drops a diff response after the user switches files', async () => {
+  const preview = deferred()
+  const opening = deferred()
+  const { ui, document } = await loadWorkbench({
+    fetch: route => route === '/api/preview' ? preview.promise : opening.promise,
+  })
+  ui.state.file = { path: 'a.txt', content: 'one', readOnly: false, eol: 'lf' }
+  document.getElementById('editor').value = 'two'
+  const previewing = ui.previewCurrent(true)
+  const switching = ui.openFile('b.txt')
+  opening.resolve(response({ path: 'b.txt', content: 'second', hash: '2', mtimeMs: 2, size: 6 }))
+  await switching
+  preview.resolve(response({ identical: false, stats: { added: 1, removed: 1 }, diff: '+two\n-one' }))
+
+  assert.equal(await previewing, false)
+  assert.equal(ui.state.file.path, 'b.txt')
+  assert.equal(document.getElementById('confirm').hidden, true,
+    'an old file diff must not reopen the save confirmation')
+  assert.equal(document.getElementById('confirmDiff').textContent, '')
+  assert.equal(ui.state.busy, false)
+})
+
+test('workbench drops a diff response after the editor text changes', async () => {
+  const preview = deferred()
+  const { ui, document } = await loadWorkbench({ fetch: async () => preview.promise })
+  ui.state.file = { path: 'a.txt', content: 'one', readOnly: false, eol: 'lf' }
+  document.getElementById('editor').value = 'two'
+  document.getElementById('confirm').hidden = true
+  const previewing = ui.previewCurrent(true)
+  document.getElementById('editor').value = 'three'
+  document.getElementById('editor').dispatch('input')
+  preview.resolve(response({ identical: false, stats: { added: 1, removed: 1 }, diff: '+two\n-one' }))
+
+  assert.equal(await previewing, false)
+  assert.equal(document.getElementById('confirm').hidden, true,
+    'a diff for older editor text must not authorize saving newer text')
+  assert.equal(ui.state.dirty, true)
+  assert.equal(ui.state.busy, false)
+})
+
+test('workbench revokes a save confirmation as soon as the editor changes', async () => {
+  const { ui, document } = await loadWorkbench({
+    fetch: async () => response({ identical: false, stats: { added: 1, removed: 1 }, diff: '+two\n-one' }),
+  })
+  ui.state.file = { path: 'a.txt', content: 'one', hash: 'old', mtimeMs: 1, readOnly: false }
+  document.getElementById('editor').value = 'two'
+  await ui.previewCurrent(true)
+  assert.equal(document.getElementById('confirm').hidden, false)
+
+  document.getElementById('editor').value = 'three'
+  document.getElementById('editor').dispatch('input')
+  assert.equal(document.getElementById('confirm').hidden, true)
+  await ui.saveCurrent()
+  assert.equal(ui.state.file.content, 'one', 'a revoked confirmation must not save newer text')
 })
 
 test('workbench asks before discarding dirty text and cancellation performs no read', async () => {
@@ -384,6 +474,34 @@ test('board report click reads detail only when absent and otherwise shows an em
   assert.match(modals[0][1], /还没有最终报告|没有最终报告/)
 })
 
+test('console keeps an optimistic message pending after accepted until the authoritative user event', async () => {
+  const { ui, messages } = await loadConsoleMessageHarness()
+  const optimistic = { id: 'm1', role: 'user', text: 'hello', pending: true, at: Date.now() }
+  messages.push(optimistic)
+
+  ui.handleFrame({ type: 'accepted', text: 'hello' })
+  assert.equal(optimistic.pending, true, 'an acceptance frame is not the authoritative transcript event')
+  ui.handleSessionEvent({ type: 'user/message', time: Date.now(), data: { content: [{ type: 'text', text: 'hello' }] } })
+
+  assert.equal(messages.length, 1, 'the late user/message event must settle the optimistic row, not duplicate it')
+  assert.equal(optimistic.pending, false)
+})
+
+test('console keeps an optimistic message pending when the send response beats the user event', async () => {
+  const pending = deferred()
+  const { ui, messages } = await loadConsoleMessageHarness({ api: async () => pending.promise })
+  const sending = ui.sendMessage()
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].pending, true)
+  pending.resolve(response({ accepted: true }))
+  await sending
+
+  assert.equal(messages[0].pending, true, 'the POST response must not settle the row before user/message')
+  ui.handleSessionEvent({ type: 'user/message', time: Date.now(), data: { content: [{ type: 'text', text: 'hello' }] } })
+  assert.equal(messages.length, 1, 'a late authoritative event must not append a duplicate')
+  assert.equal(messages[0].pending, false)
+})
+
 test('console exposes a current-generation stop that calls the session cancel endpoint', async () => {
   const { html, script } = await pageScript('console.html')
   assert.ok(html.includes('id="stopCurrent"'), 'the current-generation stop button must exist')
@@ -395,13 +513,14 @@ test('console exposes a current-generation stop that calls the session cancel en
   const calls = []
   const sandbox = {
     STATE: {
-      mode: 'chat', router: false, running: true, stopCurrentBusy: false, stopCurrentRequested: false,
+      sessionId: 'session-console', mode: 'chat', router: false, running: true,
+      stopCurrentBusy: false, stopCurrentRequested: false,
       stopAllBusy: false, runs: [{ id: 'background-1', status: 'running' }], cancelRequested: new Set(),
     },
     stopCurrentEl: new Element('button'),
     stopAllEl: new Element('button'),
     isTerminal: status => ['completed', 'failed', 'cancelled', 'interrupted', 'blocked'].includes(status),
-    api: async route => { calls.push(route) },
+    api: async (route, options) => { calls.push({ route, body: options.body }) },
     renderLanes() {},
     pushToast() {},
     messageOf: error => error.message,
@@ -414,7 +533,9 @@ test('console exposes a current-generation stop that calls the session cancel en
   }`, sandbox)
   assert.equal(typeof sandbox.__test.stopCurrentGeneration, 'function')
   await sandbox.__test.stopCurrentGeneration()
-  assert.deepEqual(calls, ['/api/console/cancel'])
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].route, '/api/console/cancel')
+  assert.equal(calls[0].body.sessionId, 'session-console')
 })
 
 test('console ignores a stop response from an older session', async () => {
