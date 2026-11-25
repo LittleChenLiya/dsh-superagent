@@ -459,3 +459,31 @@ test('asking which decisions are pending answers with the options without parkin
     await fsp.rm(base, { recursive: true, force: true })
   }
 })
+
+test('a queued write stays in the snapshot until it is processed', async () => {
+  const { base, state } = await fixture('superagent-queued-snapshot')
+  let reject
+  const { boot, stopAll } = harness({
+    state, projects: [], tasks: [],
+    classify: () => new Promise((_, fail) => { reject = fail }),
+    execute: async () => ({ text: '' }),
+  })
+  const router = boot()
+  try {
+    await router.submit({ id: 'queued-command-0001', text: '帮我做掉新作业' })
+    const during = await until(async () => {
+      const snapshot = await router.snapshot()
+      return snapshot.pending === 1 ? snapshot : null
+    }, 'the queued write to appear in the snapshot')
+    assert.deepEqual(during.commands.map(item => item.id), ['queued-command-0001'],
+      'the panel can mark a message that is still waiting')
+    assert.equal(during.commands[0].text, '帮我做掉新作业')
+    reject(new Error('classification stopped'))
+    const after = await settled(router)
+    assert.deepEqual(after.commands, [], 'a finished write leaves the queue')
+  } finally {
+    reject?.(new Error('stop'))
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})

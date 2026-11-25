@@ -286,6 +286,29 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   assert.equal(actions.at(-1).message.runId, first.id)
 })
 
+test('a closed task ends the conversation with its own summary bubble', async () => {
+  // The progress card sits where the task began; the conclusion needs a bubble
+  // of its own at the end, or the conversation reads as if nothing came back.
+  const card = await taskCardHarness({ status: 'partial' }, {
+    messages: [
+      { id: 'reply-u1', role: 'assistant', text: '', taskId: 'goal-empty', at: 1 },
+      { id: 'phase-goal-empty-p1-aaaaaaaaaaaa', role: 'assistant', text: '阶段「改造镜头」已交付：完成。',
+        taskId: 'goal-empty', phaseId: 'p1', at: 2 },
+      { id: 'result-goal-empty-bbbbbbbbbbbb', role: 'assistant', receipt: 'delivered', taskId: 'goal-empty', at: 3,
+        text: '「空任务」部分交付（1/2 阶段完成）。最终结论：镜头已改为固定面视角。' },
+    ],
+  })
+  const nodes = card.render()
+  const lines = nodes.filter(node => node.props?.className === 'dsa-md-plain')
+    .map(node => (node.children ?? []).join(''))
+  assert.ok(lines.some(text => text.includes('最终结论：镜头已改为固定面视角。')),
+    'the closing text is readable in the conversation')
+  assert.ok(nodes.some(node => (node.children ?? []).includes('最终总结')),
+    'the closing bubble names itself')
+  const cards = nodes.filter(node => String(node.props?.className ?? '').includes('dsa-task-receipt'))
+  assert.equal(cards.length, 1, 'the progress card still appears once')
+})
+
 /** Hook storage that keeps component state across explicit re-renders. */
 function hookCache() {
   // State belongs to a component, not to a global cursor. A panel that grows a
@@ -463,6 +486,27 @@ test('an existing draft is kept intact when a record entry is used', async () =>
   assert.equal(card.composer(nodes).props.value, '已经写了一半', 'the draft is not replaced')
   assert.match(card.hint(nodes, 'dsa-composer-hint'), /已原样保留/)
   assert.deepEqual(card.actions, [])
+})
+
+test('the reply close button and Escape clear the quote while keeping the draft', async () => {
+  const card = await taskCardHarness({}, { reply: { id: 'm1', text: '先前的消息' } })
+  card.composer(card.render()).props.onInput({ target: { value: '留在输入框的草稿' } })
+  const nodes = card.render()
+  const close = nodes.find(node => node.props?.['aria-label'] === '取消引用')
+  assert.equal(close.props.className, 'dsa-quote-close')
+  close.props.onClick()
+  assert.deepEqual(card.actions.pop(), { type: 'reply' })
+
+  const composer = nodes.find(node => node.props?.className === 'dsa-composer')
+  let stopped = false
+  const escape = { key: 'Escape', preventDefault() { this.defaultPrevented = true },
+    stopPropagation() { stopped = true } }
+  composer.props.onKeyDown({ ...escape, nativeEvent: { isComposing: true } })
+  assert.deepEqual(card.actions, [], 'Escape can first leave the input method')
+  composer.props.onKeyDown(escape)
+  assert.deepEqual(card.actions, [{ type: 'reply' }])
+  assert.ok(escape.defaultPrevented && stopped)
+  assert.equal(card.composer(card.render({ reply: null })).props.value, '留在输入框的草稿')
 })
 
 test('a task follow-up context is kept and the record entry asks to leave it first', async () => {
@@ -678,6 +722,8 @@ test('the todo badge counts one handoff once and leads with what the person must
   const nodes = card.render()
   const rows = nodes.filter(node => String(node.props?.className ?? '') === 'dsa-inbox-msg-row')
   assert.equal(rows.length, 1, 'two surfaces of one handoff count once')
+  assert.equal(card.render({ messages: [] }).find(node => node.type === 'main')?.props?.['data-empty'], false,
+    'a pending handoff stays visible even if the conversation has no messages')
   assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-header-dot'),
     'outside the panel a dot still reminds without a second entry')
   const text = nodes.map(deepText).join('')
@@ -702,7 +748,14 @@ test('the todo badge counts one handoff once and leads with what the person must
 
 const deepText = node => typeof node === 'string' ? node : (node?.children ?? []).map(deepText).join('')
 
-test('a failed card closes to its own fold and restores on demand', async () => {
+/** Text on the card face only; an expanded detail inside the card is skipped. */
+const faceText = node => {
+  if (typeof node === 'string') return node
+  if (String(node?.props?.className ?? '').includes('dsa-session-detail')) return ''
+  return (node?.children ?? []).map(faceText).join('')
+}
+
+test('a failed card folds from its menu and restores from the closed section', async () => {
   const failed = {
     id: 'r-fail', goal: '回归测试', title: '回归测试', status: 'failed', parentSessionId: 'chat-a',
     report: '断言失败：登录页超时',
@@ -712,12 +765,18 @@ test('a failed card closes to its own fold and restores on demand', async () => 
   let nodes = card.openRail()
   assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-grid'),
     'the failed run leads the grid')
-  card.button(nodes, '关闭').props.onClick()
+  const first = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card')
+  first.props.onContextMenu({ preventDefault() {}, clientX: 20, clientY: 30 })
+  nodes = card.render()
+  card.button(nodes, '关闭卡片').props.onClick()
   nodes = card.render()
   assert.equal(nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-grid'), false,
     'closing clears the failed card from the main grid')
   assert.ok(nodes.some(node => (node.children ?? []).includes('已关闭 1 项')), 'the card folds instead of vanishing')
-  card.button(nodes, '恢复').props.onClick()
+  const folded = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card')
+  folded.props.onContextMenu({ preventDefault() {}, clientX: 20, clientY: 30 })
+  nodes = card.render()
+  card.button(nodes, '恢复卡片').props.onClick()
   nodes = card.render()
   assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-grid'),
     'restoring brings the card back')
@@ -756,11 +815,11 @@ test('the card menu also opens from the keyboard, not only from a right click', 
   const after = card.render()
   assert.ok(after.some(node => String(node.props?.className ?? '') === 'dsa-card-menu'), 'Shift+F10 opens the same menu')
   assert.equal(prevented, 1)
-  assert.equal(sessionCard.children.find(child => child?.props?.className === 'dsa-session-main').props['aria-expanded'], undefined,
-    'the card button navigates; it is not a disclosure control')
+  assert.equal(sessionCard.children.find(child => child?.props?.className === 'dsa-session-main').props['aria-expanded'], false,
+    'the card button is the one disclosure control for its detail')
 })
 
-test('a waiting card keeps its question and footer inside the fixed height', async () => {
+test('a waiting card keeps its question on the face and moves context into the detail', async () => {
   const run = {
     id: 'r-art', goal: '交付', status: 'running', parentSessionId: 'chat-a',
     artifacts: [{ name: 'a.md', href: 'a.md' }],
@@ -780,8 +839,8 @@ test('a waiting card keeps its question and footer inside the fixed height', asy
   assert.ok(deepText(session).includes('需要扫码登录'), 'the question stays on the card')
   assert.equal(session.children.some(child => String(child?.props?.className ?? '') === 'dsa-session-links'), false,
     'secondary file links fold away so the fixed card does not clip its footer')
-  assert.ok(session.children.some(child => String(child?.props?.className ?? '') === 'dsa-session-foot'
-    && deepText(child).includes('学习通')), 'the project footer still renders')
+  assert.equal(session.children.some(child => String(child?.props?.className ?? '') === 'dsa-session-foot'), false,
+    'project path and close controls stay off the card face')
 })
 
 test('a waiting card without a session offers no dead 处理 button', async () => {
@@ -810,24 +869,27 @@ test('the header keeps one entry and the todo view lives inside the panel', asyn
   assert.equal(labels.includes('更多入口'), false, 'no ellipsis menu replaces it either')
 })
 
-test('a task card opens the conversation of the session that owns it', async () => {
-  const opened = []
-  const card = await taskCardHarness({}, {}, {}, { openSession: id => opened.push(id) })
-  const nodes = card.openRail()
+test('a task card expands its detail in place, and the detail holds the one session entry', async () => {
+  const card = await taskCardHarness({}, { selectedGoalId: null })
+  let nodes = card.openRail()
+  const main = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '查看「空任务」')
+  assert.ok(main, 'the card body is the single control for its detail')
+  main.props.onClick()
+  assert.deepEqual(card.actions.at(-1), { type: 'openTask', taskId: 'goal-empty' },
+    'one click expands the task detail in place instead of leaving the panel')
+  nodes = card.render({ selectedGoalId: 'goal-empty' })
   const open = nodes.find(node => node.type === 'button' && (node.children ?? []).includes('打开会话'))
-  assert.ok(open, 'the task card offers a direct way into its session')
-  assert.equal(open.props['aria-label'], '在会话中打开「空任务」')
+  assert.ok(open, 'the expanded detail offers the conversation as a second step')
   open.props.onClick()
-  assert.deepEqual(card.actions, [{ type: 'openSession', sessionId: 'chat-a' }],
-    'the entry carries the owning session, not a panel-local detail view')
+  assert.deepEqual(card.actions.at(-1), { type: 'openSession', sessionId: 'chat-a' })
 })
 
 test('the panel still loads when the host has no workspace service', async () => {
-  const card = await taskCardHarness()
+  const card = await taskCardHarness({}, { selectedGoalId: null })
   const nodes = card.openRail()
-  const open = nodes.find(node => node.type === 'button' && (node.children ?? []).includes('打开会话'))
-  assert.ok(open, 'the entry stays visible so the click can explain the missing host')
-  assert.doesNotThrow(() => open.props.onClick())
+  const main = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '查看「空任务」')
+  assert.ok(main, 'the card stays clickable so the click can explain the missing host')
+  assert.doesNotThrow(() => main.props.onClick())
 })
 
 test('a long task title stays within 20 characters on the task row', async () => {
@@ -887,7 +949,38 @@ test('a question lives inside the session card that raised it', async () => {
     '处理 jumps into the session that raised the question')
 })
 
-test('a card opens the live worker session instead of a panel-local copy', async () => {
+test('处理 opens the selected phase login inline and submits only its own decision', async () => {
+  const phases = [
+    { id: 'p1', title: '学习通登录', status: 'needs-decision' },
+    { id: 'p2', title: '慕课登录', status: 'needs-decision' },
+  ]
+  const inbox = [...phases].reverse().map(phase => ({
+    id: `g1:${phase.id}`, kind: 'decision', goalId: 'g1', sessionId: 'chat-a',
+    item: { id: `decision-${phase.id}`, phaseId: phase.id, question: `请扫码完成${phase.title}`,
+      source: { kind: 'human', runtimeVerified: true, headless: true, handoffId: `browser-${phase.id}` } },
+  }))
+  for (const phase of [...phases].reverse()) {
+    const card = await taskCardHarness({ id: 'g1', status: 'needs-decision', phases },
+      { selectedGoalId: null }, { inbox })
+    const session = card.openRail().find(node => node.props?.className === 'dsa-session-card'
+      && deepText(node).includes(`请扫码完成${phase.title}`))
+    assert.ok(session, 'the matching phase owns its login even before the run data loads')
+    const handle = session.children.find(node => node?.props?.className === 'dsa-session-ask')
+      .children.find(node => node?.props?.className === 'dsa-session-actions')
+      .children.find(node => node?.children?.[0] === '处理')
+    handle.props.onClick()
+    const after = card.render()
+    assert.equal(after.find(node => node.props?.['data-live-login'])?.props['data-live-login'],
+      `goal:g1:decision-${phase.id}`)
+    assert.equal(after.some(node => node.props?.id === 'dsa-workbench'), false)
+    await card.button(after, '完成').props.onClick()
+    assert.deepEqual(card.actions.at(-1), { type: 'goalAction', goalId: 'g1', action: 'answer', owner: 'chat-a',
+      body: { decisionId: `decision-${phase.id}`, answer: 'answer', note: '已登录' } })
+    assert.equal(card.actions.some(action => action.type === 'openSession'), false)
+  }
+})
+
+test('the live worker run stays reachable through the expanded detail, not a hover-only arrow', async () => {
   const goal = {
     id: 'g1', goal: '写脚本', title: '写脚本', ownerSessionId: 'chat-a', status: 'running',
     decisions: [], phases: [{ id: 'p1', title: '写脚本', status: 'running', runId: 'r1' }],
@@ -897,11 +990,99 @@ test('a card opens the live worker session instead of a panel-local copy', async
     subtasks: [{ index: 0, title: '写脚本', status: 'running', childId: 'child-1' }],
   }
   const card = await taskCardHarness(goal, { selectedGoalId: null }, { runs: [run] })
-  const nodes = card.openRail()
-  const open = nodes.find(node => node.props?.['aria-label'] === '在会话中打开「写脚本」')
-  assert.ok(open, 'the card carries a direct session entry')
+  let nodes = card.openRail()
+  assert.equal(nodes.some(node => String(node.props?.className ?? '').includes('dsa-session-open')), false,
+    'no button appears only on hover')
+  nodes = card.render({ selectedGoalId: 'g1' })
+  const open = nodes.find(node => node.type === 'button' && (node.children ?? []).includes('打开会话'))
+  assert.ok(open, 'the expanded goal detail keeps one way into the conversation')
   open.props.onClick()
-  assert.deepEqual(card.actions.at(-1), { type: 'openSession', sessionId: 'child-1' })
+  assert.deepEqual(card.actions.at(-1), { type: 'openSession', sessionId: 'chat-a' })
+})
+
+test('Escape collapses an expanded card before it closes the panel', async () => {
+  const card = await taskCardHarness({}, { selectedGoalId: 'goal-empty' })
+  const nodes = card.openRail()
+  const root = nodes.find(node => node.props?.className === 'dsa-root')
+  assert.ok(root?.props?.onKeyDown, 'the panel handles Escape at its root')
+  root.props.onKeyDown({ key: 'Escape', defaultPrevented: false, ctrlKey: false, metaKey: false, shiftKey: false })
+  assert.deepEqual(card.actions.at(-1), { type: 'focusGoal', goalId: null },
+    'Escape only collapses the card, it does not close the whole panel')
+})
+
+test('an open card keeps its cell and grows a full-width detail beneath its row', async () => {
+  const goal = {
+    id: 'goal-empty', goal: '三列任务', title: '三列任务', ownerSessionId: 'chat-a', status: 'running',
+    decisions: [],
+    phases: [
+      { id: 'p1', title: '第一步', status: 'running' },
+      { id: 'p2', title: '第二步', status: 'pending' },
+      { id: 'p3', title: '第三步', status: 'pending' },
+    ],
+  }
+  const card = await taskCardHarness(goal, { selectedGoalId: null })
+  let nodes = card.openRail()
+  let grid = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-grid')
+  const beforeKeys = grid.children.flat().map(cell => cell.props.key)
+  assert.deepEqual(beforeKeys, ['phase:goal-empty:p1', 'phase:goal-empty:p2', 'phase:goal-empty:p3'])
+  const first = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '查看「第一步」')
+  first.props.onClick()
+  nodes = card.render()
+  grid = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-grid')
+  const cells = grid.children.flat()
+  assert.equal(cells.length, 4, 'one full-width detail block joins the grid')
+  assert.equal(cells[0].props.key, 'phase:goal-empty:p1', 'the open card stays in its own cell')
+  assert.equal(cells[0].props.selected, true, 'the first card is the open one')
+  assert.equal(cells[1].props.key, 'phase:goal-empty:p2', 'its row neighbour keeps its cell')
+  assert.equal(cells[1].props.selected, false)
+  assert.equal(cells[3].props.key, 'phase:goal-empty:p3')
+  const detail = cells.find(cell => String(cell.props?.className ?? '') === 'dsa-session-detail')
+  assert.ok(detail, 'the detail is a grid item of its own')
+  assert.equal(cells.indexOf(detail), 2, 'the detail starts right under the expanded card row')
+  assert.equal(detail.props.style.gridColumn, '1 / -1', 'the detail spans the whole row width')
+  assert.equal(detail.props['data-open-card'], 'phase:goal-empty:p1', 'the detail belongs to the open card')
+  assert.deepEqual(cells.filter(cell => String(cell.props?.className ?? '') !== 'dsa-session-detail').map(cell => cell.props.key),
+    beforeKeys, 'no card moved or was reordered')
+  const cards = nodes.filter(node => String(node.props?.className ?? '') === 'dsa-session-card')
+  assert.equal(cards.filter(node => node.props?.['data-open'] === 'true').length, 1, 'exactly one card is open')
+
+  const list = nodes.find(node => String(node.props?.className ?? '').includes('dsa-task-list'))
+  let stopped = 0
+  list.props.onKeyDown({ key: 'Escape', defaultPrevented: false, preventDefault() {}, stopPropagation() { stopped += 1 } })
+  nodes = card.render()
+  grid = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-grid')
+  assert.equal(grid.children.flat().length, 3, 'the detail disappears with the open state')
+  assert.deepEqual(grid.children.flat().map(cell => cell.props.key), beforeKeys, 'the cards return exactly as they were')
+  assert.equal(stopped, 1, 'the panel stays open behind the folded card')
+})
+
+test('a run card uses the same full-width detail beneath its row', async () => {
+  const runA = {
+    id: 'r1', goal: '运行一', title: '运行一', status: 'running', parentSessionId: 'chat-a',
+    subtasks: [], attention: [], artifacts: [], report: '第一行结论',
+  }
+  const runB = {
+    id: 'r2', goal: '运行二', title: '运行二', status: 'running', parentSessionId: 'chat-a',
+    subtasks: [], attention: [], artifacts: [],
+  }
+  const card = await taskCardHarness({}, { selectedGoalId: null }, { goals: [], runs: [runA, runB] })
+  let nodes = card.openRail()
+  assert.equal(nodes.filter(node => String(node.props?.className ?? '') === 'dsa-session-card').length, 2,
+    'both runs share the grid')
+  const main = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '查看「运行一」')
+  main.props.onClick()
+  assert.equal(card.actions.some(action => action.type === 'openRun'), false,
+    'the click expands the card instead of replacing the list with a run page')
+  nodes = card.render()
+  const grid = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-grid')
+  const cells = grid.children.flat()
+  assert.deepEqual(cells.filter(cell => String(cell.props?.className ?? '') !== 'dsa-session-detail').map(cell => cell.props.key),
+    ['run:r1', 'run:r2'], 'both run cards keep their cells and order')
+  const detail = cells.find(cell => String(cell.props?.className ?? '') === 'dsa-session-detail')
+  assert.ok(detail, 'the run detail is its own full-width grid item')
+  assert.equal(detail.props.style.gridColumn, '1 / -1')
+  const summary = nodes.find(node => String(node.props?.className ?? '').includes('dsa-report-summary'))
+  assert.ok(summary && deepText(summary).includes('第一行结论'), 'the report is readable in the full-width detail')
 })
 
 test('a long result stays within 60 characters on the task card', async () => {
@@ -916,6 +1097,40 @@ test('a long result stays within 60 characters on the task card', async () => {
   assert.doesNotMatch(text, /\n/u)
 })
 
+test('a receipt names its own phase when two goals reuse p1', async () => {
+  const phase = { id: 'p1', title: '核查 PR', status: 'completed', runId: 'pr-run' }
+  const goal = { id: 'pr-goal', title: '检查更新', status: 'running', phases: [phase] }
+  const other = { id: 'course-goal', title: '课程', status: 'running', phases: [
+    { id: 'p1', title: '完成心理健康网课', status: 'running', runId: 'course-run' },
+  ] }
+  const card = await taskCardHarness({}, {
+    messages: [{ id: 'pr-receipt', role: 'assistant', text: '阶段「核查 PR」已交付：四个均已合并。',
+      taskId: goal.id, phaseId: phase.id, runId: phase.runId, at: Date.now() }],
+  }, { goals: [goal, other] })
+  const line = card.render().find(node => node.props?.className === 'dsa-feed-line')
+  assert.ok(line)
+  assert.match(deepText(line), /^核查 PR：.*四个均已合并/u)
+})
+
+test('a retried phase never surfaces its old attempt as a standalone task card', async () => {
+  const runs = [
+    { id: 'failed-pr', goal: '历史 PR 尝试', goalId: 'goal-empty', status: 'partial' },
+    { id: 'legacy-pr', goal: '旧版历史尝试', status: 'partial' },
+    { id: 'current-pr', goal: 'PR 验收', goalId: 'goal-empty', status: 'completed' },
+    { id: 'unrelated', goal: '独立失败任务', status: 'partial' },
+  ]
+  const card = await taskCardHarness({
+    status: 'running',
+    phases: [
+      { id: 'p1', title: '核查 PR', status: 'completed', runId: 'current-pr', runIds: ['legacy-pr', 'current-pr'] },
+      { id: 'p2', title: '打包试玩版', status: 'running' },
+    ],
+  }, { selectedGoalId: null }, { runs })
+  const labels = card.openRail().filter(node => node.props?.className === 'dsa-session-main')
+    .map(node => node.props['aria-label'])
+  assert.deepEqual(labels.sort(), ['查看「打包试玩版」', '查看「独立失败任务」'].sort())
+})
+
 test('the rail reads failure first, then current work, and never shows a bare ellipsis', async () => {
   const card = await taskCardHarness({ status: 'needs-decision', phases: [
     { id: 'p1', title: '构建试玩版本', status: 'running', runId: 'r1' },
@@ -925,11 +1140,42 @@ test('the rail reads failure first, then current work, and never shows a bare el
   const labels = nodes.filter(node => node.type === 'button').map(node => String(node.props?.['aria-label'] ?? ''))
   assert.equal(labels.some(label => label.startsWith('更多操作')), false, 'no bare ellipsis entry in the rail')
   assert.equal(nodes.some(node => node === '现在'), false, 'the current phase needs no 现在 caption')
-  const cardText = deepText({ children: nodes.filter(node => String(node.props?.className ?? '').includes('dsa-session-card')) })
+  const cardText = faceText({ children: nodes.filter(node => String(node.props?.className ?? '').includes('dsa-session-card')) })
   assert.ok(cardText.includes('端口 4310 被占用'), 'the failure reason is on the card')
   assert.equal(cardText.includes('失败：回归测试'), false, 'the failure block does not repeat the title')
   assert.ok(cardText.indexOf('回归测试') < cardText.indexOf('构建试玩版本'),
     'a failure reads before the phase that is running')
+})
+
+test('a cancelled goal shows 已取消 even when its phase record still says running', async () => {
+  const card = await taskCardHarness({
+    status: 'cancelled',
+    phases: [{ id: 'p1', title: '新建 naming-check.txt', status: 'running', currentRunId: 'r1', runIds: ['r1'] }],
+  }, {}, { runs: [{ id: 'r1', status: 'running', parentSessionId: 'chat-a' }] })
+  const nodes = card.openRail()
+  const cards = nodes.filter(node => String(node.props?.className ?? '').includes('dsa-session-card'))
+  assert.equal(cards.length, 1, 'the stale phase does not add a live card next to the cancelled goal')
+  const text = deepText({ children: cards })
+  assert.ok(text.includes('已取消'), `the card states the truth: ${text}`)
+  assert.equal(text.includes('正在执行'), false, 'a cancelled goal never reads as still running')
+  assert.equal(nodes.some(node => String(node.props?.className ?? '').includes('dsa-session-fail')), false,
+    'a cancelled goal carries no red failure block')
+})
+
+test('a failed session card explains the stop reason in plain Chinese and hides the report ledger', async () => {
+  const report = '# Goal not reached — stopped: no progress: the same acceptance condition failed again (a1 failed 3 round(s) in a row)\n\n'
+    + 'Goal: This run is phase 1 of 1: Create naming-check.txt Phase objective: 在当前工作区根目录新建空文件 `naming-check.txt`。\n\n'
+    + 'Acceptance conditions:\n- FAIL [a1] 当前工作区根目录存在 `naming-check.txt`，且文件大小为 0 字节。'
+  const card = await taskCardHarness({ status: 'partial', phases: [] }, {}, {
+    runs: [{ id: 'r-partial', status: 'partial', parentSessionId: 'chat-a', report }],
+  })
+  const nodes = card.openRail()
+  const text = deepText({ children: nodes.filter(node => String(node.props?.className ?? '').includes('dsa-session-card')) })
+  assert.ok(text.includes('连续几轮没有新进展'), `the card says why in plain Chinese: ${text}`)
+  assert.equal(/可打开详情|再点/.test(text), false, 'the card skips the how-to prose')
+  assert.ok(/没完成：/.test(text) && text.length < 200, `the failure line stays short: ${text}`)
+  assert.equal(text.includes('Goal not reached'), false, 'the agent ledger never reaches the card')
+  assert.equal(text.includes('FAIL [a1]'), false, 'a machine-check line never reaches the card')
 })
 
 test('the report summary is one line of at most 40 characters', async () => {
@@ -1052,4 +1298,50 @@ test('a human hand-off without a reason hides the 原因 entry', async () => {
   }), goal, [])
   assert.equal(nodes.some(node => (node.children ?? []).includes('原因')), false,
     'no empty 原因 shell on the hand-off card')
+})
+
+test('a queued message says it is waiting instead of looking delivered', async () => {
+  const at = Date.now()
+  const card = await taskCardHarness({}, {
+    messages: [{ id: 'cmd-queued', role: 'user', text: '我学习通上有新的作业，你帮我做掉。', at }],
+    routerCommands: [{ id: 'cmd-queued', text: '我学习通上有新的作业，你帮我做掉。', at }],
+  })
+  const nodes = card.render()
+  const state = nodes.find(node => String(node.props?.className ?? '') === 'dsa-user-state')
+  assert.ok(state, 'a message still in the router queue carries a state line')
+  assert.match(deepText(state), /排队中/)
+  assert.notEqual(state.props?.['data-stale'], 'true')
+})
+
+test('a message queued too long admits it may never have been accepted', async () => {
+  const at = Date.now() - 120_000
+  const card = await taskCardHarness({}, {
+    messages: [{ id: 'cmd-stale', role: 'user', text: '顺便帮我想一下晚饭吃什么。', at }],
+    routerCommands: [{ id: 'cmd-stale', text: '顺便帮我想一下晚饭吃什么。', at }],
+  })
+  const nodes = card.render()
+  const state = nodes.find(node => String(node.props?.className ?? '') === 'dsa-user-state')
+  assert.ok(state, 'the stale queue keeps its state line')
+  assert.equal(state.props?.['data-stale'], 'true')
+  assert.match(deepText(state), /可能没有被受理/)
+})
+
+test('a failed task card states the reason and offers a way in', async () => {
+  const card = await taskCardHarness({
+    status: 'failed', reason: '慕课登录态失效', phases: [
+      { id: 'p1', title: '刷完心理网课', status: 'failed' },
+    ],
+  }, {
+    messages: [{ id: 'feed-fail', role: 'assistant', text: '任务失败', taskId: 'goal-empty' }],
+  })
+  const nodes = card.render()
+  const failed = nodes.find(node => String(node.props?.className ?? '') === 'dsa-task-failed')
+  assert.ok(failed, 'the failed row keeps a failure block')
+  const text = deepText(failed)
+  assert.match(text, /失败：刷完心理网课/)
+  assert.match(text, /慕课登录态失效/, 'the reason reaches the row, not only the rail')
+  const handle = nodes.find(node => node.type === 'button' && (node.children ?? []).includes('打开任务处理'))
+  assert.ok(handle, 'a failed row offers an entry instead of dead-ending')
+  handle.props.onClick()
+  assert.deepEqual(card.actions.at(-1), { type: 'openTask', taskId: 'goal-empty' })
 })

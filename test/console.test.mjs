@@ -346,6 +346,27 @@ test('the workbench follows the active project and exposes its own task transcri
   }
 })
 
+test('a new console conversation asks the host for a short title', async () => {
+  const { base, state } = await fixture()
+  const { host } = fakeHost()
+  const created = []
+  host.createSession = async options => {
+    created.push(options)
+    return { sessionId: 'session-titled' }
+  }
+  const panel = await startConsole(state, host)
+  try {
+    const response = await request(panel, 'POST', '/api/console/session', { title: '塔防空格键视角' })
+    assert.equal(response.json.data.sessionId, 'session-titled')
+    assert.equal(created[0].title, '塔防空格键视角')
+    await request(panel, 'POST', '/api/console/session', {})
+    assert.equal(created[1].title, '超级智能体')
+  } finally {
+    await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
 test('cross-project inbox actions and task controls leave the current chat in place', async () => {
   const { base, state } = await fixture()
   const { host, cancels, prompts, answers } = fakeHost()
@@ -1746,21 +1767,26 @@ test('the console binds and revokes a source with the same token it uses for eve
 test('the live browser routes stream frames and forward input only with the token', async () => {
   const { base, state } = await fixture()
   const viewports = []
+  const scopes = []
   let stopped = false
   const live = {
-    async status() {
+    async status(handoffId) {
+      scopes.push(['status', handoffId])
       return { available: true, viewing: viewports.length > 0, url: 'http://127.0.0.1:8080/login', title: '登录', width: 420, height: 760 }
     },
-    attach(listener, viewport) {
+    attach(listener, viewport, handoffId) {
+      scopes.push(['view', handoffId])
       viewports.push(viewport)
       listener({ type: 'state', url: 'http://127.0.0.1:8080/login', title: '登录' })
       listener({ type: 'frame', data: 'aGk=', metadata: { deviceWidth: 420, deviceHeight: 760 } })
       return () => {}
     },
-    async input(body) {
+    async input(body, handoffId) {
+      scopes.push(['input', handoffId])
       return { echoed: body }
     },
-    async stop() {
+    async stop(handoffId) {
+      scopes.push(['stop', handoffId])
       stopped = true
     },
   }
@@ -1769,15 +1795,15 @@ test('the live browser routes stream frames and forward input only with the toke
     const anonymous = await request(panel, 'GET', '/api/console/browser/status', undefined, null)
     assert.equal(anonymous.status, 401, 'the live view is behind the same token as the console')
 
-    const status = await request(panel, 'GET', '/api/console/browser/status')
+    const status = await request(panel, 'GET', '/api/console/browser/status?handoff=course-a')
     assert.equal(status.status, 200)
     assert.equal(status.json.data.available, true)
 
-    const input = await request(panel, 'POST', '/api/console/browser/input', { kind: 'mouse', x: 1, y: 2 })
+    const input = await request(panel, 'POST', '/api/console/browser/input?handoff=course-a', { kind: 'mouse', x: 1, y: 2 })
     assert.deepEqual(input.json.data.echoed, { kind: 'mouse', x: 1, y: 2 })
 
     const controller = new AbortController()
-    const stream = await fetch(`${panel.url}/api/console/browser/live?width=420&height=760`, {
+    const stream = await fetch(`${panel.url}/api/console/browser/live?handoff=course-b&width=420&height=760`, {
       headers: { authorization: `Bearer ${panel.token}` },
       signal: controller.signal,
     })
@@ -1793,9 +1819,11 @@ test('the live browser routes stream frames and forward input only with the toke
     assert.match(text, /"type":"frame"/, 'the page reaches the panel as a frame')
     assert.deepEqual(viewports.at(-1), { width: 420, height: 760 })
 
-    const stop = await request(panel, 'POST', '/api/console/browser/stop', {})
+    const stop = await request(panel, 'POST', '/api/console/browser/stop?handoff=course-b', {})
     assert.equal(stop.status, 200)
     assert.equal(stopped, true, 'the answer puts the run viewport back first')
+    assert.deepEqual(scopes, [['status', 'course-a'], ['input', 'course-a'],
+      ['status', 'course-b'], ['view', 'course-b'], ['stop', 'course-b']])
     controller.abort()
   } finally {
     await panel.stop()

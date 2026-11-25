@@ -408,7 +408,7 @@ cost: ¥0.0952 + $0.0248 (estimate; all models priced)
   `runtime.desktop.allowActivation: true`，每次激活都记录在
   `meta.activated` 里。
 - **worker agent。** `browser_*` 和 `desktop_*` 属于挂载插件的那个会话。护栏会以规则
-  `guard/runtime-tool` 拦下受绑定的子 agent 的调用，除非 `guard.allowRuntimeTools` 为 true。
+  声明需要浏览器的执行工作线使用自己的标签页。扫码接管卡打开这张标签页，验证通过后恢复对应执行。其他子会话的运行时调用仍受 `guard/runtime-tool` 约束，除非配置了 `guard.allowRuntimeTools`。
 
 ### 它刻意做不到的事
 

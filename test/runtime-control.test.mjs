@@ -212,6 +212,8 @@ test('human checks are recognised in both languages and ordinary pages stay quie
   assert.equal(classifyHumanGate({ text: '双重验证' }).kind, 'two-factor')
   assert.equal(classifyHumanGate({ text: 'Scan the QR code to sign in' }).kind, 'qr-login')
   assert.equal(classifyHumanGate({ text: '请扫码登录' }).kind, 'qr-login')
+  assert.equal(classifyHumanGate({ text: '验证码登录\n使用学习通APP扫码登录' }).kind, 'qr-login')
+  assert.equal(classifyHumanGate({ text: '手机扫码，安全登录\n获取验证码' }).kind, 'qr-login')
   assert.equal(classifyHumanGate({ text: '欢迎回来 登录', passwordField: true }).kind, 'login-required')
   assert.equal(classifyHumanGate({ text: 'Change password', passwordField: true }), null)
   assert.equal(classifyHumanGate({ text: 'Browse products' }), null)
@@ -230,7 +232,9 @@ test('a sign-in page stops the action as attention, not as a failure', async () 
   assert.match(result, /browser_await_human/)
   assert.match(result, /sign-in the page is waiting for/)
   assert.equal(runtime.takeHumanHandoff('worker-2'), null)
-  assert.deepEqual(runtime.takeHumanHandoff('worker-1'), {
+  const { id, ...handoff } = runtime.takeHumanHandoff('worker-1')
+  assert.ok(id)
+  assert.deepEqual(handoff, {
     kind: 'login-required', url: 'http://127.0.0.1:8080/', headless: true,
   })
   assert.equal(runtime.takeHumanHandoff('worker-1'), null)
@@ -550,6 +554,15 @@ test('the guard refuses browser and desktop tools for worker agents unless allow
 
   const unbound = blocked.checkToolCall({ name: 'browser_open', arguments: { url: 'http://127.0.0.1/' }, agent: { id: 'someone-else' } })
   assert.equal(unbound.blocked, false, 'calls the guard does not own pass through')
+
+  blocked.bindChild('browser-task', {
+    runId: 'run-3', browserScope: { runId: 'run-3', subtaskId: 'subtask-1' },
+  })
+  const call = name => blocked.checkToolCall({ name, arguments: {}, agent: { id: 'browser-task' } })
+  assert.equal(call('browser_open').blocked, false)
+  assert.equal(call('browser_await_human').blocked, false)
+  assert.equal(call('browser_script').blocked, true)
+  assert.equal(call('desktop_click').blocked, true)
 })
 
 /** A CDP stub that records frames, acks, and input on one page session. */
@@ -587,6 +600,66 @@ function liveWithConnection(connection, options = {}) {
   page.sessionId = 'page-1'
   return { live: { ...fakeLive({ page, ...options }), connection }, page }
 }
+
+test('concurrent login requests bind input and confirmation to the original worker tab', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-two-logins-'))
+  const connection = fakeConnection()
+  const { live } = liveWithConnection(connection)
+  let starts = 0
+  let tabs = 0
+  const gates = new Map([['page-1', true], ['page-2', true]])
+  const closed = []
+  live.openTab = async () => {
+    const id = `page-${++tabs}`
+    const page = fakePage({ gate: () => gates.get(id) ? { kind: 'qr-login', label: '扫码登录', matched: '扫码登录' } : null })
+    page.sessionId = id
+    return { page, close: async () => { closed.push(id) } }
+  }
+  const { runtime } = runtimeWith(stateDir, { enabled: true }, { openBrowserImpl: async () => {
+    starts++
+    return live
+  } })
+  const tool = name => runtime.tools.find(entry => entry.name === name)
+  const scope = runId => ({ runId, subtaskId: 'subtask-1' })
+  const open = (actor, run, platform) => runtime.withActor(actor,
+    () => tool('browser_open').execute({ url: `http://127.0.0.1/${platform}` }), scope(run))
+  try {
+    const result = await Promise.all([open('a1', 'run-a', 'course-a'), open('b1', 'run-b', 'course-b')])
+    assert.ok(result.every(value => value.startsWith('[attention]')))
+    assert.equal(starts, 1)
+    assert.equal(tabs, 2)
+    const a = runtime.takeHumanHandoff('a1')
+    const b = runtime.takeHumanHandoff('b1')
+    assert.notEqual(a.id, b.id)
+    assert.equal((await runtime.live.status(a.id)).url, 'http://127.0.0.1/course-a')
+    assert.equal((await runtime.live.status(b.id)).url, 'http://127.0.0.1/course-b')
+    assert.equal((await runtime.live.status('stale-request')).available, false)
+    await assert.rejects(async () => runtime.live.input({ kind: 'focus' }, 'stale-request'), /已失效/u)
+    await assert.rejects(runtime.verifyHumanHandoff(a.id), /仍在等待/u)
+
+    await runtime.live.input({ kind: 'focus' }, a.id)
+    assert.equal(connection.calls.at(-1).sessionId, 'page-1')
+    await runtime.live.input({ kind: 'focus' }, b.id)
+    assert.equal(connection.calls.at(-1).sessionId, 'page-2')
+    gates.set('page-1', false)
+    await runtime.verifyHumanHandoff(a.id)
+    await assert.rejects(runtime.verifyHumanHandoff(b.id), /仍在等待/u)
+    const resumed = await runtime.withActor('a2',
+      () => tool('browser_await_human').execute({ screenshot: false }), scope('run-a'))
+    assert.match(resumed, /browser_await_human: ok[\s\S]*course-a/u)
+    assert.equal(tabs, 2, 'the replacement worker uses the tab with the login')
+
+    await runtime.releaseRun('run-a')
+    assert.deepEqual(closed, ['page-1'])
+    assert.equal((await runtime.live.status(a.id)).available, false)
+    assert.equal((await runtime.live.status(b.id)).available, true)
+    gates.set('page-2', false)
+    await runtime.verifyHumanHandoff(b.id)
+  } finally {
+    await runtime.dispose()
+    await fsp.rm(stateDir, { recursive: true, force: true })
+  }
+})
 
 test('the live view streams the run browser, forwards input, and restores the viewport', async () => {
   const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-live-'))
