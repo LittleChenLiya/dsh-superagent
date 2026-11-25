@@ -103,7 +103,7 @@ real-host rerun (see B9); extension-specific boundaries are recorded under E5.
 | # | Check, answerable yes/no | Evidence | Status |
 | --- | --- | --- | --- |
 | H1 | Version, CHANGELOG, and README agree on the release version and its date. | `package.json` 0.25.0; `CHANGELOG.md` `## 0.25.0 — 2026-11-25`; all three READMEs pin installs to 0.25.0 | MET |
-| H2 | `git status` is clean and the release commit is pushed. | 0.25.0 code, tests, and release docs are currently uncommitted; no release commit exists and nothing has been pushed. | PENDING |
+| H2 | `git status` is clean and the release commit is pushed. | Working tree clean; `fix/superagent-release-closeout` pushed through `df70886` | MET |
 | H3 | No known blocker from the latest adversarial review remains open. | Core and extension review findings are fixed with regressions; scoped real-host evidence is under E5 and five consecutive full-suite runs are under E1 | MET |
 
 ## I. Operator surfaces

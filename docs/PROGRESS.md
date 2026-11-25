@@ -61,8 +61,9 @@ DONE F5 records the config/documentation comparison.
 
 ## 2026-11-25 — 0.25.0 review and release-doc repair
 
-**Release state: PENDING.** The 0.25.0 code, tests, and release docs are
-uncommitted and unpushed. Real-host and browser evidence is recorded in
+**Release state: CODE PUSHED; npm publish pending.** The 0.25.0 code, tests,
+and release docs are committed and pushed on `fix/superagent-release-closeout`
+through `df70886`. Real-host and browser evidence is recorded in
 `docs/e2e-0.25.0.md`; no paid model route was used.
 
 For the earlier review snapshot, the baseline was **659 tests** and nineteen
