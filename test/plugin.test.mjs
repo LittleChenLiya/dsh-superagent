@@ -1367,4 +1367,11 @@ test('a missing imported module is named with the fix, not swallowed', async () 
   const other = explainLoadError(new Error('boom'), 'C:\\pkg')
   assert.match(other, /failed to load: boom/)
   assert.match(other, /keeps its other tools/)
+
+  const posix = explainLoadError(
+    new Error("Cannot find module '/opt/pkg/lib/wizard.js' imported from /opt/pkg/lib/index.js"),
+    '/opt/pkg/lib',
+  )
+  assert.ok(posix.includes('file it imports is missing: /opt/pkg/lib/wizard.js'), posix)
+  assert.ok(posix.includes('cp -R lib/. /opt/pkg'), posix)
 })
