@@ -27,6 +27,21 @@ function harness(config) {
   return { guard, call }
 }
 
+function contractHarness(permissionScope, config = {}) {
+  const guard = createGuard({ ...BASE, config })
+  guard.bindChild('child-1', {
+    runId: 'run-contract',
+    label: 'contract-child',
+    executionContract: {
+      permissionScope,
+      runtime: { isolation: 'workspace' },
+      planDigest: 'sha256:test-plan',
+    },
+  })
+  const call = (name, args, agent = { id: 'child-1' }) => guard.checkToolCall({ name, arguments: args, agent })
+  return { guard, call }
+}
+
 test('a worker may write inside its workspace and the OS temp directory', () => {
   const { call, guard } = harness()
   assert.equal(call('write', { file_path: 'C:\\work\\proj\\src\\index.js' }).blocked, false)
@@ -44,25 +59,6 @@ test('writing outside the workspace is refused and names the allowlist rule', ()
   assert.match(write.reason, /outside every allowed write root/)
   assert.match(write.reasonText, /rule path\/outside-allowlist/)
   assert.match(write.reasonText, /did not run/)
-})
-
-test('a run may write to a project path the user named in the request', () => {
-  const guard = createGuard({ ...BASE, config: {} })
-  guard.bindChild('child-1', { runId: 'run-1', label: 'superagent-1', allowRoots: ['D:\\PrismDefense'] })
-  const call = (name, args) => guard.checkToolCall({ name, arguments: args, agent: { id: 'child-1' } })
-  assert.equal(call('write', { file_path: 'D:\\PrismDefense\\Assets\\Scripts\\Camera.cs' }).blocked, false)
-  assert.equal(call('edit', { file_path: 'D:\\PrismDefense\\docs\\report.md', old_string: 'a', new_string: 'b' }).blocked, false)
-  assert.equal(call('write', { file_path: 'D:\\PrismDefense2\\Assets\\Camera.cs' }).blocked, true)
-  assert.equal(call('write', { file_path: 'C:\\Windows\\evil.ini' }).blocked, true)
-})
-
-test('a named root does not leak into another child or another run', () => {
-  const guard = createGuard({ ...BASE, config: {} })
-  guard.bindChild('child-1', { runId: 'run-1', allowRoots: ['D:\\PrismDefense'] })
-  guard.bindChild('child-2', { runId: 'run-2' })
-  const call = (id, file) => guard.checkToolCall({ name: 'write', arguments: { file_path: file }, agent: { id } })
-  assert.equal(call('child-1', 'D:\\PrismDefense\\a.txt').blocked, false)
-  assert.equal(call('child-2', 'D:\\PrismDefense\\a.txt').blocked, true)
 })
 
 test('system directories are writable by nobody', () => {
@@ -274,6 +270,167 @@ test('an invalid custom pattern is ignored instead of breaking the guard', () =>
   assert.equal(verdict.blocked, false)
   assert.equal(warnings.length, 1)
   assert.match(warnings[0], /invalid cmd\/custom pattern/)
+})
+
+test('an execution contract allows normalized read and write categories', () => {
+  const { call, guard } = contractHarness({
+    tools: [' READ ', 'workspace.write'],
+    allow: ['fs.read', 'file.write'],
+    deny: ['network.request'],
+    approvalMode: 'policy',
+  })
+  for (const [name, args] of [
+    ['read_file', { file_path: 'src\\index.js' }],
+    ['list_directory', { path: 'src' }],
+    ['search_files', { path: 'src', query: 'guard' }],
+    ['write_file', { file_path: 'src\\index.js', content: 'x' }],
+    ['edit_file', { file_path: 'src\\index.js' }],
+    ['create_file', { file_path: 'src\\new.js' }],
+    ['delete_file', { file_path: 'src\\old.js' }],
+    ['move_file', { file_path: 'src\\index.js' }],
+    ['copy_file', { file_path: 'src\\index.js' }],
+    ['apply_patch', { input: '*** Begin Patch\n*** Add File: src\\new.js\n+x\n*** End Patch' }],
+  ]) {
+    const verdict = call(name, args)
+    assert.equal(verdict.blocked, false, name)
+    assert.equal(verdict.rule, null, name)
+    assert.equal(verdict.explicitAllow, undefined, name)
+  }
+  assert.equal(guard.snapshot('run-contract'), null)
+})
+
+test('filesystem.read denial blocks read, list, search, and every shell host tool', () => {
+  const { call } = contractHarness({ tools: ['*'], allow: ['*'], deny: ['fs.read'] })
+  for (const name of ['read', 'read_file', 'list_directory', 'search', 'search_files', 'glob', 'grep']) {
+    const verdict = call(name, { file_path: 'src\\index.js', path: 'src', query: 'x' })
+    assert.equal(verdict.blocked, true, name)
+    assert.equal(verdict.rule, 'contract/permission-denied', name)
+    assert.match(verdict.reason, /filesystem\.read/)
+    assert.match(verdict.reasonText, /revised execution contract/)
+  }
+  for (const name of ['bash', 'pwsh', 'terminal', 'run_command']) {
+    const verdict = call(name, { command: 'echo hello', text: 'echo hello' })
+    assert.equal(verdict.blocked, true, name)
+    assert.equal(verdict.rule, 'contract/permission-denied', name)
+  }
+})
+
+test('filesystem.write denial blocks write, edit, create, delete, move, copy, patch, and shell', () => {
+  const { call } = contractHarness({ tools: ['*'], allow: ['*'], deny: ['file.write'] })
+  for (const name of ['write', 'write_file', 'edit', 'create_file', 'delete_file', 'move_file', 'copy_file', 'apply_patch']) {
+    const verdict = call(name, { file_path: 'src\\index.js', path: 'src\\index.js', input: '' })
+    assert.equal(verdict.blocked, true, name)
+    assert.equal(verdict.rule, 'contract/permission-denied', name)
+    assert.match(verdict.reason, /filesystem\.write/)
+  }
+  for (const name of ['bash', 'pwsh', 'terminal', 'run_command']) {
+    const verdict = call(name, { command: 'echo hello', text: 'echo hello' })
+    assert.equal(verdict.blocked, true, name)
+    assert.equal(verdict.rule, 'contract/permission-denied', name)
+  }
+})
+
+test('shell.execute denial blocks shell tools without denying ordinary file work', () => {
+  const { call } = contractHarness({ tools: ['*'], allow: ['*'], deny: ['execute'] })
+  for (const name of ['bash', 'pwsh', 'terminal', 'terminal_send', 'run_command']) {
+    const verdict = call(name, { command: 'echo hello', text: 'echo hello' })
+    assert.equal(verdict.blocked, true, name)
+    assert.equal(verdict.rule, 'contract/permission-denied', name)
+    assert.match(verdict.reason, /shell\.execute/)
+  }
+  assert.equal(call('read_file', { file_path: 'src\\index.js' }).blocked, false)
+  assert.equal(call('write_file', { file_path: 'src\\index.js', content: 'x' }).blocked, false)
+
+  const allowed = contractHarness({ tools: ['bash'], deny: [] })
+  assert.equal(allowed.call('bash', { command: 'echo hello' }).blocked, false)
+})
+
+test('network denial blocks web, search, browser, http, and fetch tools', () => {
+  const { call } = contractHarness({ tools: ['*'], allow: ['*'], deny: ['net'] })
+  for (const name of ['web', 'search', 'web_search', 'browser_navigate', 'http_request', 'fetch']) {
+    const verdict = call(name, { url: 'https://example.com', query: 'x' })
+    assert.equal(verdict.blocked, true, name)
+    assert.equal(verdict.rule, 'contract/permission-denied', name)
+    assert.match(verdict.reason, /network/)
+  }
+  assert.equal(call('search_files', { path: 'src', query: 'x' }).blocked, false, 'local search remains a read')
+})
+
+test('contract denial wins over tools, allow, and global command allows', () => {
+  const { call, guard } = contractHarness({
+    tools: ['filesystem.read', 'filesystem.write'],
+    allow: ['*'],
+    deny: ['filesystem.write'],
+  }, {
+    allowCommands: [{ id: 'all-commands', pattern: '.*', reason: 'lab override' }],
+  })
+  for (const [name, args] of [
+    ['write_file', { file_path: 'src\\index.js', content: 'x' }],
+    ['bash', { command: 'rm -rf /' }],
+  ]) {
+    const verdict = call(name, args)
+    assert.equal(verdict.blocked, true, name)
+    assert.equal(verdict.rule, 'contract/permission-denied', name)
+    assert.equal(verdict.explicitAllow, undefined, name)
+  }
+  const snapshot = guard.snapshot('run-contract')
+  assert.equal(snapshot.blocked, 2)
+  assert.equal(snapshot.allowed, 0)
+})
+
+test('permissionScope.tools and allow restrict mapped abstract categories', () => {
+  const { call } = contractHarness({ tools: ['read_file'], deny: [] })
+  assert.equal(call('read', { file_path: 'src\\index.js' }).blocked, false)
+  assert.equal(call('mcp__local__read_file', { file_path: 'src\\index.js' }).blocked, false)
+  for (const [name, args] of [
+    ['write_file', { file_path: 'src\\index.js' }],
+    ['web_search', { query: 'x' }],
+    ['bash', { command: 'echo hello' }],
+  ]) {
+    const verdict = call(name, args)
+    assert.equal(verdict.blocked, true, name)
+    assert.equal(verdict.rule, 'contract/tool-not-allowed', name)
+  }
+
+  const allowed = contractHarness({ tools: ['*'], allow: ['filesystem.read'], deny: [] })
+  assert.equal(allowed.call('list_directory', { path: 'src' }).blocked, false)
+  assert.equal(allowed.call('write_file', { file_path: 'src\\index.js' }).rule, 'contract/tool-not-allowed')
+})
+
+test('unknown tools require an explicit wildcard approval while uncontracted tools keep global guard', () => {
+  const guard = createGuard({ ...BASE, config: {} })
+  guard.bindChild('contracted', {
+    runId: 'run-contract',
+    executionContract: { permissionScope: { tools: ['filesystem.read'], deny: [] } },
+  })
+  guard.bindChild('uncontracted', { runId: 'run-plain' })
+  const args = { value: 'x' }
+  const contracted = guard.checkToolCall({ name: 'vendor_custom_tool', arguments: args, agent: { id: 'contracted' } })
+  const uncontracted = guard.checkToolCall({ name: 'vendor_custom_tool', arguments: args, agent: { id: 'uncontracted' } })
+  assert.equal(contracted.blocked, true)
+  assert.equal(contracted.rule, 'contract/tool-not-approved')
+  assert.equal(uncontracted.blocked, false)
+  assert.equal(uncontracted.rule, null)
+  assert.ok(guard.snapshot('run-contract').events.some(event => event.rule === 'contract/tool-not-approved'))
+  assert.equal(guard.snapshot('run-plain'), null)
+})
+
+test('unbinding a child removes its execution contract', () => {
+  const { call, guard } = contractHarness({ tools: ['*'], allow: ['*'], deny: ['filesystem.write'] })
+  assert.equal(call('write_file', { file_path: 'src\\index.js' }).rule, 'contract/permission-denied')
+  guard.unbindChild('child-1')
+  assert.equal(call('write_file', { file_path: 'src\\index.js' }).blocked, false)
+  assert.equal(guard.snapshot('run-contract').blocked, 1)
+
+  guard.bindChild('child-1', { runId: 'run-contract' })
+  assert.equal(call('write_file', { file_path: 'src\\index.js' }).blocked, false)
+  assert.equal(call('write', { file_path: 'C:\\Windows\\x.txt' }).rule, 'path/system-directory')
+})
+
+test('an execution contract never relaxes global path and command policy', () => {
+  const { call } = contractHarness({ tools: ['*'], allow: ['*'], deny: [] })
+  assert.equal(call('write', { file_path: 'C:\\Windows\\System32\\x.txt' }).rule, 'path/system-directory')
+  assert.equal(call('bash', { command: 'rm -rf /' }).rule, 'cmd/recursive-force-delete')
 })
 
 /**

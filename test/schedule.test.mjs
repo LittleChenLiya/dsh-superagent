@@ -66,6 +66,7 @@ async function harness({
   humanPriority = true,
   maxConsecutiveFailures = 3,
   resolveOwner = () => ({ id: OWNER }),
+  execute = undefined,
 } = {}) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-schedule-'))
   const clock = { value: Date.parse(now) }
@@ -74,6 +75,7 @@ async function harness({
   const scheduler = createScheduler({
     stateFile: path.join(dir, 'schedules.json'),
     orchestrator,
+    execute,
     resolveOwner,
     notify: input => {
       notifications.push(input)
@@ -176,6 +178,163 @@ test('an invalid cron is refused at create time with the field number, and nothi
     )
     await assert.rejects(fsp.access(h.stateFile), 'a rejected plan must not create state')
     assert.deepEqual(await h.scheduler.list(), [])
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('the default executor keeps the orchestrator path and timestamps ticks and run-now', async () => {
+  const h = await harness({ now: '2026-11-15T00:00:00Z' })
+  try {
+    const plan = await h.scheduler.create(planInput({ everyMinutes: 1 }))
+    assert.equal(plan.execution, null)
+    h.clock.value = Date.parse('2026-11-15T00:01:00Z')
+    const [started] = await h.scheduler.tick()
+
+    assert.equal(started.event, 'started')
+    assert.equal(h.orchestrator.calls.length, 1)
+    assert.equal(h.orchestrator.calls[0].scheduledAt, '2026-11-15T00:01:00.000Z')
+    assert.equal(h.orchestrator.calls[0].parent.id, OWNER)
+    assert.equal(h.orchestrator.calls[0].parentSessionId, OWNER)
+    assert.deepEqual(h.orchestrator.calls[0].origin, {
+      kind: 'scheduled', scheduleId: plan.id, scheduleName: plan.name,
+    })
+
+    h.orchestrator.runs.get('run-1').status = 'completed'
+    h.clock.value = Date.parse('2026-11-15T00:01:30Z')
+    const manual = await h.scheduler.runNow(plan.id)
+    assert.equal(manual.run.id, 'run-2')
+    assert.equal(h.orchestrator.calls.length, 2)
+    assert.equal(h.orchestrator.calls[1].scheduledAt, '2026-11-15T00:01:30.000Z')
+    assert.equal(manual.plan.nextRunAt, '2026-11-15T00:02:00.000Z', 'run-now keeps the planned grid')
+    assert.equal(manual.plan.lastRunAt, '2026-11-15T00:01:00.000Z')
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('an injected router executor gets the exact plan context and its returned runs are tracked', async () => {
+  const orchestrator = fakeOrchestrator()
+  const invocations = []
+  let ownerResolutions = 0
+  const execution = {
+    kind: 'router',
+    action: { type: 'followup', taskId: 'task-42', phaseId: 'phase-1' },
+    output: { relativePath: 'reports/router.md' },
+    notify: { events: ['completed'] },
+    metadata: { attempt: 1, labels: ['release', 'gate'] },
+  }
+  const h = await harness({
+    now: '2026-11-15T00:00:00Z',
+    orchestrator,
+    resolveOwner: () => {
+      ownerResolutions += 1
+      throw new Error('a router plan must not resolve a live owner')
+    },
+    execute: async (args, context) => {
+      invocations.push({ args, context })
+      const run = {
+        id: `router-run-${invocations.length}`,
+        status: 'running',
+        origin: args.origin,
+        usage: null,
+        attention: null,
+        goalMode: null,
+      }
+      orchestrator.runs.set(run.id, run)
+      return structuredClone(run)
+    },
+  })
+  try {
+    const plan = await h.scheduler.create(planInput({
+      everyMinutes: 1,
+      ownerRecovery: 'none',
+      execution,
+    }))
+    const before = (await h.scheduler.list())[0]
+    const dueAt = '2026-11-15T00:01:00.000Z'
+    h.clock.value = Date.parse(dueAt)
+    const [started] = await h.scheduler.tick()
+
+    assert.equal(ownerResolutions, 0, 'router execution must not require or recover a live session')
+    assert.equal(orchestrator.calls.length, 0, 'the injected executor replaces orchestrator.start')
+    assert.equal(invocations.length, 1)
+    assert.deepEqual(invocations[0].context, { plan: before, dueAt, catchUp: false, missedCount: 0 })
+    assert.equal(invocations[0].args.scheduledAt, dueAt)
+    assert.deepEqual(invocations[0].args.parent, { id: OWNER })
+    assert.equal(invocations[0].args.parentSessionId, OWNER)
+    assert.equal(started.run.id, 'router-run-1')
+
+    const [afterStart] = await h.scheduler.list()
+    assert.equal(afterStart.activeRunId, 'router-run-1')
+    assert.equal(afterStart.lastRunId, 'router-run-1')
+    assert.equal(afterStart.lastStatus, 'running')
+    assert.equal(afterStart.totalRuns, 1)
+
+    const first = orchestrator.runs.get('router-run-1')
+    first.status = 'completed'
+    first.usage = { totalTokens: 7, modelCalls: 2 }
+    h.clock.value = Date.parse('2026-11-15T00:01:30Z')
+    assert.deepEqual(await h.scheduler.tick(), [], 'the finished injected run is reconciled without another due window')
+    const settled = (await h.scheduler.list())[0]
+    assert.equal(settled.activeRunId, null)
+    assert.equal(settled.lastOutcome, 'achieved')
+    assert.equal(settled.totalTokens, 7)
+    assert.equal(settled.totalModelCalls, 2)
+
+    h.clock.value = Date.parse('2026-11-15T00:01:40Z')
+    const manual = await h.scheduler.runNow(plan.id)
+    assert.equal(manual.run.id, 'router-run-2')
+    assert.deepEqual(invocations[1].context, {
+      plan: settled,
+      dueAt: '2026-11-15T00:01:40.000Z',
+      catchUp: false,
+      missedCount: 0,
+    })
+    assert.equal(invocations[1].args.scheduledAt, '2026-11-15T00:01:40.000Z')
+    assert.equal(manual.plan.activeRunId, 'router-run-2')
+    assert.equal(manual.plan.nextRunAt, '2026-11-15T00:02:00.000Z')
+    assert.equal(manual.plan.totalRuns, 2)
+    assert.equal(ownerResolutions, 0)
+    assert.equal(orchestrator.calls.length, 0)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('plain-JSON execution metadata is persisted and restored by init migration', async () => {
+  const h = await harness({ now: '2026-11-15T00:00:00Z' })
+  try {
+    const execution = {
+      kind: 'router',
+      action: { type: 'task', prompt: 'check the release', target: null },
+      output: { relativePath: 'reports/gate.md' },
+      notify: { events: ['started', 'completed'] },
+      budget: { maxRuns: 3 },
+    }
+    const expected = structuredClone(execution)
+    const created = await h.scheduler.create(planInput({ execution }))
+    assert.deepEqual(created.execution, expected)
+    execution.action.type = 'followup'
+    assert.equal(created.execution.action.type, 'task', 'normalization must not retain the caller object')
+
+    const persisted = JSON.parse(await fsp.readFile(h.stateFile, 'utf8'))
+    assert.deepEqual(persisted.plans[0].execution, expected)
+    h.scheduler.stop()
+
+    const restarted = createScheduler({
+      stateFile: h.stateFile,
+      orchestrator: h.orchestrator,
+      resolveOwner: () => { throw new Error('init must not need a router owner') },
+      now: () => h.clock.value,
+      setInterval: h.timers.setInterval,
+      clearInterval: h.timers.clearInterval,
+    })
+    await restarted.init()
+    const [migrated] = await restarted.list()
+    assert.equal(migrated.id, created.id)
+    assert.deepEqual(migrated.execution, expected)
+    restarted.stop()
   } finally {
     await h.cleanup()
   }

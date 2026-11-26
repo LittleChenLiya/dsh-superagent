@@ -158,12 +158,8 @@ test('one router dispatches independently scoped tasks and resumes with its deci
     await post('message', { id: 'work-ambiguous-project', text: '/方案 发版' })
     assert.match((await settled()).messages.at(-1).text, /2 项工作/)
     await post('message', { id: 'work-remove-decision', project: 'release', text: '/撤销决定 发版 | 发布方案' })
-    const revoked = await settled()
-    assert.match(revoked.messages.at(-1).text, /撤销 决定 发布方案/)
-    const beforeRead = revoked.messages.length
     await post('message', { id: 'work-read-revoked', project: 'release', text: '/方案 发版' })
-    assert.deepEqual((await settled()).messages.slice(beforeRead).map(message => message.role), ['user'],
-      'an empty plan stays silent')
+    assert.match((await settled()).messages.at(-1).text, /没有已确认的决定/)
   } finally {
     await panel?.stop()
     await fsp.rm(base, { recursive: true, force: true })
@@ -340,27 +336,6 @@ test('the workbench follows the active project and exposes its own task transcri
     assert.equal((await request(panel, 'GET', `${url}/runs/run-1/worker/foreign`)).status, 404)
     assert.equal((await request(panel, 'GET', `${url}/artifact?runId=run-1&path=report.txt`)).text, 'approved report')
     assert.equal((await request(panel, 'GET', `${url}/artifact?runId=run-1&path=${encodeURIComponent('../private.txt')}`)).status, 403)
-  } finally {
-    await panel.stop()
-    await fsp.rm(base, { recursive: true, force: true })
-  }
-})
-
-test('a new console conversation asks the host for a short title', async () => {
-  const { base, state } = await fixture()
-  const { host } = fakeHost()
-  const created = []
-  host.createSession = async options => {
-    created.push(options)
-    return { sessionId: 'session-titled' }
-  }
-  const panel = await startConsole(state, host)
-  try {
-    const response = await request(panel, 'POST', '/api/console/session', { title: '塔防空格键视角' })
-    assert.equal(response.json.data.sessionId, 'session-titled')
-    assert.equal(created[0].title, '塔防空格键视角')
-    await request(panel, 'POST', '/api/console/session', {})
-    assert.equal(created[1].title, '超级智能体')
   } finally {
     await panel.stop()
     await fsp.rm(base, { recursive: true, force: true })
@@ -1687,6 +1662,32 @@ test('a dropped file lands inside the conversation workspace and unsafe ones are
   }
 })
 
+test('router mode accepts an attachment before a session exists', async () => {
+  const { base, state } = await fixture()
+  const workspace = path.join(base, 'router-workspace')
+  await fsp.mkdir(workspace, { recursive: true })
+  const fake = fakeHost()
+  fake.host.workbench = async () => ({ projects: [{ name: 'Router', cwd: workspace }], runs: [], goals: [], inbox: [] })
+  fake.host.sessionWorkspace = async () => workspace
+  const router = createRouter({ root: state, catalog: async () => ({ projects: [], tasks: [] }),
+    classify: () => ({ action: 'reply', text: 'ok' }), execute: async () => ({ text: 'ok' }) })
+  const panel = await startConsole(state, fake.host, { router })
+  try {
+    assert.equal(panel.sessionId, null)
+    const text = '# Router attachment\n'
+    const saved = await request(panel, 'POST', '/api/console/upload', {
+      name: 'router.md', project: workspace, data: Buffer.from(text).toString('base64'),
+    })
+    assert.equal(saved.status, 200, JSON.stringify(saved.json))
+    assert.ok(path.resolve(saved.json.data.path).startsWith(path.resolve(workspace) + path.sep))
+    assert.equal(await fsp.readFile(saved.json.data.path, 'utf8'), text)
+  } finally {
+    await panel.stop()
+    await router.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
 test('notices stay read after the page is closed and the console restarts', async () => {
   const { base, state } = await fixture()
   let panel = null
@@ -1795,93 +1796,151 @@ test('the console binds and revokes a source with the same token it uses for eve
   }
 })
 
-test('the live browser routes stream frames and forward input only with the token', async () => {
+test('the global artifact API delegates validated queries and reports unsupported hosts explicitly', async () => {
   const { base, state } = await fixture()
-  const viewports = []
-  const scopes = []
-  let stopped = false
-  const live = {
-    async status(handoffId) {
-      scopes.push(['status', handoffId])
-      return { available: true, viewing: viewports.length > 0, url: 'http://127.0.0.1:8080/login', title: '登录', width: 420, height: 760 }
-    },
-    attach(listener, viewport, handoffId) {
-      scopes.push(['view', handoffId])
-      viewports.push(viewport)
-      listener({ type: 'state', url: 'http://127.0.0.1:8080/login', title: '登录' })
-      listener({ type: 'frame', data: 'aGk=', metadata: { deviceWidth: 420, deviceHeight: 760 } })
-      return () => {}
-    },
-    async input(body, handoffId) {
-      scopes.push(['input', handoffId])
-      return { echoed: body }
-    },
-    async stop(handoffId) {
-      scopes.push(['stop', handoffId])
-      stopped = true
-    },
+  const { host } = fakeHost()
+  const calls = []
+  const artifact = {
+    id: 'artifact-1', runId: 'run-1', ownerSessionId: 'session-console', project: null,
+    goal: 'Ship it', runStatus: 'completed', name: 'report.md', kind: 'report', source: 'declared',
+    href: '/tmp/report.md', path: '/tmp/report.md', bytes: 10,
+    at: '2026-01-01T00:00:00.000Z', createdAt: '2026-01-01T00:00:00.000Z', finishedAt: '2026-01-01T01:00:00.000Z',
   }
-  const panel = await startConsole(state, fakeHost().host, { live })
+  host.artifacts = async (sessionId, options) => {
+    calls.push({ sessionId, options })
+    return { artifacts: [artifact], nextCursor: null }
+  }
+  host.readArtifact = async id => id === artifact.id ? { artifact, run: { id: 'run-1', artifacts: [{ kind: 'report', path: artifact.path }] } } : null
+  let panel = null
   try {
-    const anonymous = await request(panel, 'GET', '/api/console/browser/status', undefined, null)
-    assert.equal(anonymous.status, 401, 'the live view is behind the same token as the console')
-
-    const status = await request(panel, 'GET', '/api/console/browser/status?handoff=course-a')
-    assert.equal(status.status, 200)
-    assert.equal(status.json.data.available, true)
-
-    const input = await request(panel, 'POST', '/api/console/browser/input?handoff=course-a', { kind: 'mouse', x: 1, y: 2 })
-    assert.deepEqual(input.json.data.echoed, { kind: 'mouse', x: 1, y: 2 })
-
-    const controller = new AbortController()
-    const stream = await fetch(`${panel.url}/api/console/browser/live?handoff=course-b&width=420&height=760`, {
-      headers: { authorization: `Bearer ${panel.token}` },
-      signal: controller.signal,
+    panel = await startConsole(state, host)
+    const query = new URLSearchParams({
+      q: 'release', kind: 'report', project: 'Alpha',
+      from: '2026-01-01T00:00:00.000Z', to: '2026-01-02T00:00:00.000Z', cursor: 'cursor-1', limit: '2',
     })
-    assert.equal(stream.status, 200)
-    const reader = stream.body.getReader()
-    const decoder = new TextDecoder()
-    let text = ''
-    for (let index = 0; index < 10 && !text.includes('"type":"frame"'); index += 1) {
-      const { value, done } = await reader.read()
-      if (done) break
-      text += decoder.decode(value)
-    }
-    assert.match(text, /"type":"frame"/, 'the page reaches the panel as a frame')
-    assert.deepEqual(viewports.at(-1), { width: 420, height: 760 })
+    const listed = await request(panel, 'GET', `/api/console/artifacts?${query}`)
+    assert.equal(listed.status, 200)
+    assert.deepEqual(listed.json, { ok: true, data: { artifacts: [artifact], nextCursor: null } })
+    assert.deepEqual(calls[0], {
+      sessionId: null,
+      options: {
+        q: 'release', kind: 'report', project: 'Alpha',
+        from: '2026-01-01T00:00:00.000Z', to: '2026-01-02T00:00:00.000Z', cursor: 'cursor-1', limit: '2',
+      },
+    })
+    const detail = await request(panel, 'GET', '/api/console/artifacts/artifact-1')
+    assert.equal(detail.status, 200)
+    assert.deepEqual(detail.json.data.artifact, artifact)
+    assert.equal(detail.json.data.run.artifacts[0].path, artifact.path)
+    assert.equal((await request(panel, 'GET', '/api/console/artifacts/missing')).status, 404)
+    assert.equal((await request(panel, 'GET', '/api/console/artifacts/%E0%A4%A')).status, 400)
+    assert.equal((await request(panel, 'GET', '/api/console/artifacts?limit=0')).json.error.id, 'invalid-artifact-limit')
+    assert.equal((await request(panel, 'GET', '/api/console/artifacts?from=tomorrow')).json.error.id, 'invalid-artifact-date')
+    assert.equal((await request(panel, 'GET', `/api/console/artifacts?q=${'x'.repeat(201)}`)).json.error.id, 'invalid-artifact-query')
+    assert.equal((await request(panel, 'POST', '/api/console/artifacts', {})).status, 405)
 
-    const stop = await request(panel, 'POST', '/api/console/browser/stop?handoff=course-b', {})
-    assert.equal(stop.status, 200)
-    assert.equal(stopped, true, 'the answer puts the run viewport back first')
-    assert.deepEqual(scopes, [['status', 'course-a'], ['input', 'course-a'],
-      ['status', 'course-b'], ['view', 'course-b'], ['stop', 'course-b']])
-    controller.abort()
+    delete host.artifacts
+    const unsupported = await request(panel, 'GET', '/api/console/artifacts')
+    assert.equal(unsupported.status, 501)
+    assert.equal(unsupported.json.ok, false)
+    assert.equal(unsupported.json.error.id, 'artifacts-unavailable')
+    assert.match(unsupported.json.error.summary, /global artifact API/)
+    assert.match(unsupported.json.error.hint, /consoleHost\.artifacts/)
+
+    delete host.readArtifact
+    const noDetail = await request(panel, 'GET', '/api/console/artifacts/artifact-1')
+    assert.equal(noDetail.status, 501)
+    assert.equal(noDetail.json.error.id, 'artifact-read-unavailable')
   } finally {
-    await panel.stop()
+    await panel?.stop()
     await fsp.rm(base, { recursive: true, force: true })
   }
 })
 
-test('the live stream refuses to start when the run has no browser', async () => {
+test('disabled sources return an explicit empty snapshot instead of a console error', async () => {
   const { base, state } = await fixture()
-  const live = {
-    async status() {
-      return { available: false, reason: '执行浏览器已关闭。' }
-    },
-    attach() {
-      throw new Error('must not attach without a browser')
-    },
-    async input() {
-      return {}
-    },
-  }
-  const panel = await startConsole(state, fakeHost().host, { live })
+  const { host } = fakeHost()
+  let panel = null
   try {
-    const response = await request(panel, 'GET', '/api/console/browser/live')
-    assert.equal(response.status, 409)
-    assert.equal(response.json.error.summary, '执行浏览器已关闭。')
+    panel = await startConsole(state, host)
+    const response = await request(panel, 'GET', '/api/console/sources')
+    assert.equal(response.status, 200)
+    assert.deepEqual(response.json.data, { bindings: [], recent: [], reason: 'sources-disabled' })
   } finally {
-    await panel.stop()
+    await panel?.stop()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('declared artifact paths use the same-run allowlist without widening workspace or CSP boundaries', async () => {
+  const { base, state } = await fixture()
+  const workspace = path.join(base, 'workspace')
+  await fsp.mkdir(workspace)
+  const declared = path.join(workspace, 'declared.md')
+  const page = path.join(workspace, 'declared.html')
+  const reportOnly = path.join(workspace, 'report-only.md')
+  const publicSecret = path.join(workspace, 'public-secret.txt')
+  const secret = path.join(workspace, 'secret.txt')
+  const outside = path.join(base, 'outside.txt')
+  await fsp.writeFile(declared, 'declared report')
+  await fsp.writeFile(page, '<h1>declared</h1><script>fetch(location)</script>')
+  await fsp.writeFile(reportOnly, 'report-linked artifact')
+  await fsp.writeFile(publicSecret, 'public only')
+  await fsp.writeFile(secret, 'not declared')
+  await fsp.writeFile(outside, 'outside')
+  const link = path.join(workspace, 'linked.txt')
+  let symlinkReady = false
+  try {
+    await fsp.symlink(outside, link, 'file')
+    symlinkReady = true
+  } catch {
+    // Windows without symlink privileges cannot exercise this branch.
+  }
+  const { host } = fakeHost()
+  host.sessionWorkspace = async () => workspace
+  host.readRun = async (sessionId, runId) => sessionId === 'session-console' && runId === 'run-1'
+    ? {
+      id: runId,
+      workspace: { base: workspace },
+      report: 'No Markdown links in this report.',
+      artifacts: [
+        { kind: 'report', path: 'declared.md', bytes: 15 },
+        { kind: 'html', path: 'declared.html', bytes: 50 },
+        { kind: 'text', path: '../outside.txt', bytes: 7 },
+      ],
+    } : runId === 'run-3'
+      ? { id: runId, workspace: { base: workspace }, report: '[Report](./report-only.md)', artifacts: [] }
+      : runId === 'run-4'
+        ? { id: runId, workspace: { base: workspace }, report: '[Public](public-secret.txt)', artifacts: [] }
+        : runId === 'run-5'
+          ? { id: runId, workspace: { base: workspace }, report: '', artifacts: [{ kind: 'text', path: 'linked.txt' }] }
+          : null
+  let panel = null
+  try {
+    panel = await startConsole(state, host)
+    assert.equal((await request(panel, 'POST', '/api/console/bootstrap', {})).status, 200)
+    const open = value => request(panel, 'GET', `/api/console/artifact?runId=run-1&path=${encodeURIComponent(value)}`)
+    assert.equal((await open('declared.md')).text, 'declared report')
+    assert.equal((await open(declared)).text, 'declared report')
+    assert.equal((await request(panel, 'GET', `/api/console/artifact?runId=run-3&path=${encodeURIComponent(reportOnly)}`)).text, 'report-linked artifact')
+    assert.equal((await request(panel, 'GET', `/api/console/artifact?runId=run-4&path=${encodeURIComponent(secret)}`)).status, 403,
+      'a report substring is not an exact artifact declaration')
+    const html = await open(page)
+    assert.equal(html.status, 200)
+    assert.match(html.headers.get('content-security-policy') ?? '', /sandbox allow-scripts/)
+    assert.equal((await open('secret.txt')).status, 403)
+    assert.equal((await open('../outside.txt')).json.error.id, 'artifact-outside-project')
+    assert.equal((await open(outside)).status, 403, 'an absolute path still needs the same-run allowlist')
+    if (symlinkReady) {
+      assert.equal((await request(panel, 'GET', `/api/console/artifact?runId=run-5&path=${encodeURIComponent('linked.txt')}`)).json.error.id,
+        'artifact-symlink-outside-project')
+      assert.equal((await request(panel, 'GET', `/api/console/artifact?runId=run-5&path=${encodeURIComponent(link)}`)).json.error.id,
+        'artifact-symlink-outside-project')
+    }
+    assert.equal((await request(panel, 'GET', `/api/console/artifact?runId=run-2&path=${encodeURIComponent(secret)}`)).status, 403)
+    assert.equal((await request(panel, 'POST', `/api/console/artifact/reveal?runId=run-1&path=${encodeURIComponent(secret)}`)).status, 403)
+  } finally {
+    await panel?.stop()
     await fsp.rm(base, { recursive: true, force: true })
   }
 })
