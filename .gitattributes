@@ -4,6 +4,7 @@ bin/**/*.js text eol=lf
 bin/*.js text eol=lf
 lib/**/*.js text eol=lf
 lib/*.js text eol=lf
+public/mobile.html text eol=lf
 
 *.sh text eol=lf
 *.png binary

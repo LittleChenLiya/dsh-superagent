@@ -51,6 +51,84 @@ async function materialize(overrides = null, hooks = {}) {
   }
 }
 
+test('second-batch payload builders preserve the backend contracts', async () => {
+  const { exports } = await materialize()
+  const cron = exports.automationRuleFromDraft({
+    name: ' 日报 ', description: ' summary ', triggerType: 'cron', cron: ' 0 9 * * * ', timeZone: 'UTC',
+    everyMs: '', source: '', eventTypes: '', prompt: ' 汇总项目 ', relativePath: ' artifacts/daily.md ',
+    events: ['completed', 'failed', 'completed'], maxRuns: '10', maxModelCalls: '', maxTokens: '2000', maxCost: '100',
+  })
+  assert.deepEqual(cron, {
+    name: '日报', description: 'summary', trigger: { type: 'cron', cron: '0 9 * * *', timeZone: 'UTC' },
+    action: { type: 'run', prompt: '汇总项目' }, output: { relativePath: 'artifacts/daily.md' },
+    notify: { events: ['completed', 'failed', 'completed'] },
+    budget: { maxRuns: 10, maxModelCalls: null, maxTokens: 2000, maxCost: 100 },
+  })
+  const source = exports.automationRuleFromDraft({
+    triggerType: 'source', source: ' github ', eventTypes: ' push, pull_request, ', prompt: 'review', relativePath: 'out/review.md',
+  })
+  assert.deepEqual(source.trigger, { type: 'source', source: 'github', eventTypes: ['push', 'pull_request'] })
+  const every = exports.automationRuleFromDraft({ triggerType: 'every', everyMs: '60000', prompt: 'tick', relativePath: 'out/tick.md' })
+  assert.deepEqual(every.trigger, { type: 'every', everyMs: 60000 })
+  assert.equal(exports.automationRuleFromDraft({ triggerType: 'every', everyMs: '1.5', prompt: 'x', relativePath: 'x.md' }).trigger.everyMs, 1.5,
+    'invalid numeric input is not silently converted into an unlimited budget')
+  assert.equal(exports.automationTriggerLabel({ trigger: { type: 'every', everyMs: 120000 } }), '每 2 分钟')
+
+  const model = {
+    project: { cwd: '/work/a' }, detail: { id: 'run-1', goal: '发布', model: 'test/model' },
+    more: { cloudWorker: { provider: 'remote', model: 'cloud/model' } },
+  }
+  const spec = exports.cloudWorkSpecFromDraft(model, {
+    runId: 'run-1', subtaskId: 'release', attempt: '2', repoSnapshot: '/work/a', prompt: ' 构建 ',
+    modelProvider: 'remote', modelRef: 'cloud/model', toolAllow: ' read_file, write_file, ', approvalMode: 'manual',
+    maxTokens: '1000', maxCostUsd: '0.5', maxWallSeconds: '600', maxToolCalls: '8',
+    deadline: '2026-12-01T09:30', checkpointRef: 'checkpoint/release',
+  })
+  assert.deepEqual(spec.run, { id: 'run-1' })
+  assert.deepEqual(spec.subtask, { id: 'release' })
+  assert.equal(spec.attempt, 2)
+  assert.equal(spec.prompt, '构建')
+  assert.deepEqual(spec.toolScope, { allow: ['read_file', 'write_file'] })
+  assert.deepEqual(spec.budget, { maxTokens: 1000, maxCostUsd: 0.5, maxWallSeconds: 600, maxToolCalls: 8 })
+  assert.equal(spec.deadline, new Date('2026-12-01T09:30').toISOString())
+  assert.deepEqual(spec.checkpoint, { ref: 'checkpoint/release' })
+  assert.equal(Object.keys(spec).some(key => /secret|password|credential|token/i.test(key)), false)
+
+  const handoff = { registry: 'https://registry.npmjs.org', package: { name: '@scope/review-skill', version: '1.2.3' }, installed: false, executed: false }
+  const command = exports.marketInstallCommand(handoff)
+  assert.match(command, /^npm install --ignore-scripts --registry https:\/\/registry\.npmjs\.org '@scope\/review-skill@1\.2\.3'$/)
+  assert.equal(exports.shareUrlOf({ token: 'shr_abc' }), '/superagent/api/share/shr_abc')
+  const stableA = `art_cnVuLUE.${'A'.repeat(43)}`
+  const stableB = `art_cnVuLTI.${'B'.repeat(43)}`
+  assert.deepEqual(exports.availableArtifacts({ artifacts: [{ id: stableA, name: 'one' }, { id: stableA, name: 'duplicate' }],
+    runs: [{ id: 'run-1', artifacts: [{ href: '/tmp/report.md', name: 'raw' }] }],
+    workbench: { runs: [{ artifacts: [{ id: stableB, name: 'two' }] }] } }).map(item => item.shareId), [stableA, stableB])
+})
+
+test('global assistant saves carry immutable identity, fixed scopes and optimistic revisions', async () => {
+  const { exports } = await materialize()
+  const draft = exports.assistantDraftFromProfile({ name: 'Old', avatar: 'assistant', role: 'assistant',
+    id: 'global-assistant', revision: 7, tools: ['read_file'], permissions: ['workspace.read'] })
+  Object.assign(draft, { name: ' Release Assistant ', avatar: 'bot', provider: ' local ', model: ' test/model ',
+    tools: 'read_file, write_file, read_file', permissions: 'workspace.read, memory.global', expectedRevision: 7 })
+  const update = exports.assistantProfilePayload(draft, [{ id: 'global-assistant', role: 'assistant', revision: 7 }])
+  assert.deepEqual(update, { action: 'update', id: 'global-assistant', expectedRevision: 7, patch: {
+    name: 'Release Assistant', avatar: 'bot', provider: 'local', model: 'test/model',
+    tools: ['read_file', 'write_file'], permissions: ['workspace.read', 'memory.global'],
+    memoryScope: 'global', workspaceScope: 'global',
+  } })
+  assert.equal(Object.hasOwn(update.patch, 'id'), false)
+  assert.equal(Object.hasOwn(update.patch, 'role'), false)
+  const create = exports.assistantProfilePayload(draft, [])
+  assert.equal(create.action, 'create')
+  assert.equal(create.profile.id, 'global-assistant')
+  assert.equal(create.profile.role, 'assistant')
+  assert.equal(Object.hasOwn(create.profile, 'expectedRevision'), false)
+  assert.throws(() => exports.assistantProfilePayload(draft, [
+    { id: 'global-assistant', role: 'assistant' }, { id: 'another', role: 'assistant' },
+  ]), /多个助理/)
+})
+
 test('the client bundle parses as JavaScript', () => {
   const result = spawnSync(process.execPath, ['--check', clientPath], { encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr)
@@ -93,7 +171,7 @@ test('the bundle registers under the package id and exports apply/inject', async
   assert.deepEqual(exports.inject, ['slots'])
 })
 
-test('apply seats the 超级智能体 entry between 插件 and 自动化任务', async () => {
+test('apply seats the 全局助理 entry between 插件 and 自动化任务', async () => {
   const { exports } = await materialize()
   const registered = []
   const ctx = {
@@ -110,7 +188,7 @@ test('apply seats the 超级智能体 entry between 插件 and 自动化任务',
   const row = registered.find(entry => entry.props.name === 'sidebar.panellist')
   assert.equal(main?.props.key, 'superagent')
   assert.equal(row?.props.id, 'superagent')
-  assert.equal(row?.props.label, '超级智能体')
+  assert.equal(row?.props.label, '全局助理')
   assert.ok(row.props.order > 0 && row.props.order < 10, 'the row sorts between 插件 (0) and 自动化任务 (10)')
   assert.equal(typeof row.component, 'function')
 })
@@ -161,7 +239,7 @@ test('the main panel renders its own loading seat, without a frame', async () =>
   assert.equal(tree.props.className, 'dsa-root')
   const note = tree.children[0].children[0]
   assert.equal(note.props.className, 'dsa-note')
-  assert.equal(note.children[0], '连接中')
+  assert.equal(note.children[0], '正在连接全局助理…')
 
   const row = registered.find(entry => entry.props.name === 'sidebar.panellist')
   const icon = row.component({ size: 16, active: true })
@@ -252,124 +330,212 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   const button = (nodes, label) => nodes.find(node => node.type === 'button'
     && (node.children.includes(label) || node.props.title === label || node.props['aria-label'] === label))
   const initial = render()
-  assert.equal(initial.some(node => node.type === 'aside'), false, 'the chat starts without the task drawer')
-  initial.find(node => node.type === 'button'
-    && String(node.props?.className ?? '').includes('dsa-task-receipt')).props.onClick()
+  assert.equal(initial.some(node => node.type === 'aside'), true, 'the desktop workbench starts open')
+  assert.ok(initial.some(node => (node.children ?? []).includes('全局助理')), 'the assistant has one global identity')
+  assert.ok(initial.some(node => node.props?.role === 'tab' && node.props['aria-selected'] === true
+    && (node.children ?? []).includes('概览')), 'overview is the default tab')
+  button(initial, first.goal).props.onClick()
   const nodes = render()
-  button(nodes, '追加').props.onClick()
+  button(nodes, '补充要求').props.onClick()
   button(nodes, 'feedback.md').props.onClick()
-  assert.equal(actions[0].type, 'openReceipt')
-  assert.equal(actions[0].message.taskId, goal.id)
+  assert.equal(actions[0].taskId, goal.id)
   assert.equal(actions[1].run.id, goal.id)
   assert.equal(actions[2].run.parentSessionId, 'chat-b')
   assert.equal(actions[2].item.href, 'feedback.md')
   assert.ok(nodes.some(node => node.children.includes('等待 Draft')))
-  button(nodes, '追加 Review').props.onClick()
+  button(nodes, '补充阶段要求 Review').props.onClick()
   assert.equal(actions.at(-1).run.id, goal.id)
   assert.equal(actions.at(-1).phase.id, 'p2')
-  button(render(), '任务').props.onClick()
-  // A phase receipt is a different button from a whole-task receipt: it is
-  // named after the phase a person knows, and clicking it opens that evidence.
+  button(render(), '待办').props.onClick()
+  // A phase receipt is a different button from a whole-task receipt: clicking
+  // it must open that phase's execution evidence.
   const withPhase = render()
-  const feedCard = withPhase.find(node => node.type === 'button'
-    && String(node.props?.className ?? '').includes('dsa-task-receipt'))
-  assert.equal(feedCard.props?.title, '报告', 'the one task card leads with the report')
-  const receiptCopy = feedCard.children.find(child => child?.props?.className === 'dsa-receipt-copy')
-  assert.match(receiptCopy.children[0].children.join(''), /Release notes/)
-  assert.doesNotMatch(receiptCopy.children[0].children.join(''), /p1/)
-  assert.match(receiptCopy.children[1].children.join(''), /Draft/)
   const phaseButton = withPhase.find(node => node.type === 'button'
-    && node.props?.title === '证据')
-  assert.ok(phaseButton, 'the old phase receipt stays openable from the same card')
+    && node.props?.title === '打开阶段 p1 的执行证据')
+  assert.ok(phaseButton, 'the phase receipt offers its own evidence entry')
   phaseButton.props.onClick()
   assert.equal(actions.at(-1).type, 'openReceipt')
   assert.equal(actions.at(-1).message.runId, first.id)
-})
-
-test('a closed task ends the conversation with its own summary bubble', async () => {
-  // The progress card sits where the task began; the conclusion needs a bubble
-  // of its own at the end, or the conversation reads as if nothing came back.
-  const card = await taskCardHarness({ status: 'partial' }, {
-    messages: [
-      { id: 'reply-u1', role: 'assistant', text: '', taskId: 'goal-empty', at: 1 },
-      { id: 'phase-goal-empty-p1-aaaaaaaaaaaa', role: 'assistant', text: '阶段「改造镜头」已交付：完成。',
-        taskId: 'goal-empty', phaseId: 'p1', at: 2 },
-      { id: 'result-goal-empty-bbbbbbbbbbbb', role: 'assistant', receipt: 'delivered', taskId: 'goal-empty', at: 3,
-        text: '「空任务」部分交付（1/2 阶段完成）。最终结论：镜头已改为固定面视角。' },
-    ],
-  })
-  const nodes = card.render()
-  const lines = nodes.filter(node => node.props?.className === 'dsa-md-plain')
-    .map(node => (node.children ?? []).join(''))
-  assert.ok(lines.some(text => text.includes('最终结论：镜头已改为固定面视角。')),
-    'the closing text is readable in the conversation')
-  assert.ok(nodes.some(node => (node.children ?? []).includes('最终总结')),
-    'the closing bubble names itself')
-  const cards = nodes.filter(node => String(node.props?.className ?? '').includes('dsa-task-receipt'))
-  assert.equal(cards.length, 1, 'the progress card still appears once')
+  const inbox = render({ inboxOpen: true })
+  assert.equal(inbox.some(node => node.children.includes('暂无待处理事项')), true)
+  assert.equal(inbox.find(node => node.props?.['aria-label'] === '任务列表')?.props.hidden, true,
+    'the task list stays mounted so its search can survive a view change')
 })
 
 /** Hook storage that keeps component state across explicit re-renders. */
 function hookCache() {
-  // State belongs to a component, not to a global cursor. A panel that grows a
-  // hook must not hand its neighbour the wrong slot.
-  const stores = new Map()
-  let current = null
-  let index = 0
+  const values = []
+  let cursor = null
   return {
     hooks: {
       useState(initial) {
         const value = typeof initial === 'function' ? initial() : initial
-        if (current === null) return [value, () => {}]
-        if (!stores.has(current)) stores.set(current, [])
-        const slots = stores.get(current)
-        const at = index++
-        if (slots[at] === undefined) slots[at] = value
-        return [slots[at], next => {
-          slots[at] = typeof next === 'function' ? next(slots[at]) : next
+        if (cursor === null) return [value, () => {}]
+        const index = cursor++
+        if (values[index] === undefined) values[index] = value
+        return [values[index], next => {
+          values[index] = typeof next === 'function' ? next(values[index]) : next
         }]
       },
       useRef(initial) {
-        if (current === null) return { current: initial }
-        if (!stores.has(current)) stores.set(current, [])
-        const slots = stores.get(current)
-        const at = index++
-        if (slots[at] === undefined) slots[at] = { current: initial }
-        return slots[at]
+        if (cursor === null) return { current: initial }
+        const index = cursor++
+        if (values[index] === undefined) values[index] = { current: initial }
+        return values[index]
       },
     },
-    enter(component) { current = component; index = 0 },
-    leave() { current = null; index = 0 },
+    begin() { cursor = 0 },
+    end() { cursor = null },
   }
 }
 
 /** Depth-first walk over a stub element tree, rendering function components. */
-function* walkTree(tree, cache) {
+function* walkTree(tree) {
   if (Array.isArray(tree)) {
-    for (const child of tree) yield* walkTree(child, cache)
+    for (const child of tree) yield* walkTree(child)
   } else if (tree && typeof tree === 'object') {
     if (typeof tree.type === 'function') {
-      const id = tree.key != null ? `${tree.type.name}#${tree.key}` : tree.type
-      cache.enter(id)
-      try {
-        yield* walkTree(tree.type({ ...tree.props, children: tree.children }), cache)
-      } finally {
-        cache.leave()
-      }
+      yield* walkTree(tree.type({ ...tree.props, children: tree.children }))
     } else {
       yield tree
-      yield* walkTree(tree.children, cache)
+      yield* walkTree(tree.children)
     }
   }
 }
 
+/** Mount the stateful panel without a browser; effects remain inert. */
+async function panelHarness(patch = {}) {
+  const cache = hookCache()
+  let currentModel = {
+    phase: 'ready', sessionId: 'chat-a', project: { cwd: '/work/a', name: '工作区 A' },
+    capabilities: { chat: true }, messages: [], runs: [], goals: [], approvals: [], typing: false,
+    workbench: { name: '测试工作台', projects: [{ cwd: '/work/a', name: '工作区 A' }], runs: [], goals: [], inbox: [] },
+    ...patch,
+  }
+  let shell
+  let firstPanelHook = true
+  let renderedModel = null
+  const { exports } = await materialize(null, {
+    ...cache.hooks,
+    useState(initial) {
+      if (firstPanelHook) {
+        firstPanelHook = false
+        return [currentModel, updater => { currentModel = updater(currentModel) }]
+      }
+      return cache.hooks.useState(initial)
+    },
+    useCallback: callback => callback,
+  })
+  exports.apply({
+    slots: {
+      inject: (name, callback) => callback(),
+      register: (props, component) => { if (props.name === 'main') shell = component },
+    },
+  })
+  const render = () => {
+    cache.begin()
+    firstPanelHook = true
+    const seat = shell()
+    renderedModel = seat.props.model
+    const nodes = [...walkTree(seat)]
+    cache.end()
+    return nodes
+  }
+  return {
+    render,
+    model: () => currentModel,
+    renderedModel: () => renderedModel,
+    dispatch: action => {
+      firstPanelHook = true
+      cache.begin()
+      const seat = shell()
+      cache.end()
+      return seat.props.dispatch(action)
+    },
+  }
+}
+
+test('the workbench keeps one global identity, switches tabs, and reopens after the narrow drawer closes', async () => {
+  const card = await panelHarness()
+  let nodes = card.render()
+  const tab = (label) => nodes.find(node => node.props?.role === 'tab' && (node.children ?? []).includes(label))
+  assert.ok(nodes.some(node => node.type === 'aside'))
+  assert.ok(nodes.some(node => (node.children ?? []).includes('测试工作台')))
+  assert.ok(nodes.some(node => (node.children ?? []).includes('全局助理')))
+  assert.ok(nodes.some(node => (node.children ?? []).includes('在线')))
+  assert.ok(nodes.some(node => (node.children ?? []).includes('当前工作区：工作区 A')))
+  assert.equal(tab('概览').props['aria-selected'], true)
+
+  tab('任务').props.onClick()
+  nodes = card.render()
+  assert.equal(tab('任务').props['aria-selected'], true)
+  assert.equal(nodes.find(node => node.props?.['aria-label'] === '任务列表')?.props.hidden, false)
+  assert.ok(nodes.some(node => node.props?.className === 'dsa-rail-scrim'), 'the same rail can become the narrow drawer scrim')
+
+  nodes.find(node => node.props?.['aria-label'] === '关闭侧栏' && node.props.className === 'dsa-iconbtn').props.onClick()
+  nodes = card.render()
+  assert.equal(nodes.some(node => node.type === 'aside'), false)
+  nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '任务').props.onClick()
+  nodes = card.render()
+  assert.equal(nodes.some(node => node.type === 'aside'), true, 'the header reopens the preserved tab')
+  assert.equal(tab('任务').props['aria-selected'], true)
+})
+
+test('today summary is deterministic and the overview makes no model request', async () => {
+  const { exports } = await materialize()
+  const now = new Date(2026, 10, 25, 12)
+  const iso = (year, month, day) => new Date(year, month, day, 9).toISOString()
+  const model = {
+    sessionId: 'chat-a',
+    workbench: {
+      goals: [
+        { id: 'new', status: 'running', createdAt: iso(2026, 10, 25), phases: [] },
+        { id: 'done', status: 'completed', createdAt: iso(2026, 10, 24), finishedAt: iso(2026, 10, 25), phases: [] },
+        { id: 'failed', status: 'failed', createdAt: iso(2026, 10, 25), finishedAt: iso(2026, 10, 25), phases: [] },
+        { id: 'decision', status: 'needs-decision', createdAt: iso(2026, 10, 25), phases: [] },
+      ],
+      runs: [{ id: 'run-old', goalId: 'done', status: 'completed', createdAt: iso(2026, 10, 20),
+        finishedAt: iso(2026, 10, 25), artifacts: [{ name: '报告.md', href: 'report.md' }] }],
+      inbox: [],
+    },
+  }
+  assert.deepEqual(exports.todaySummary(model, now), {
+    added: 3, active: 1, completed: 1, failed: 1, decisions: 1, artifacts: 1,
+  })
+  const originalFetch = globalThis.fetch
+  let calls = 0
+  globalThis.fetch = async () => { calls += 1; throw new Error('overview must not fetch a model') }
+  try {
+    const card = await panelHarness({ workbench: model.workbench })
+    const nodes = card.render()
+    assert.ok(nodes.some(node => node.props?.className === 'dsa-summary-grid'))
+    assert.equal(calls, 0)
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
+test('long-goal phase runs do not duplicate the goal task card', async () => {
+  const { exports } = await materialize()
+  const goal = { id: 'goal-1', goal: '发布插件', status: 'running' }
+  const tasks = exports.workbenchTasks({ workbench: {
+    goals: [goal],
+    runs: [
+      { id: 'phase-1', goalId: null, origin: { kind: 'long-goal', goalId: 'goal-1' }, goal: '发布插件' },
+      { id: 'phase-2', goalId: null, origin: { kind: 'long-goal', goalId: 'goal-1' }, goal: '发布插件' },
+      { id: 'standalone', goalId: null, origin: { kind: 'scheduled' }, goal: '每日检查' },
+    ],
+  } })
+  assert.deepEqual(tasks.map(task => task.id), ['goal-1', 'standalone'])
+})
+
 /** Mount the panel and open one task card with an empty 工作上下文. */
-async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {}, workspace = null) {
+async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {}) {
   const cache = hookCache()
   const { exports } = await materialize(null, cache.hooks)
   let panel
   exports.apply({
-    get: name => (name === 'uiWorkspace' ? workspace : undefined),
     slots: {
       inject: (name, callback) => callback(),
       register: (props, component) => { if (props.name === 'main') panel = component },
@@ -387,28 +553,75 @@ async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {},
     ...modelPatch,
   }
   const render = extra => {
-    cache.enter(shell.type)
-    let seat
-    try {
-      seat = shell.type({ model: { ...model, ...extra }, dispatch: action => actions.push(action) })
-    } finally {
-      cache.leave()
-    }
-    return [...walkTree(seat, cache)]
+    cache.begin()
+    const seat = shell.type({ model: { ...model, ...extra }, dispatch: action => actions.push(action) })
+    const nodes = [...walkTree(seat)]
+    cache.end()
+    return nodes
   }
   const openRail = () => {
-    const tasks = render().find(node => node.type === 'button'
-      && node.props?.['aria-label'] === '任务')
-    assert.ok(tasks, 'the header keeps the panel expand button')
+    const tasks = render().find(node => node.type === 'button' && node.props?.['aria-label'] === '任务')
+    assert.ok(tasks, 'the header offers the task view')
     tasks.props.onClick()
     return render()
   }
   const button = (nodes, label) => nodes.find(node => node.type === 'button' && (node.children ?? []).includes(label))
   const composer = nodes => nodes.find(node => node.type === 'textarea')
   const hint = (nodes, name) => nodes.find(node => String(node.props?.className ?? '').includes(name))?.children?.[0]
-  const openMore = () => render()
-  return { render, openRail, openMore, actions, goal, button, composer, hint }
+  return { render, openRail, actions, goal, button, composer, hint }
 }
+
+test('a phase decision shows one conclusion and hides raw failure detail by default', async () => {
+  const decision = {
+    id: 'd1', kind: 'phase-exhausted', phaseId: 'p3',
+    question: '阶段 p3「实现结算后再来一局」失败：已用尽 2 次尝试。下游阶段 p4 依赖它。可以换一种做法重试、跳过该阶段，或停止整个目标。',
+    summary: '阶段 p3「实现结算后再来一局」自动重试已结束，仍未通过验收。',
+    impact: '下游阶段 p4 正在等待；已经完成的部分会保留。',
+    reason: '已用尽 2 次尝试',
+    detail: '# Goal not reached — stopped: no progress: the same acceptance condition failed again',
+    options: ['retry', 'skip', 'stop'], source: { runId: 'run-1', failed: ['a1'] },
+  }
+  const card = await taskCardHarness({}, {}, {
+    inbox: [{ id: 'goal:goal-empty:d1', kind: 'decision', title: '阶段失败', goalId: 'goal-empty',
+      sessionId: 'chat-a', project: null, read: false, item: decision }],
+  })
+  card.render().find(node => node.type === 'button' && (node.children ?? []).includes('待办')).props.onClick()
+  const nodes = card.render({ inboxOpen: true })
+  const attention = nodes.find(node => node.props?.className === 'dsa-attention-card')
+  assert.ok(attention, 'the decision card is present in the inbox')
+  const inner = [...walkTree(attention)]
+  assert.ok(inner.some(node => (node.children ?? []).includes(decision.summary)))
+  assert.ok(inner.some(node => (node.children ?? []).includes(decision.impact)))
+  assert.equal(inner.some(node => node.type === 'input'), false, 'retry/skip/stop must not show a note field')
+  const details = inner.find(node => node.type === 'details')
+  assert.ok(details, 'technical detail is available on demand')
+  assert.notEqual(details.props.open, true, 'technical detail starts collapsed')
+  assert.ok(inner.some(node => node.type === 'button' && (node.children ?? []).includes('换做法重试')))
+  card.button(inner, '换做法重试').props.onClick()
+  assert.deepEqual(card.actions.at(-1), {
+    type: 'goalAction', goalId: 'goal-empty', action: 'answer', owner: 'chat-a',
+    body: { decisionId: 'd1', answer: 'retry', note: '' },
+  })
+})
+
+test('a router upload inserts its path when the default project has no cwd', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (route, options) => {
+    requests.push({ route, options })
+    return jsonResponse({ path: '/work/.superagent/uploads/session/context.md' })
+  }
+  try {
+    const card = await panelHarness({ project: { cwd: null, name: '默认工作区' } })
+    await card.dispatch({ type: 'upload', file: { name: 'context.md', data: 'Y29udGV4dA==' }, project: undefined })
+    assert.equal(requests.length, 1, JSON.stringify(requests))
+    assert.equal(card.model().uploadInsert, '/work/.superagent/uploads/session/context.md', JSON.stringify(card.model()))
+    assert.equal(card.model().uploading, false)
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
 
 test('the embedded composer uploads pasted images and dropped files in order', async () => {
   const originalReader = globalThis.FileReader
@@ -453,51 +666,6 @@ test('the embedded composer uploads pasted images and dropped files in order', a
     await new Promise(resolve => setImmediate(resolve))
     assert.deepEqual(card.actions.slice(2).map(action => action.file.name), ['notes.txt', 'data.json'])
     assert.deepEqual(card.actions.slice(2).map(action => action.file.data), ['bm90ZXM=', 'anNvbg=='])
-  } finally {
-    if (originalReader === undefined) delete globalThis.FileReader
-    else globalThis.FileReader = originalReader
-  }
-})
-
-test('the composer balances nested drag feedback and uploads every picked file', async () => {
-  const originalReader = globalThis.FileReader
-  globalThis.FileReader = class {
-    readAsDataURL(file) {
-      this.result = `data:${file.type || 'application/octet-stream'};base64,${file.data || 'ZGF0YQ=='}`
-      this.onload?.()
-    }
-  }
-  const drag = (composer, type, files = []) => composer.props[type]({
-    dataTransfer: { files, types: ['Files'] }, preventDefault() {},
-  })
-  try {
-    const card = await taskCardHarness()
-    const composer = card.render().find(node => node.props?.className === 'dsa-composer')
-    drag(composer, 'onDragEnter')
-    drag(composer, 'onDragEnter')
-    assert.equal(card.render().find(node => String(node.props?.className ?? '').includes('dsa-composer')).props.className,
-      'dsa-composer dragover', 'nested targets keep the drop hint visible')
-    assert.ok(card.render().some(node => node.children?.includes('松开即可放进当前工作区')))
-    drag(composer, 'onDragLeave')
-    assert.equal(card.render().find(node => String(node.props?.className ?? '').includes('dsa-composer')).props.className,
-      'dsa-composer dragover', 'leaving one child does not clear the outer drag')
-    drag(composer, 'onDragLeave')
-    assert.equal(card.render().find(node => String(node.props?.className ?? '').includes('dsa-composer')).props.className,
-      'dsa-composer', 'leaving the outer target clears the hint')
-
-    const picker = card.render().find(node => node.type === 'input' && node.props.type === 'file')
-    assert.equal(picker.props.multiple, true, 'the picker accepts a multi-file selection')
-    const target = {
-      files: [
-        { name: 'one.txt', type: 'text/plain', data: 'b25l' },
-        { name: 'two.txt', type: 'text/plain', data: 'dHdv' },
-      ],
-      value: 'selected',
-    }
-    picker.props.onChange({ target })
-    await new Promise(resolve => setImmediate(resolve))
-    assert.deepEqual(card.actions.map(action => action.file.name), ['one.txt', 'two.txt'])
-    assert.equal(target.value, '', 'the same file can be picked again later')
   } finally {
     if (originalReader === undefined) delete globalThis.FileReader
     else globalThis.FileReader = originalReader
@@ -572,9 +740,9 @@ test('the upload request keeps the workspace captured before a project switch', 
           firstPanelHook = false
           return [currentModel, updater => {
             currentModel = updater(currentModel)
-            cache.enter(shell.type)
+            cache.begin()
             renderPanel()
-            cache.leave()
+            cache.end()
           }]
         }
         return cache.hooks.useState(initial)
@@ -585,10 +753,10 @@ test('the upload request keeps the workspace captured before a project switch', 
       inject: (name, callback) => callback(),
       register: (props, component) => { if (props.name === 'main') shell = component },
     } })
-    cache.enter(shell.type)
+    cache.begin()
     const seat = renderPanel()
-    const composer = [...walkTree(seat, cache)].find(node => node.props?.className === 'dsa-composer')
-    cache.leave()
+    const composer = [...walkTree(seat)].find(node => node.props?.className === 'dsa-composer')
+    cache.end()
     assert.ok(composer)
     composer.props.onDrop({
       dataTransfer: { files: [{ name: 'upload.txt', type: 'text/plain', data: 'ZGF0YQ==' }], types: ['Files'] },
@@ -609,73 +777,159 @@ test('the upload request keeps the workspace captured before a project switch', 
   }
 })
 
+test('global artifacts use the console filters, descriptor ownership, visible errors, and return to their tab', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let failArtifacts = false
+  const artifact = {
+    id: 'artifact-1', runId: 'run-1', ownerSessionId: 'owner-1', project: { name: '工作区 A', cwd: '/work/a' },
+    goal: '发布检查', runStatus: 'completed', name: '报告.md', kind: 'markdown', source: 'run',
+    href: '/work/a/报告.md', path: '/work/a/报告.md', bytes: 2048, at: new Date().toISOString(),
+  }
+  globalThis.fetch = async route => {
+    requests.push(route)
+    if (route.startsWith('/superagent/api/console/artifacts?')) {
+      return failArtifacts
+        ? { ok: false, status: 503, json: async () => ({ message: '产物服务暂不可用' }) }
+        : { ok: true, status: 200, json: async () => ({ ok: true, data: { artifacts: [artifact], nextCursor: null } }) }
+    }
+    if (route.includes('/runs/run-1?')) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, data: {
+        id: 'run-1', goal: '发布检查', status: 'completed', parentSessionId: 'owner-1', artifacts: [],
+      } }) }
+    }
+    if (route.startsWith('/superagent/api/console/artifact?')) {
+      return { ok: false, status: 500, text: async () => '读取失败', json: async () => ({ message: '读取失败' }) }
+    }
+    throw new Error(`unexpected route ${route}`)
+  }
+  try {
+    const card = await panelHarness()
+    let nodes = card.render()
+    const tab = label => nodes.find(node => node.props?.role === 'tab' && (node.children ?? []).includes(label))
+    tab('产物').props.onClick()
+    await new Promise(resolve => setImmediate(resolve))
+    nodes = card.render()
+    assert.equal(new URL(requests[0], 'http://local').searchParams.get('limit'), '50')
+    assert.match(requests[0], /[?&]q=&kind=&project=&from=&to=&limit=50$/)
+    assert.equal(new URL(requests[0], 'http://local').searchParams.get('from'), '')
+    assert.equal(new URL(requests[0], 'http://local').searchParams.get('to'), '')
+    assert.equal(tab('产物').props['aria-selected'], true)
+
+    const artifactCard = nodes.find(node => node.props?.className === 'dsa-artifact-card')
+    assert.ok(artifactCard, 'the API descriptor is a clickable card')
+    assert.ok([...walkTree(artifactCard)].some(node => (node.children ?? []).includes('工作区 A')),
+      'an object project descriptor renders its name, not the raw object')
+    await artifactCard.props.onClick()
+    nodes = card.render()
+    const runUrl = new URL(requests.find(route => route.includes('/runs/run-1?')), 'http://local')
+    assert.equal(runUrl.searchParams.get('owner'), 'owner-1')
+    const previewUrl = new URL(requests.find(route => route.startsWith('/superagent/api/console/artifact?')), 'http://local')
+    assert.equal(previewUrl.searchParams.get('path'), '/work/a/报告.md')
+    assert.equal(previewUrl.searchParams.get('runId'), 'run-1')
+    assert.equal(previewUrl.searchParams.get('owner'), 'owner-1')
+    assert.match(card.model().previewError, /读取失败/)
+    assert.equal(card.model().toast.kind, 'err', 'a failed preview is not silent')
+
+    await nodes.find(node => node.props?.['aria-label'] === '返回产物').props.onClick()
+    nodes = card.render()
+    assert.equal(card.model().preview, null)
+    assert.equal(card.model().detail.id, 'run-1', 'preview keeps the existing return-to-detail behavior')
+    await nodes.find(node => node.props?.['aria-label'] === '返回产物').props.onClick()
+    nodes = card.render()
+    assert.equal(tab('产物').props['aria-selected'], true, 'closing the detail returns to the originating tab')
+    assert.equal(card.model().detail, null)
+
+    const searchArtifacts = nodes.find(node => node.props?.['aria-label'] === '搜索产物')
+    assert.ok(searchArtifacts, `artifact search returns after detail: ${textOf(nodes).slice(-800)}`)
+    searchArtifacts.props.onChange({ target: { value: '发布' } })
+    nodes = card.render()
+    nodes.find(node => node.type === 'form' && node.props?.className === 'dsa-answer-row').props.onSubmit({ preventDefault() {} })
+    await new Promise(resolve => setImmediate(resolve))
+    nodes = card.render()
+    assert.equal(new URL(requests.at(-1), 'http://local').searchParams.get('q'), '发布')
+    await nodes.find(node => node.props?.['aria-label'] === '产物类型').props.onChange({ target: { value: 'markdown' } })
+    nodes = card.render()
+    assert.equal(new URL(requests.at(-1), 'http://local').searchParams.get('kind'), 'markdown')
+    await nodes.find(node => node.props?.['aria-label'] === '产物开始日期').props.onChange({ target: { value: '2026-11-01' } })
+    await new Promise(resolve => setImmediate(resolve))
+    nodes = card.render()
+    assert.equal(new URL(requests.at(-1), 'http://local').searchParams.get('from'), '2026-11-01')
+    await nodes.find(node => node.props?.['aria-label'] === '产物结束日期').props.onChange({ target: { value: '2026-11-25' } })
+    await new Promise(resolve => setImmediate(resolve))
+    nodes = card.render()
+    assert.equal(new URL(requests.at(-1), 'http://local').searchParams.get('to'), '2026-11-25T23:59:59.999Z')
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('列表')).props.onClick()
+    nodes = card.render()
+    assert.ok(nodes.some(node => node.props?.className === 'dsa-artifact-grid dsa-artifact-list'))
+
+    failArtifacts = true
+    await nodes.find(node => node.props?.['aria-label'] === '产物工作区').props.onChange({ target: { value: '/work/a' } })
+    nodes = card.render()
+    const filterUrl = new URL(requests.at(-1), 'http://local')
+    assert.equal(filterUrl.searchParams.get('project'), '/work/a')
+    assert.ok(nodes.some(node => node.props?.role === 'alert' && (node.children ?? []).includes('产物读取失败：产物服务暂不可用')))
+    assert.equal(card.model().toast.kind, 'err')
+    assert.equal(card.model().artifactsLoading, false)
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
+test('automation lists recent schedule runs and states the empty case explicitly', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let sessions = [{ sessionId: 'schedule-a', title: '每日发布检查', cwd: '/work/a', rows: [
+    { id: 'run-a', goal: '检查发布产物', status: 'completed', parentSessionId: 'schedule-a', finishedAt: new Date().toISOString(), origin: { kind: 'scheduled', scheduleId: 'schedule-1' } },
+    { id: 'run-manual', goal: '手动任务不应混入自动化', status: 'completed', parentSessionId: 'schedule-a', finishedAt: new Date().toISOString() },
+  ] }]
+  globalThis.fetch = async route => {
+    requests.push(route)
+    return { ok: true, status: 200, json: async () => ({ ok: true, data: { sessions, reason: null } }) }
+  }
+  try {
+    const card = await panelHarness()
+    let nodes = card.render()
+    nodes.find(node => node.props?.role === 'tab' && (node.children ?? []).includes('自动化')).props.onClick()
+    await new Promise(resolve => setImmediate(resolve))
+    nodes = card.render()
+    assert.deepEqual(requests, ['/superagent/api/console/schedules'])
+    assert.ok(nodes.some(node => (node.children ?? []).includes('检查发布产物')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('每日发布检查')))
+    assert.equal(nodes.some(node => (node.children ?? []).includes('手动任务不应混入自动化')), false)
+
+    sessions = []
+    await card.dispatch({ type: 'loadAutomation' })
+    nodes = card.render()
+    assert.ok(nodes.some(node => (node.children ?? []).includes('暂无自动化执行记录')))
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
 test('an empty task offers 加别名 and 记决定, and 加别名 only prefills the composer', async () => {
   const card = await taskCardHarness()
-  let nodes = card.openRail()
-  assert.equal(nodes.some(node => (node.children ?? []).join('').includes('还没有别名或已确认的决定')), false,
-    'an empty context says nothing')
-  nodes = card.openMore(nodes)
+  const nodes = card.openRail()
+  assert.ok(nodes.some(node => (node.children ?? []).includes('还没有别名或已确认的决定。')),
+    'the empty context section still renders')
   const alias = card.button(nodes, '加别名')
   const decision = card.button(nodes, '记决定')
-  assert.ok(alias && decision, 'both record entries fold behind the overflow menu')
+  assert.ok(alias && decision, 'both record entries sit in the expanded card')
   assert.equal(alias.props['aria-label'], '给「空任务」加别名')
 
   alias.props.onClick()
   assert.deepEqual(card.actions, [], 'a prefill never sends by itself')
   const after = card.render()
   assert.equal(card.composer(after).props.value, '/别名 goal-empty | ')
-  assert.equal(card.composer(after).props['aria-label'], '给超级智能体发消息',
+  assert.equal(card.composer(after).props['aria-label'], '给全局助理发消息',
     'the command goes through the plain message entry, not a task follow-up')
-})
-
-test('the task drawer folds finished work and only searches a long list', async () => {
-  const finished = Array.from({ length: 9 }, (_, index) => ({
-    id: `done-${index}`, goal: `已完成 ${index + 1}`, title: `已完成 ${index + 1}`, ownerSessionId: 'chat-a',
-    status: 'completed', decisions: [], phases: [],
-  }))
-  const card = await taskCardHarness({}, {}, { goals: [
-    { id: 'waiting', goal: '等你决定的任务', title: '等你决定的任务', ownerSessionId: 'chat-a', status: 'needs-decision', decisions: [], phases: [] },
-    ...finished,
-  ] })
-  const nodes = card.openRail()
-  assert.ok(nodes.some(node => (node.children ?? []).includes('最近完成 9 项')),
-    'finished work collapses into one line')
-  assert.ok(nodes.some(node => String(node.props?.className ?? '').includes('dsa-task-search')),
-    'a long list reveals the search field')
-  const short = await taskCardHarness()
-  const shortNodes = short.openRail()
-  assert.equal(shortNodes.some(node => String(node.props?.className ?? '').includes('dsa-task-search')), false,
-    'a short list has no permanent search box')
-  assert.equal(shortNodes.some(node => node.type === 'button' && node.props?.['aria-label'] === '更多入口'), false,
-    'no overflow menu hides a duplicate todo entry')
-})
-
-test('multiple deliveries share one line until expanded', async () => {
-  const run = {
-    id: 'r1', goal: '交付', status: 'completed', parentSessionId: 'chat-a', subtasks: [], attention: [],
-    artifacts: [{ name: 'a.md', href: 'a.md' }, { name: 'b.md', href: 'b.md' }],
-  }
-  const card = await taskCardHarness({
-    status: 'completed', phases: [{ id: 'p1', title: '交付', status: 'completed', runId: 'r1' }],
-  }, {}, { runs: [run] })
-  let nodes = card.openRail()
-  const summary = nodes.find(node => String(node.props?.className ?? '').includes('dsa-file-summary'))
-  assert.ok(summary, 'two files become one summary row')
-  assert.ok((summary.children ?? []).some(child => (child.children ?? []).includes('2 个文件')))
-  assert.equal(nodes.some(node => String(node.props?.className ?? '').includes('dsa-file-card')), false,
-    'individual file cards wait behind the summary')
-  summary.props.onClick()
-  nodes = card.render()
-  const cards = nodes.filter(node => String(node.props?.className ?? '').includes('dsa-file-card'))
-  assert.ok(cards.length >= 2, 'expanding reveals both files')
-  assert.ok(cards.every(node => (node.children ?? []).some(child =>
-    (child.children ?? []).some(name => ['a.md', 'b.md'].includes(name)))),
-  'the expanded cards are the two real files')
 })
 
 test('记决定 prefills the decision template for the opened task', async () => {
   const card = await taskCardHarness()
-  const nodes = card.openMore(card.openRail())
+  const nodes = card.openRail()
   card.button(nodes, '记决定').props.onClick()
   assert.deepEqual(card.actions, [])
   assert.equal(card.composer(card.render()).props.value, '/决定 goal-empty | ')
@@ -688,32 +942,11 @@ test('an existing draft is kept intact when a record entry is used', async () =>
   nodes = card.render()
   assert.equal(card.composer(nodes).props.value, '已经写了一半')
 
-  card.button(card.openMore(nodes), '加别名').props.onClick()
+  card.button(nodes, '加别名').props.onClick()
   nodes = card.render()
   assert.equal(card.composer(nodes).props.value, '已经写了一半', 'the draft is not replaced')
   assert.match(card.hint(nodes, 'dsa-composer-hint'), /已原样保留/)
   assert.deepEqual(card.actions, [])
-})
-
-test('the reply close button and Escape clear the quote while keeping the draft', async () => {
-  const card = await taskCardHarness({}, { reply: { id: 'm1', text: '先前的消息' } })
-  card.composer(card.render()).props.onInput({ target: { value: '留在输入框的草稿' } })
-  const nodes = card.render()
-  const close = nodes.find(node => node.props?.['aria-label'] === '取消引用')
-  assert.equal(close.props.className, 'dsa-quote-close')
-  close.props.onClick()
-  assert.deepEqual(card.actions.pop(), { type: 'reply' })
-
-  const composer = nodes.find(node => node.props?.className === 'dsa-composer')
-  let stopped = false
-  const escape = { key: 'Escape', preventDefault() { this.defaultPrevented = true },
-    stopPropagation() { stopped = true } }
-  composer.props.onKeyDown({ ...escape, nativeEvent: { isComposing: true } })
-  assert.deepEqual(card.actions, [], 'Escape can first leave the input method')
-  composer.props.onKeyDown(escape)
-  assert.deepEqual(card.actions, [{ type: 'reply' }])
-  assert.ok(escape.defaultPrevented && stopped)
-  assert.equal(card.composer(card.render({ reply: null })).props.value, '留在输入框的草稿')
 })
 
 test('a task follow-up context is kept and the record entry asks to leave it first', async () => {
@@ -722,7 +955,7 @@ test('a task follow-up context is kept and the record entry asks to leave it fir
   })
   let nodes = card.openRail()
   assert.equal(card.composer(nodes).props['aria-label'], '任务补充要求')
-  card.button(card.openMore(nodes), '记决定').props.onClick()
+  card.button(nodes, '记决定').props.onClick()
   nodes = card.render()
   assert.equal(card.composer(nodes).props.value, '', 'the follow-up mode keeps its empty draft')
   assert.match(card.hint(nodes, 'dsa-composer-hint'), /取消追加/)
@@ -736,20 +969,20 @@ test('a task outside the selected workspace is not written blind: the card asks 
     sessionProjects: { 'chat-a': { cwd: '/work/two', name: '工作区二' } },
   })
   const nodes = card.openRail()
-  card.button(card.openMore(nodes), '加别名').props.onClick()
+  card.button(nodes, '加别名').props.onClick()
   const after = card.render()
   assert.equal(card.composer(after).props.value, '')
   assert.match(card.hint(after, 'dsa-record-hint'), /工作区二/)
-  assert.match(card.hint(after, 'dsa-record-hint'), /切到 工作区二/)
+  assert.match(card.hint(after, 'dsa-record-hint'), /切换到/)
   assert.deepEqual(card.actions, [])
 })
 
 test('a default workspace task requires switching back before recording from a named workspace', async () => {
   const card = await taskCardHarness({}, { project: { cwd: '/work/one', name: '工作区一' } })
-  card.button(card.openMore(card.openRail()), '记决定').props.onClick()
+  card.button(card.openRail(), '记决定').props.onClick()
   const after = card.render()
   assert.equal(card.composer(after).props.value, '')
-  assert.match(card.hint(after, 'dsa-record-hint'), /切到 默认 再插入/)
+  assert.match(card.hint(after, 'dsa-record-hint'), /切换到「默认工作区」/)
 })
 
 test('the task card separates current decisions from sources and evidence, and labels a receipt', async () => {  const at = Date.now()
@@ -771,8 +1004,7 @@ test('the task card separates current decisions from sources and evidence, and l
   assert.ok(nodes.some(node => textOf(node).includes('兼容性 · 先查旧版')))
   assert.ok(nodes.some(node => textOf(node).includes('来源 · issues.opened')), 'an external source is shown as data')
   assert.ok(nodes.some(node => textOf(node).includes('证据 · 已完成')), 'run evidence is shown next to decisions')
-  // One receipt card carries the state; the old "已送达" strip only repeated it.
-  assert.equal(nodes.some(node => (node.children ?? []).includes('已送达')), false, 'no duplicated receipt strip')
+  assert.ok(nodes.some(node => (node.children ?? []).includes('已送达')), 'the receipt state is visible')
 })
 
 test('the task card binds and unbinds a source without calling the API by hand', async () => {
@@ -796,7 +1028,7 @@ test('the task card binds and unbinds a source without calling the API by hand',
   card.button(nodes, '撤销').props.onClick()
   assert.deepEqual(card.actions.at(-1), { type: 'sourceUnbind', id: 'binding-1' })
 
-  card.button(nodes, '绑定').props.onClick()
+  card.button(nodes, '绑定来源').props.onClick()
   const form = card.render()
   const object = form.find(node => node.props?.['aria-label'] === '选择收到的来源')
   assert.ok(object, 'the card offers observed objects')
@@ -850,7 +1082,7 @@ test('a phase receipt click opens that phase run, and an expired run falls back 
   assert.equal(expired.opened, 'task')
   assert.equal(expired.fellBack, true)
   assert.deepEqual(tasks, ['g1', 'g1'], 'an expired phase still lands on its task')
-  assert.match(notes.join(' '), /这一阶段的执行记录已失效/)
+  assert.match(notes.join(' '), /阶段 p1 的执行记录已失效/)
 })
 
 test('todo and phase-receipt controls stay inside a narrow, 200%-zoomed panel', async () => {
@@ -883,672 +1115,993 @@ test('todo and phase-receipt controls stay inside a narrow, 200%-zoomed panel', 
       'a narrow panel must not hide the receipt')
     assert.doesNotMatch(css, /\.dsa-answer-row > button[^}]*display:none/u,
       'a narrow panel must not hide a todo action')
-    assert.match(css, /\.dsa-task-line\{[^}]*overflow-wrap:anywhere/u,
-      'the task summary wraps instead of widening the rail')
-    assert.match(css, /\.dsa-inbox-msg-task\{[^}]*min-width:0[^}]*ellipsis/u,
-      'the inbox task label shrinks inside its row')
+    assert.match(css, /@container dsa-shell \(max-width:820px\)\{[^}]*\.dsa-body\[data-rail=open\][^}]*grid-template-columns:minmax\(0,1fr\)/u,
+      'the resident rail becomes an overlay at the shell container breakpoint')
+    assert.match(css, /@container dsa-shell \(max-width:820px\)\{[\s\S]*?\.dsa-workbench\{[^}]*position:absolute/u)
+    assert.match(css, /@container dsa-shell \(max-width:820px\)\{[\s\S]*?\.dsa-rail-scrim\{[^}]*display:block/u)
+    assert.match(css, /@container dsa-rail \(min-width:360px\)\{\.dsa-artifact-grid\{[^}]*repeat\(2,/u,
+      'artifact cards use their own rail container, not the viewport')
+    assert.match(css, /@container dsa-shell \(max-width:480px\)\{[\s\S]*?\.dsa-workbench\{[^}]*width:min\(375px,100%\)/u,
+      'the narrow drawer is capped at 375px')
+    assert.match(css, /@container dsa-rail \(max-width:375px\)\{[^}]*\.dsa-more-grid\{[^}]*grid-template-columns:minmax\(0,1fr\)/u,
+      'More cards collapse inside a 375px rail')
   } finally {
     if (originalDocument === undefined) delete globalThis.document
     else globalThis.document = originalDocument
   }
 })
 
-test('a task title shows its own words, never the phase dispatch prompt', async () => {
-  const prompt = 'This run is phase 1 of 5: 调整镜头\n\nPhase objective:\n把镜头切到敌人来的一侧。\nKeep the door open.'
-  const card = await taskCardHarness({
-    goal: prompt, title: 'This run is phase 1 of 5: 调整镜头',
-    phases: [{ id: 'p1', title: '调整镜头', status: 'completed', summary: '镜头已切换' }],
-  })
-  const deepText = node => typeof node === 'string' ? node : (node?.children ?? []).map(deepText).join('')
-  const opened = card.openRail()
-  const row = opened.find(node => node.type === 'button' && String(node.props?.className ?? '').includes('dsa-session-main'))
-  assert.ok(row, 'the session card is rendered')
-  assert.match(deepText(row), /调整镜头/)
-  assert.doesNotMatch(deepText(row), /This run is phase|Phase objective|Keep the door open/)
-  assert.doesNotMatch(String(row.props.title), /This run is phase/, 'the hover title is clean too')
-
-  const brief = opened.find(node => String(node.props?.className ?? '') === 'dsa-task-line')
-  assert.equal(brief?.children?.[0], '镜头已切换', 'the opened task leads with its latest result')
+const jsonResponse = (data, status = 200) => ({
+  ok: status >= 200 && status < 300,
+  status,
+  json: async () => status >= 200 && status < 300 ? { ok: true, data } : { ok: false, error: { summary: data?.message ?? `HTTP ${status}` }, data },
 })
+const settle = () => new Promise(resolve => setImmediate(resolve))
 
-test('the todo badge counts one handoff once and leads with what the person must do', async () => {
-  const question = '阶段 p2（执行会话 child-9）需要你亲自完成：学习通需要扫码登录。页面：https://pan.example/login'
-  const decision = {
-    id: 'g1:decision-1', kind: 'decision', goalId: 'g1', sessionId: 'chat-a',
-    project: { cwd: '/work/one', name: '学习通' },
-    title: 'This run is phase 1 of 5: 整理课程\n\n整段内部提示',
-    item: { id: 'decision-1', question, reason: '旧会话没有登录凭据，需要本人扫码。', options: ['answer', 'skip'],
-      source: { kind: 'human', attentionId: 'attention-1', runId: 'run-9', runtimeVerified: true } },
-  }
-  const twin = {
-    ...decision, id: 'run-9:attention-1', kind: 'question', goalId: undefined, runId: 'run-9',
-    item: { id: 'attention-1', kind: 'human', question, url: 'https://pan.example/login',
-      reason: '旧会话没有登录凭据，需要本人扫码。', handoff: {} },
-  }
-  const card = await taskCardHarness({}, {}, { inbox: [decision, twin] })
-  const nodes = card.render()
-  const rows = nodes.filter(node => String(node.props?.className ?? '') === 'dsa-inbox-msg-row')
-  assert.equal(rows.length, 1, 'two surfaces of one handoff count once')
-  assert.equal(card.render({ messages: [] }).find(node => node.type === 'main')?.props?.['data-empty'], false,
-    'a pending handoff stays visible even if the conversation has no messages')
-  assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-header-dot'),
-    'outside the panel a dot still reminds without a second entry')
-  const text = nodes.map(deepText).join('')
-  assert.ok(text.includes('学习通需要扫码登录'), 'the conversation states the act itself')
-  assert.equal(text.includes('整段内部提示'), false, 'the prompt never becomes a label')
-  assert.ok(card.button(nodes, '完成'), 'the direct action sits in the message flow')
-  assert.ok(card.button(nodes, '登录'), 'the run browser opens inside the conversation')
-  assert.ok(nodes.some(node => (node.children ?? []).includes('原因')), 'the reason stays one tap away')
-  card.button(nodes, '去会话处理').props.onClick()
-  assert.deepEqual(card.actions.at(-1), { type: 'openSession', sessionId: 'chat-a' })
-
-  card.button(nodes, '登录').props.onClick()
-  const withLive = card.render()
-  const liveRow = withLive.find(node => node.props?.['data-live-login'])
-  assert.ok(liveRow, 'the hand-off becomes a row in the message flow')
-  assert.equal(liveRow.props.className, 'dsa-live-msg')
-
-  const empty = card.render({ workbench: { sessionId: 'chat-a', runs: [], goals: [card.goal], inbox: [] } })
-  assert.equal(empty.some(node => String(node.props?.className ?? '').includes('dsa-header-dot')), false,
-    'no dot without a todo')
-})
-
-const deepText = node => typeof node === 'string' ? node : (node?.children ?? []).map(deepText).join('')
-
-/** Text on the card face only; an expanded detail inside the card is skipped. */
-const faceText = node => {
-  if (typeof node === 'string') return node
-  if (String(node?.props?.className ?? '').includes('dsa-session-detail')) return ''
-  return (node?.children ?? []).map(faceText).join('')
+async function openMore(card, label) {
+  let nodes = card.render()
+  const tab = nodes.find(node => node.props?.role === 'tab' && (node.children ?? []).includes('更多'))
+  assert.ok(tab, 'the workbench has a More tab')
+  tab.props.onClick()
+  await settle()
+  nodes = card.render()
+  const entry = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === label)
+  assert.ok(entry, `More offers ${label}`)
+  await entry.props.onClick()
+  return card.render()
 }
 
-test('a failed card folds from its menu and restores from the closed section', async () => {
-  const failed = {
-    id: 'r-fail', goal: '回归测试', title: '回归测试', status: 'failed', parentSessionId: 'chat-a',
-    report: '断言失败：登录页超时',
-  }
-  const card = await taskCardHarness({ status: 'completed' }, { selectedGoalId: null },
-    { runs: [failed], goals: [] })
-  let nodes = card.openRail()
-  assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-grid'),
-    'the failed run leads the grid')
-  const first = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card')
-  first.props.onContextMenu({ preventDefault() {}, clientX: 20, clientY: 30 })
-  nodes = card.render()
-  card.button(nodes, '关闭卡片').props.onClick()
-  nodes = card.render()
-  assert.equal(nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-grid'), false,
-    'closing clears the failed card from the main grid')
-  assert.ok(nodes.some(node => (node.children ?? []).includes('已关闭 1 项')), 'the card folds instead of vanishing')
-  const folded = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card')
-  folded.props.onContextMenu({ preventDefault() {}, clientX: 20, clientY: 30 })
-  nodes = card.render()
-  card.button(nodes, '恢复卡片').props.onClick()
-  nodes = card.render()
-  assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-grid'),
-    'restoring brings the card back')
-})
-
-test('right-clicking a card offers jump to session and close', async () => {
-  const goal = {
-    id: 'g1', goal: '写脚本', title: '写脚本', ownerSessionId: 'chat-a', status: 'running',
-    decisions: [], phases: [{ id: 'p1', title: '写脚本', status: 'running', runId: 'r1' }],
-  }
-  const run = {
-    id: 'r1', goal: '写脚本', status: 'running', parentSessionId: 'chat-a',
-    subtasks: [{ index: 0, title: '写脚本', status: 'running', childId: 'child-1' }],
-  }
-  const card = await taskCardHarness(goal, { selectedGoalId: null }, { runs: [run] })
-  let nodes = card.openRail()
-  const sessionCard = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card')
-  sessionCard.props.onContextMenu({ preventDefault() {}, clientX: 20, clientY: 30 })
-  nodes = card.render()
-  assert.ok(nodes.some(node => String(node.props?.className ?? '') === 'dsa-card-menu'), 'right click opens a menu')
-  assert.ok(card.button(nodes, '关闭卡片'), 'the menu closes the card')
-  card.button(nodes, '跳转会话').props.onClick()
-  assert.deepEqual(card.actions.at(-1), { type: 'openSession', sessionId: 'child-1' })
-})
-
-test('the card menu also opens from the keyboard, not only from a right click', async () => {
-  const goal = { id: 'g1', goal: '写脚本', title: '写脚本', ownerSessionId: 'chat-a', status: 'running', decisions: [], phases: [] }
-  const card = await taskCardHarness(goal, { selectedGoalId: null }, { runs: [] })
-  const nodes = card.openRail()
-  const sessionCard = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card')
-  let prevented = 0
-  sessionCard.props.onKeyDown({
-    key: 'F10', shiftKey: true, preventDefault() { prevented += 1 },
-    currentTarget: { getBoundingClientRect: () => ({ left: 10, bottom: 200 }) },
-  })
-  const after = card.render()
-  assert.ok(after.some(node => String(node.props?.className ?? '') === 'dsa-card-menu'), 'Shift+F10 opens the same menu')
-  assert.equal(prevented, 1)
-  assert.equal(sessionCard.children.find(child => child?.props?.className === 'dsa-session-main').props['aria-expanded'], false,
-    'the card button is the one disclosure control for its detail')
-})
-
-test('a waiting card keeps its question on the face and moves context into the detail', async () => {
-  const run = {
-    id: 'r-art', goal: '交付', status: 'running', parentSessionId: 'chat-a',
-    artifacts: [{ name: 'a.md', href: 'a.md' }],
-  }
-  const sibling = { id: 'r-other', goal: '另一条', title: '另一条', status: 'running', parentSessionId: 'chat-b' }
-  const entry = {
-    id: 'r-art:q1', kind: 'question', runId: 'r-art',
-    item: { id: 'q1', kind: 'human', question: '需要扫码登录', options: ['answer'] },
-  }
-  const card = await taskCardHarness({}, { selectedGoalId: null }, {
-    goals: [], runs: [run, sibling], inbox: [entry],
-    sessionProjects: { 'chat-a': { name: '学习通', cwd: '/work' }, 'chat-b': { name: '另一处', cwd: '/other' } },
-  })
-  const nodes = card.openRail()
-  const session = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card'
-    && deepText(node).includes('需要扫码登录'))
-  assert.ok(deepText(session).includes('需要扫码登录'), 'the question stays on the card')
-  assert.equal(session.children.some(child => String(child?.props?.className ?? '') === 'dsa-session-links'), false,
-    'secondary file links fold away so the fixed card does not clip its footer')
-  assert.equal(session.children.some(child => String(child?.props?.className ?? '') === 'dsa-session-foot'), false,
-    'project path and close controls stay off the card face')
-})
-
-test('a waiting card without a session offers no dead 处理 button', async () => {
-  const goal = {
-    id: 'goal-empty', goal: '等你决定', title: '等你决定', status: 'needs-decision',
-    ownerSessionId: null, decisions: [], phases: [],
-  }
-  const entry = {
-    id: 'g:q1', kind: 'decision', goalId: 'goal-empty',
-    item: { id: 'q1', question: '需要你决定', options: ['answer'] },
-  }
-  const card = await taskCardHarness(goal, { selectedGoalId: null }, { runs: [], inbox: [entry] })
-  const nodes = card.openRail()
-  const session = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card')
-  const text = deepText(session)
-  assert.ok(text.includes('需要你决定'), 'the question is still shown')
-  assert.equal(text.includes('处理'), false, 'without an owning session, no dead handle is rendered')
-})
-
-test('the header keeps one entry and the todo view lives inside the panel', async () => {
-  const card = await taskCardHarness()
-  const labels = card.render().filter(node => node.type === 'button')
-    .map(node => String(node.props?.['aria-label'] ?? ''))
-  assert.ok(labels.includes('任务'), 'the panel expand button is a direct control')
-  assert.equal(labels.includes('待办'), false, 'the todo entry no longer competes in the header')
-  assert.equal(labels.includes('更多入口'), false, 'no ellipsis menu replaces it either')
-})
-
-test('a task card expands its detail in place, and the detail holds the one session entry', async () => {
-  const card = await taskCardHarness({}, { selectedGoalId: null })
-  let nodes = card.openRail()
-  const main = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '查看「空任务」')
-  assert.ok(main, 'the card body is the single control for its detail')
-  main.props.onClick()
-  assert.deepEqual(card.actions.at(-1), { type: 'openTask', taskId: 'goal-empty' },
-    'one click expands the task detail in place instead of leaving the panel')
-  nodes = card.render({ selectedGoalId: 'goal-empty' })
-  const open = nodes.find(node => node.type === 'button' && (node.children ?? []).includes('打开会话'))
-  assert.ok(open, 'the expanded detail offers the conversation as a second step')
-  open.props.onClick()
-  assert.deepEqual(card.actions.at(-1), { type: 'openSession', sessionId: 'chat-a' })
-})
-
-test('the panel still loads when the host has no workspace service', async () => {
-  const card = await taskCardHarness({}, { selectedGoalId: null })
-  const nodes = card.openRail()
-  const main = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '查看「空任务」')
-  assert.ok(main, 'the card stays clickable so the click can explain the missing host')
-  assert.doesNotThrow(() => main.props.onClick())
-})
-
-test('a long task title stays within 20 characters on the task row', async () => {
-  const long = '在当前工作区把发布说明和兼容性检查一起整理成可以交付的版本并通知所有相关的人'
-  const card = await taskCardHarness({ title: long, goal: long, status: 'running' })
-  const nodes = card.openRail()
-  const label = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-title')
-  assert.ok(label, 'the session card renders')
-  const text = deepText(label).trim()
-  assert.ok(text.length > 0 && text.length <= 20, `task row title is ${text.length} characters: ${text}`)
-})
-
-test('the rail schedules sessions as cards, two or three per row', async () => {
-  const card = await taskCardHarness({
-    status: 'running',
-    phases: [
-      { id: 'p1', title: '整理素材', status: 'running' },
-      { id: 'p2', title: '写脚本', status: 'pending' },
-      { id: 'p3', title: '剪辑', status: 'pending' },
-    ],
-  })
-  const nodes = card.openRail()
-  const grid = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-grid')
-  assert.ok(grid, 'sessions share one grid')
-  const sessions = nodes.filter(node => String(node.props?.className ?? '') === 'dsa-session-card')
-  assert.equal(sessions.length, 3, 'each session phase is its own card')
-  assert.ok(!nodes.some(node => String(node.props?.className ?? '') === 'dsa-session-summary'),
-    'the rail does not narrate a session count above the cards')
-  assert.doesNotMatch(deepText(grid), /正在调度|个需要你/, 'the cards carry the facts, not a summary line')
-})
-
-test('a question lives inside the session card that raised it', async () => {
-  const question = '学习通需要扫码登录。页面：https://pan.example/login'
-  const goal = {
-    id: 'g1', goal: '扫码登录', title: '扫码登录', ownerSessionId: 'chat-a', status: 'needs-decision',
-    decisions: [], phases: [{ id: 'p1', title: '扫码登录', status: 'needs-decision', runId: 'r1' }],
-  }
-  const run = { id: 'r1', goal: '扫码登录', status: 'running', parentSessionId: 'chat-a' }
-  const entry = {
-    id: 'r1:a1', kind: 'question', runId: 'r1',
-    item: { id: 'a1', kind: 'human', question, options: ['answer'] },
-  }
-  const card = await taskCardHarness(goal, { selectedGoalId: null }, { runs: [run], inbox: [entry] })
-  const nodes = card.openRail()
-  const session = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-card')
-  const text = deepText(session)
-  assert.match(text, /学习通需要扫码登录/, 'the card states the act itself')
-  assert.match(text, /待你决定/)
-  assert.doesNotMatch(text, /https:\/\//, 'the page line stays in the detail')
-  assert.doesNotMatch(deepText(nodes.find(node => String(node.props?.className ?? '') === 'dsa-task-list') ?? session), /正在调度|个需要你/,
-    'the rail lets the card itself say what needs a person')
-  const handle = session.children.find(child => child?.props?.className === 'dsa-session-ask')
-    .children.find(child => child?.props?.className === 'dsa-session-actions')
-    .children.find(child => child?.children?.[0] === '处理')
-  handle.props.onClick()
-  assert.deepEqual(card.actions.at(-1), { type: 'openSession', sessionId: 'chat-a' },
-    '处理 jumps into the session that raised the question')
-})
-
-test('处理 opens the selected phase login inline and submits only its own decision', async () => {
-  const phases = [
-    { id: 'p1', title: '学习通登录', status: 'needs-decision' },
-    { id: 'p2', title: '慕课登录', status: 'needs-decision' },
-  ]
-  const inbox = [...phases].reverse().map(phase => ({
-    id: `g1:${phase.id}`, kind: 'decision', goalId: 'g1', sessionId: 'chat-a',
-    item: { id: `decision-${phase.id}`, phaseId: phase.id, question: `请扫码完成${phase.title}`,
-      source: { kind: 'human', runtimeVerified: true, headless: true, handoffId: `browser-${phase.id}` } },
-  }))
-  for (const phase of [...phases].reverse()) {
-    const card = await taskCardHarness({ id: 'g1', status: 'needs-decision', phases },
-      { selectedGoalId: null }, { inbox })
-    const session = card.openRail().find(node => node.props?.className === 'dsa-session-card'
-      && deepText(node).includes(`请扫码完成${phase.title}`))
-    assert.ok(session, 'the matching phase owns its login even before the run data loads')
-    const handle = session.children.find(node => node?.props?.className === 'dsa-session-ask')
-      .children.find(node => node?.props?.className === 'dsa-session-actions')
-      .children.find(node => node?.children?.[0] === '处理')
-    handle.props.onClick()
-    const after = card.render()
-    assert.equal(after.find(node => node.props?.['data-live-login'])?.props['data-live-login'],
-      `goal:g1:decision-${phase.id}`)
-    assert.equal(after.some(node => node.props?.id === 'dsa-workbench'), false)
-    await card.button(after, '完成').props.onClick()
-    assert.deepEqual(card.actions.at(-1), { type: 'goalAction', goalId: 'g1', action: 'answer', owner: 'chat-a',
-      body: { decisionId: `decision-${phase.id}`, answer: 'answer', note: '已登录' } })
-    assert.equal(card.actions.some(action => action.type === 'openSession'), false)
-  }
-})
-
-test('the live worker run stays reachable through the expanded detail, not a hover-only arrow', async () => {
-  const goal = {
-    id: 'g1', goal: '写脚本', title: '写脚本', ownerSessionId: 'chat-a', status: 'running',
-    decisions: [], phases: [{ id: 'p1', title: '写脚本', status: 'running', runId: 'r1' }],
-  }
-  const run = {
-    id: 'r1', goal: '写脚本', status: 'running', parentSessionId: 'chat-a',
-    subtasks: [{ index: 0, title: '写脚本', status: 'running', childId: 'child-1' }],
-  }
-  const card = await taskCardHarness(goal, { selectedGoalId: null }, { runs: [run] })
-  let nodes = card.openRail()
-  assert.equal(nodes.some(node => String(node.props?.className ?? '').includes('dsa-session-open')), false,
-    'no button appears only on hover')
-  nodes = card.render({ selectedGoalId: 'g1' })
-  const open = nodes.find(node => node.type === 'button' && (node.children ?? []).includes('打开会话'))
-  assert.ok(open, 'the expanded goal detail keeps one way into the conversation')
-  open.props.onClick()
-  assert.deepEqual(card.actions.at(-1), { type: 'openSession', sessionId: 'chat-a' })
-})
-
-test('Escape collapses an expanded card before it closes the panel', async () => {
-  const card = await taskCardHarness({}, { selectedGoalId: 'goal-empty' })
-  const nodes = card.openRail()
-  const root = nodes.find(node => node.props?.className === 'dsa-root')
-  assert.ok(root?.props?.onKeyDown, 'the panel handles Escape at its root')
-  root.props.onKeyDown({ key: 'Escape', defaultPrevented: false, ctrlKey: false, metaKey: false, shiftKey: false })
-  assert.deepEqual(card.actions.at(-1), { type: 'focusGoal', goalId: null },
-    'Escape only collapses the card, it does not close the whole panel')
-})
-
-test('an open card keeps its cell and grows a full-width detail beneath its row', async () => {
-  const goal = {
-    id: 'goal-empty', goal: '三列任务', title: '三列任务', ownerSessionId: 'chat-a', status: 'running',
-    decisions: [],
-    phases: [
-      { id: 'p1', title: '第一步', status: 'running' },
-      { id: 'p2', title: '第二步', status: 'pending' },
-      { id: 'p3', title: '第三步', status: 'pending' },
-    ],
-  }
-  const card = await taskCardHarness(goal, { selectedGoalId: null })
-  let nodes = card.openRail()
-  let grid = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-grid')
-  const beforeKeys = grid.children.flat().map(cell => cell.props.key)
-  assert.deepEqual(beforeKeys, ['phase:goal-empty:p1', 'phase:goal-empty:p2', 'phase:goal-empty:p3'])
-  const first = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '查看「第一步」')
-  first.props.onClick()
-  nodes = card.render()
-  grid = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-grid')
-  const cells = grid.children.flat()
-  assert.equal(cells.length, 4, 'one full-width detail block joins the grid')
-  assert.equal(cells[0].props.key, 'phase:goal-empty:p1', 'the open card stays in its own cell')
-  assert.equal(cells[0].props.selected, true, 'the first card is the open one')
-  assert.equal(cells[1].props.key, 'phase:goal-empty:p2', 'its row neighbour keeps its cell')
-  assert.equal(cells[1].props.selected, false)
-  assert.equal(cells[3].props.key, 'phase:goal-empty:p3')
-  const detail = cells.find(cell => String(cell.props?.className ?? '') === 'dsa-session-detail')
-  assert.ok(detail, 'the detail is a grid item of its own')
-  assert.equal(cells.indexOf(detail), 2, 'the detail starts right under the expanded card row')
-  assert.equal(detail.props.style.gridColumn, '1 / -1', 'the detail spans the whole row width')
-  assert.equal(detail.props['data-open-card'], 'phase:goal-empty:p1', 'the detail belongs to the open card')
-  assert.deepEqual(cells.filter(cell => String(cell.props?.className ?? '') !== 'dsa-session-detail').map(cell => cell.props.key),
-    beforeKeys, 'no card moved or was reordered')
-  const cards = nodes.filter(node => String(node.props?.className ?? '') === 'dsa-session-card')
-  assert.equal(cards.filter(node => node.props?.['data-open'] === 'true').length, 1, 'exactly one card is open')
-
-  const list = nodes.find(node => String(node.props?.className ?? '').includes('dsa-task-list'))
-  let stopped = 0
-  list.props.onKeyDown({ key: 'Escape', defaultPrevented: false, preventDefault() {}, stopPropagation() { stopped += 1 } })
-  nodes = card.render()
-  grid = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-grid')
-  assert.equal(grid.children.flat().length, 3, 'the detail disappears with the open state')
-  assert.deepEqual(grid.children.flat().map(cell => cell.props.key), beforeKeys, 'the cards return exactly as they were')
-  assert.equal(stopped, 1, 'the panel stays open behind the folded card')
-})
-
-test('a run card uses the same full-width detail beneath its row', async () => {
-  const runA = {
-    id: 'r1', goal: '运行一', title: '运行一', status: 'running', parentSessionId: 'chat-a',
-    subtasks: [], attention: [], artifacts: [], report: '第一行结论',
-  }
-  const runB = {
-    id: 'r2', goal: '运行二', title: '运行二', status: 'running', parentSessionId: 'chat-a',
-    subtasks: [], attention: [], artifacts: [],
-  }
-  const card = await taskCardHarness({}, { selectedGoalId: null }, { goals: [], runs: [runA, runB] })
-  let nodes = card.openRail()
-  assert.equal(nodes.filter(node => String(node.props?.className ?? '') === 'dsa-session-card').length, 2,
-    'both runs share the grid')
-  const main = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '查看「运行一」')
-  main.props.onClick()
-  assert.equal(card.actions.some(action => action.type === 'openRun'), false,
-    'the click expands the card instead of replacing the list with a run page')
-  nodes = card.render()
-  const grid = nodes.find(node => String(node.props?.className ?? '') === 'dsa-session-grid')
-  const cells = grid.children.flat()
-  assert.deepEqual(cells.filter(cell => String(cell.props?.className ?? '') !== 'dsa-session-detail').map(cell => cell.props.key),
-    ['run:r1', 'run:r2'], 'both run cards keep their cells and order')
-  const detail = cells.find(cell => String(cell.props?.className ?? '') === 'dsa-session-detail')
-  assert.ok(detail, 'the run detail is its own full-width grid item')
-  assert.equal(detail.props.style.gridColumn, '1 / -1')
-  const summary = nodes.find(node => String(node.props?.className ?? '').includes('dsa-report-summary'))
-  assert.ok(summary && deepText(summary).includes('第一行结论'), 'the report is readable in the full-width detail')
-})
-
-test('a long result stays within 60 characters on the task card', async () => {
-  const long = `已交付发布说明、兼容性检查报告和回归记录，${'另外还有一段很长的补充细节'.repeat(8)}`
-  const card = await taskCardHarness({ status: 'running' }, {
-    messages: [{ id: 'feed-long', role: 'assistant', text: long, taskId: 'goal-empty', at: Date.now() }],
-  })
-  const line = card.render().find(node => String(node.props?.className ?? '') === 'dsa-feed-line')
-  assert.ok(line, 'the task card renders its body line')
-  const text = deepText(line)
-  assert.ok(text.length > 0 && text.length <= 60, `task card body is ${text.length} characters: ${text}`)
-  assert.doesNotMatch(text, /\n/u)
-})
-
-test('a receipt names its own phase when two goals reuse p1', async () => {
-  const phase = { id: 'p1', title: '核查 PR', status: 'completed', runId: 'pr-run' }
-  const goal = { id: 'pr-goal', title: '检查更新', status: 'running', phases: [phase] }
-  const other = { id: 'course-goal', title: '课程', status: 'running', phases: [
-    { id: 'p1', title: '完成心理健康网课', status: 'running', runId: 'course-run' },
-  ] }
-  const card = await taskCardHarness({}, {
-    messages: [{ id: 'pr-receipt', role: 'assistant', text: '阶段「核查 PR」已交付：四个均已合并。',
-      taskId: goal.id, phaseId: phase.id, runId: phase.runId, at: Date.now() }],
-  }, { goals: [goal, other] })
-  const line = card.render().find(node => node.props?.className === 'dsa-feed-line')
-  assert.ok(line)
-  assert.match(deepText(line), /^核查 PR：.*四个均已合并/u)
-})
-
-test('a retried phase never surfaces its old attempt as a standalone task card', async () => {
-  const runs = [
-    { id: 'failed-pr', goal: '历史 PR 尝试', goalId: 'goal-empty', status: 'partial' },
-    { id: 'legacy-pr', goal: '旧版历史尝试', status: 'partial' },
-    { id: 'current-pr', goal: 'PR 验收', goalId: 'goal-empty', status: 'completed' },
-    { id: 'unrelated', goal: '独立失败任务', status: 'partial' },
-  ]
-  const card = await taskCardHarness({
-    status: 'running',
-    phases: [
-      { id: 'p1', title: '核查 PR', status: 'completed', runId: 'current-pr', runIds: ['legacy-pr', 'current-pr'] },
-      { id: 'p2', title: '打包试玩版', status: 'running' },
-    ],
-  }, { selectedGoalId: null }, { runs })
-  const labels = card.openRail().filter(node => node.props?.className === 'dsa-session-main')
-    .map(node => node.props['aria-label'])
-  assert.deepEqual(labels.sort(), ['查看「打包试玩版」', '查看「独立失败任务」'].sort())
-})
-
-test('the rail reads failure first, then current work, and never shows a bare ellipsis', async () => {
-  const card = await taskCardHarness({ status: 'needs-decision', phases: [
-    { id: 'p1', title: '构建试玩版本', status: 'running', runId: 'r1' },
-    { id: 'p2', title: '回归测试', status: 'failed', outcome: '端口 4310 被占用' },
-  ] }, {}, { runs: [{ id: 'r1', goalId: 'goal-empty', status: 'running', parentSessionId: 'chat-a' }] })
-  const nodes = card.openRail()
-  const labels = nodes.filter(node => node.type === 'button').map(node => String(node.props?.['aria-label'] ?? ''))
-  assert.equal(labels.some(label => label.startsWith('更多操作')), false, 'no bare ellipsis entry in the rail')
-  assert.equal(nodes.some(node => node === '现在'), false, 'the current phase needs no 现在 caption')
-  const cardText = faceText({ children: nodes.filter(node => String(node.props?.className ?? '').includes('dsa-session-card')) })
-  assert.ok(cardText.includes('端口 4310 被占用'), 'the failure reason is on the card')
-  assert.equal(cardText.includes('失败：回归测试'), false, 'the failure block does not repeat the title')
-  assert.ok(cardText.indexOf('回归测试') < cardText.indexOf('构建试玩版本'),
-    'a failure reads before the phase that is running')
-})
-
-test('a cancelled goal shows 已取消 even when its phase record still says running', async () => {
-  const card = await taskCardHarness({
-    status: 'cancelled',
-    phases: [{ id: 'p1', title: '新建 naming-check.txt', status: 'running', currentRunId: 'r1', runIds: ['r1'] }],
-  }, {}, { runs: [{ id: 'r1', status: 'running', parentSessionId: 'chat-a' }] })
-  const nodes = card.openRail()
-  const cards = nodes.filter(node => String(node.props?.className ?? '').includes('dsa-session-card'))
-  assert.equal(cards.length, 1, 'the stale phase does not add a live card next to the cancelled goal')
-  const text = deepText({ children: cards })
-  assert.ok(text.includes('已取消'), `the card states the truth: ${text}`)
-  assert.equal(text.includes('正在执行'), false, 'a cancelled goal never reads as still running')
-  assert.equal(nodes.some(node => String(node.props?.className ?? '').includes('dsa-session-fail')), false,
-    'a cancelled goal carries no red failure block')
-})
-
-test('a failed session card explains the stop reason in plain Chinese and hides the report ledger', async () => {
-  const report = '# Goal not reached — stopped: no progress: the same acceptance condition failed again (a1 failed 3 round(s) in a row)\n\n'
-    + 'Goal: This run is phase 1 of 1: Create naming-check.txt Phase objective: 在当前工作区根目录新建空文件 `naming-check.txt`。\n\n'
-    + 'Acceptance conditions:\n- FAIL [a1] 当前工作区根目录存在 `naming-check.txt`，且文件大小为 0 字节。'
-  const card = await taskCardHarness({ status: 'partial', phases: [] }, {}, {
-    runs: [{ id: 'r-partial', status: 'partial', parentSessionId: 'chat-a', report }],
-  })
-  const nodes = card.openRail()
-  const text = deepText({ children: nodes.filter(node => String(node.props?.className ?? '').includes('dsa-session-card')) })
-  assert.ok(text.includes('连续几轮没有新进展'), `the card says why in plain Chinese: ${text}`)
-  assert.equal(/可打开详情|再点/.test(text), false, 'the card skips the how-to prose')
-  assert.ok(/没完成：/.test(text) && text.length < 200, `the failure line stays short: ${text}`)
-  assert.equal(text.includes('Goal not reached'), false, 'the agent ledger never reaches the card')
-  assert.equal(text.includes('FAIL [a1]'), false, 'a machine-check line never reaches the card')
-})
-
-test('the report summary is one line of at most 40 characters', async () => {
-  const output = `第一行摘要${'很长的说明'.repeat(20)}\n第二行细节\n第三行细节`
-  const card = await taskCardHarness({}, { detail: { id: 'run-report', status: 'completed', output, report: '' } })
-  const nodes = card.openRail()
-  const summary = nodes.find(node => String(node.props?.className ?? '').includes('dsa-report-summary'))
-  assert.ok(summary, 'the report renders its summary')
-  const text = deepText(summary)
-  assert.ok(text.length > 0 && text.length <= 40, `report summary is ${text.length} characters: ${text}`)
-  assert.doesNotMatch(text, /\n/u, 'the summary is the first line only')
-  assert.doesNotMatch(text, /第二行/u, 'later lines stay behind 全文')
-})
-
-test('a todo card keeps its first line within 25 characters', async () => {
-  const entry = {
-    id: 'inbox-long', kind: 'decision', goalId: 'g1', sessionId: 'chat-a',
-    project: { cwd: '/work/one', name: '学习通' },
-    title: '特别长的待办标题需要压缩到二十五个字符以内否则就会溢出',
-    item: {
-      id: 'item-1',
-      question: `阶段 p2 的执行 agent 需要你决定：${'这是很长的一段问题描述'.repeat(4)}`,
-      options: ['answer', 'skip'], reason: '', source: {},
-    },
-  }
-  const card = await taskCardHarness({}, {}, { inbox: [entry] })
-  const nodes = card.render()
-  const task = nodes.find(node => String(node.props?.className ?? '') === 'dsa-inbox-msg-task')
-  assert.ok(task, 'the conversation todo shows which task raised it')
-  assert.ok(deepText(task).length <= 25, `todo task label is ${deepText(task).length} characters`)
-  assert.ok(card.button(nodes, '去会话处理'), 'the row can jump into its session')
-})
-
-test('the panel speaks in labels, not sentence tails or empty-state filler', async () => {
-  const source = await readFile(clientPath, 'utf8')
-  for (const phrase of ['当前状态', '任务继续', '还没有', '暂无']) {
-    assert.equal(source.includes(phrase), false, `${phrase} must not reach the UI`)
-  }
-})
-
-const decisionEntry = (item, goalId = 'g1') => ({
-  id: `inbox-${item.id}`, kind: 'decision', goalId, title: '发布工作台',
-  project: { cwd: '/work/one', name: '演示工作区' }, item,
-})
-
-const decisionGoal = (summary = '') => ({
-  id: 'g1', title: '发布工作台', goal: '发布工作台', status: 'needs-decision', decisions: [],
-  phases: [{ id: 'p2', title: '构建试玩版本', status: 'needs-decision', runId: 'r2', summary }],
-})
-
-const openInbox = async (entry, goal, runs) => {
-  const card = await taskCardHarness(goal, {}, { inbox: [entry], runs, goals: [goal] })
-  return { card, nodes: card.render() }
+function field(nodes, label) {
+  const owner = nodes.find(node => node.type === 'label' && (node.children ?? []).includes(label))
+  assert.ok(owner, `the panel has a ${label} field`)
+  return [...walkTree(owner)].find(node => ['input', 'select', 'textarea'].includes(node.type))
 }
 
-test('a decision is shown together with the thing being decided', async () => {
-  const conclusion = '试玩反馈：8 人试玩，6 人认为镜头更清楚；门口空镜偏长，建议再收 0.5 秒。'
-  const goal = decisionGoal(conclusion)
-  const run = { id: 'r2', status: 'needs-decision', report: '', output: '' }
-  const { nodes } = await openInbox(decisionEntry({
-    id: 'd2', question: '要接受这版试玩反馈的结论吗？', reason: '三条结论覆盖了本周的全部反馈。',
-    source: { runId: 'r2', options: ['accept', 'retry'] }, options: ['accept', 'retry'],
-  }), goal, [run])
-  const text = nodes.map(deepText).join('\n')
-  assert.ok(text.includes(conclusion), 'the conclusion itself is on the card')
-  assert.ok(text.includes('构建试玩版本'), 'the deciding phase is named')
-  assert.equal(text.includes('阶段 p2'), false, 'internal phase ids never reach the card')
-  assert.ok(text.includes('结果已出，等你验收'), 'why a person is needed is in plain words')
-  assert.ok(text.includes('三条结论覆盖了本周的全部反馈'), 'the 原因 section has real content')
+test('the More tab opens native subpanels and returns to its card hub', async () => {
+  const card = await panelHarness()
+  let nodes = card.render()
+  const more = nodes.find(node => node.props?.role === 'tab' && (node.children ?? []).includes('更多'))
+  more.props.onClick()
+  nodes = card.render()
+  assert.equal(nodes.find(node => node.props?.role === 'tab' && (node.children ?? []).includes('更多'))?.props['aria-selected'], true)
+  for (const label of ['通知中心', '能力中心', '记忆中心', '运行时视图', '质量证据', '成本中心',
+    'Agent 档案', '设备配对', '计划预览', '自动化规则', '分享', '市场', '云端 Worker']) {
+    assert.ok(nodes.some(node => node.type === 'button' && node.props?.['aria-label'] === label), label)
+  }
+  const plan = nodes.find(node => node.props?.['aria-label'] === '计划预览')
+  await plan.props.onClick()
+  nodes = card.render()
+  assert.ok(nodes.some(node => node.props?.['aria-label'] === '返回更多'))
+  assert.ok(nodes.some(node => (node.children ?? []).includes('当前或最近任务中没有可预览的子任务')))
+  await nodes.find(node => node.props?.['aria-label'] === '返回更多').props.onClick()
+  nodes = card.render()
+  assert.equal(card.model().more.panel, null)
+  assert.ok(nodes.some(node => node.props?.className === 'dsa-more-grid'))
 })
 
-test('missing decision material becomes a failure state with retry, never a bare question', async () => {
-  const goal = decisionGoal('')
-  const run = { id: 'r2', status: 'needs-decision', report: '', output: '' }
-  const { card, nodes } = await openInbox(decisionEntry({
-    id: 'd3', question: '要采用这份试玩反馈的结论吗？', reason: '',
-    source: { runId: 'r2', options: ['accept', 'retry'] }, options: ['accept', 'retry'],
-  }), goal, [run])
-  const text = nodes.map(deepText).join('\n')
-  assert.ok(text.includes('结论读取失败'), 'the card says the read failed')
-  assert.ok(text.includes('缺少阶段结论'), 'the card names the missing data')
-  assert.ok(card.button(nodes, '重试'), 'the card offers one retry')
-  assert.equal(card.button(nodes, '接受'), undefined, 'no blind decision without material')
-  assert.equal(nodes.some(node => (node.children ?? []).includes('原因')), false,
-    'a missing reason never renders an empty 原因 entry')
-})
-
-test('a decision without a reason hides 原因 but keeps the material', async () => {
-  const goal = decisionGoal('性能结论：首屏 1.2 秒，低于 1.5 秒目标。')
-  const run = { id: 'r2', status: 'needs-decision', report: '', output: '' }
-  const { card, nodes } = await openInbox(decisionEntry({
-    id: 'd4', question: '要采用这份性能结论吗？', reason: '',
-    source: { runId: 'r2', options: ['accept', 'retry'] }, options: ['accept', 'retry'],
-  }), goal, [run])
-  const text = nodes.map(deepText).join('\n')
-  assert.ok(text.includes('性能结论：首屏 1.2 秒'), 'the material stays visible')
-  assert.equal(nodes.some(node => (node.children ?? []).includes('原因')), false,
-    'no reason data means no 原因 entry')
-  assert.ok(card.button(nodes, '接受'), 'the decision is still actionable')
-})
-
-test('an ordinary question shows the run result instead of only the question', async () => {
-  const goal = { id: 'g1', title: '发布工作台', goal: '发布工作台', status: 'running', decisions: [], phases: [] }
-  const run = { id: 'r2', status: 'needs-decision', report: '兼容性结论：3 个浏览器全部通过。', output: '' }
-  const { nodes } = await openInbox({
-    id: 'run:r2:a1', kind: 'question', runId: 'r2', title: '构建试玩版本',
-    project: { cwd: '/work/one', name: '演示工作区' },
-    item: { id: 'a1', question: '要采用这份兼容性结论吗？', options: ['accept'], reason: '' },
-  }, goal, [run])
-  const text = nodes.map(deepText).join('\n')
-  assert.ok(text.includes('兼容性结论：3 个浏览器全部通过。'), 'the run result is the material')
-  assert.ok(!text.includes('结论读取失败'), 'a readable run never becomes a failure state')
-})
-
-test('a human hand-off without a reason hides the 原因 entry', async () => {
-  const goal = decisionGoal('')
-  const { nodes } = await openInbox(decisionEntry({
-    id: 'd5', question: '学习通需要扫码登录。', reason: '',
-    source: { kind: 'human', runtimeVerified: true }, options: ['answer', 'stop'],
-  }), goal, [])
-  assert.equal(nodes.some(node => (node.children ?? []).includes('原因')), false,
-    'no empty 原因 shell on the hand-off card')
-})
-
-test('a queued message says it is waiting instead of looking delivered', async () => {
-  const at = Date.now()
-  const card = await taskCardHarness({}, {
-    messages: [{ id: 'cmd-queued', role: 'user', text: '我学习通上有新的作业，你帮我做掉。', at }],
-    routerCommands: [{ id: 'cmd-queued', text: '我学习通上有新的作业，你帮我做掉。', at }],
+test('notification center renders inbox/brief and saves dailyBrief/quietHours through PATCH', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let preferences = {
+    events: { added: 'inbox', completed: 'both', failed: 'both', decision: 'both', approval: 'both', artifact: 'inbox' },
+    channels: ['inbox', 'push'], maxPushPerHour: 3,
+    dailyBrief: { enabled: true, time: '09:00', timeZone: 'UTC', channels: ['inbox'] },
+    quietHours: { enabled: false, start: '22:00', end: '08:00', timeZone: 'UTC', except: [] },
+  }
+  const center = () => ({
+    inbox: [{ id: 'n1', event: 'completed', title: '发布完成', body: '报告已就绪', read: false, at: new Date().toISOString() }],
+    brief: { date: '2026-11-26', text: 'Daily brief — 1 completed', nextAt: null },
+    unreadCount: 1, preferences, revision: 'rev-2',
   })
-  const nodes = card.render()
-  const state = nodes.find(node => String(node.props?.className ?? '') === 'dsa-user-state')
-  assert.ok(state, 'a message still in the router queue carries a state line')
-  assert.match(deepText(state), /排队中/)
-  assert.notEqual(state.props?.['data-stale'], 'true')
+  globalThis.fetch = async (route, options = {}) => {
+    requests.push({ route, method: options.method ?? 'GET', body: options.body ? JSON.parse(options.body) : null })
+    if (route.endsWith('/notifications/preferences') && options.method === 'PATCH') {
+      preferences = {
+        ...preferences,
+        dailyBrief: { ...preferences.dailyBrief, ...options.body && JSON.parse(options.body).dailyBrief },
+        quietHours: { ...preferences.quietHours, ...options.body && JSON.parse(options.body).quietHours },
+      }
+      return jsonResponse({ preferences, revision: 'rev-2' })
+    }
+    if (route.endsWith('/notifications/preferences')) return jsonResponse({ preferences, revision: 'rev-1' })
+    if (route.endsWith('/notices/read')) return jsonResponse({ read: JSON.parse(options.body).ids.length, added: 1 })
+    if (route.endsWith('/notifications')) return jsonResponse(center())
+    throw new Error(`unexpected route ${route}`)
+  }
+  try {
+    const card = await panelHarness()
+    let nodes = await openMore(card, '通知中心')
+    assert.ok(nodes.some(node => (node.children ?? []).includes('发布完成')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('Daily brief — 1 completed')))
+    await nodes.find(node => node.type === 'button' && node.props?.onClick && (node.children ?? []).includes('标为已读')).props.onClick()
+    assert.ok(requests.some(request => request.route.endsWith('/notices/read') && request.body.ids[0] === 'n1'))
+    field(nodes, '完成').props.onChange({ target: { value: 'inbox' } })
+    field(nodes, '启用每日简报').props.onChange({ target: { checked: false } })
+    field(card.render(), '简报时间').props.onChange({ target: { value: '08:30' } })
+    field(card.render(), '启用免打扰').props.onChange({ target: { checked: true } })
+    field(card.render(), '免打扰开始').props.onChange({ target: { value: '23:00' } })
+    field(card.render(), '免打扰结束').props.onChange({ target: { value: '07:30' } })
+    nodes = card.render()
+    const form = nodes.find(node => node.type === 'form' && String(node.props.className).includes('dsa-more-form'))
+    await form.props.onSubmit({ preventDefault() {} })
+    const saved = requests.find(request => request.method === 'PATCH')
+    assert.equal(saved.route, '/superagent/api/console/notifications/preferences')
+    assert.equal(saved.body.dailyBrief.enabled, false)
+    assert.equal(saved.body.dailyBrief.time, '08:30')
+    assert.equal(saved.body.quietHours.enabled, true)
+    assert.equal(saved.body.quietHours.start, '23:00')
+    assert.equal(saved.body.quietHours.end, '07:30')
+    assert.equal(saved.body.events.completed, 'inbox')
+    assert.equal(saved.body.maxPushPerHour, 3)
+    assert.equal(card.model().more.notifications.revision, 'rev-2')
+    assert.equal(card.model().more.error, '')
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
 })
 
-test('a message queued too long admits it may never have been accepted', async () => {
-  const at = Date.now() - 120_000
-  const card = await taskCardHarness({}, {
-    messages: [{ id: 'cmd-stale', role: 'user', text: '顺便帮我想一下晚饭吃什么。', at }],
-    routerCommands: [{ id: 'cmd-stale', text: '顺便帮我想一下晚饭吃什么。', at }],
+test('memory search edits and forgets writable records while read-only and denied writes stay visible', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let denyWrite = true
+  let entries = [
+    { id: 'editable', title: '简洁偏好', type: 'user-preference', body: 'concise', editable: true, forgettable: true, revision: 1 },
+    { id: 'readonly', title: '项目规则', type: 'project-rule', body: 'rule', editable: false, forgettable: false, revision: 1 },
+  ]
+  globalThis.fetch = async (route, options = {}) => {
+    requests.push({ route, method: options.method ?? 'GET', body: options.body ? JSON.parse(options.body) : null })
+    if (route.startsWith('/superagent/api/console/memory?') && !options.method) {
+      const query = new URL(route, 'http://local').searchParams.get('search')?.toLowerCase() ?? ''
+      return jsonResponse({ enabled: true, entries: entries.filter(entry => `${entry.title} ${entry.body}`.toLowerCase().includes(query)) })
+    }
+    if (route.endsWith('/memory') && options.method === 'POST') {
+      const body = JSON.parse(options.body)
+      if (denyWrite) return jsonResponse({ message: 'memory.write forbidden' }, 403)
+      if (body.action === 'update') {
+        entries = entries.map(entry => entry.id === body.id ? { ...entry, ...body.patch, revision: entry.revision + 1 } : entry)
+        return jsonResponse(entries.find(entry => entry.id === body.id))
+      }
+      entries = entries.filter(entry => entry.id !== body.id)
+      return jsonResponse({ id: body.id, forgotten: true })
+    }
+    throw new Error(`unexpected route ${route}`)
+  }
+  try {
+    const card = await panelHarness()
+    let nodes = await openMore(card, '记忆中心')
+    assert.equal(nodes.filter(node => node.type === 'button' && (node.children ?? []).includes('编辑')).length, 1,
+      'read-only records do not offer edit')
+    assert.equal(nodes.filter(node => node.type === 'button' && (node.children ?? []).includes('遗忘')).length, 1,
+      'read-only records do not offer forget')
+    nodes.find(node => node.type === 'button' && (node.children ?? []).includes('编辑')).props.onClick()
+    nodes = card.render()
+    const editor = nodes.find(node => node.type === 'textarea' && node.props?.['aria-label']?.startsWith('编辑记忆'))
+    editor.props.onChange({ target: { value: 'changed' } })
+    nodes = card.render()
+    const editForm = nodes.find(node => node.type === 'form' && [...walkTree(node)].some(child => child.type === 'textarea'))
+    assert.equal(await editForm.props.onSubmit({ preventDefault() {} }), false)
+    nodes = card.render()
+    assert.ok(nodes.some(node => node.props?.role === 'alert' && (node.children ?? []).includes('memory.write forbidden')),
+      'a denied memory write remains on screen')
+    assert.equal(card.model().more.busy['memory:editable'], undefined)
+
+    denyWrite = false
+    nodes = card.render()
+    const retry = nodes.find(node => node.type === 'form' && [...walkTree(node)].some(child => child.type === 'textarea'))
+    assert.equal(await retry.props.onSubmit({ preventDefault() {} }), true)
+    const update = requests.find(request => request.method === 'POST')
+    assert.deepEqual(update.body, { action: 'update', id: 'editable', expectedRevision: 1, patch: { body: 'changed' } })
+
+    nodes = card.render()
+    nodes.find(node => node.type === 'button' && (node.children ?? []).includes('遗忘')).props.onClick()
+    nodes = card.render()
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('确认遗忘')).props.onClick()
+    const forget = requests.filter(request => request.method === 'POST').at(-1)
+    assert.deepEqual(forget.body, { action: 'forget', id: 'editable', expectedRevision: 2 })
+
+    nodes = card.render()
+    const search = nodes.find(node => node.props?.['aria-label'] === '搜索记忆')
+    search.props.onChange({ target: { value: 'rule' } })
+    nodes = card.render()
+    const searchForm = nodes.find(node => node.type === 'form' && ![...walkTree(node)].some(child => child.type === 'textarea'))
+    await searchForm.props.onSubmit({ preventDefault() {} })
+    assert.equal(new URL(requests.at(-1).route, 'http://local').searchParams.get('search'), 'rule')
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
+test('capability center lists skills/mcp/grants and sends probe/restart/setEnabled with settingsRevision', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let revision = 7
+  const snapshot = () => ({
+    schemaVersion: 1, available: true, settingsRevision: revision,
+    skills: { supported: true, items: [{ name: 'release-review', description: '检查发布', enabled: true, status: 'ready' },
+      { name: 'local-review', description: '本地复核', enabled: true, status: 'imported', imported: true }] },
+    mcp: { supported: true, servers: [{ name: 'docs', enabled: true, manageable: true, status: 'registered' }] },
+    grants: { supported: true, items: [{ id: 'grant-1', provider: 'github', scopes: ['repo.read'], status: 'active' }] },
   })
-  const nodes = card.render()
-  const state = nodes.find(node => String(node.props?.className ?? '') === 'dsa-user-state')
-  assert.ok(state, 'the stale queue keeps its state line')
-  assert.equal(state.props?.['data-stale'], 'true')
-  assert.match(deepText(state), /可能没有被受理/)
+  globalThis.fetch = async (route, options = {}) => {
+    requests.push({ route, method: options.method ?? 'GET', body: options.body ? JSON.parse(options.body) : null })
+    if (route.endsWith('/capabilities') && options.method === 'POST') {
+      const body = JSON.parse(options.body)
+      if (body.action === 'setEnabled') {
+        assert.equal(body.expectedSettingsRevision, 7)
+        revision = 8
+        return jsonResponse({ ok: true, name: body.name, enabled: body.enabled, settingsRevision: revision })
+      }
+      if (body.action === 'loadSkill') return jsonResponse({ name: body.name, content: '# Local review', provider: 'dsh-superagent-imported' })
+      if (body.action === 'setSkillEnabled') return jsonResponse({ ok: true, name: body.name, enabled: body.enabled })
+      return jsonResponse({ ok: true, name: body.name, action: body.action, latencyMs: 12 })
+    }
+    if (route.endsWith('/capabilities')) return jsonResponse(snapshot())
+    throw new Error(`unexpected route ${route}`)
+  }
+  try {
+    const card = await panelHarness()
+    let nodes = await openMore(card, '能力中心')
+    assert.ok(nodes.some(node => (node.children ?? []).includes('release-review')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('docs')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('repo.read')))
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('探测')).props.onClick()
+    nodes = card.render()
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('重启')).props.onClick()
+    nodes = card.render()
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('停用')).props.onClick()
+    const posts = requests.filter(request => request.method === 'POST')
+    assert.deepEqual(posts.map(request => request.body.action), ['probe', 'restart', 'setEnabled'])
+    assert.deepEqual(posts[0].body, { action: 'probe', name: 'docs' })
+    assert.deepEqual(posts[1].body, { action: 'restart', name: 'docs' })
+    assert.deepEqual(posts[2].body, { action: 'setEnabled', name: 'docs', enabled: false, expectedSettingsRevision: 7 })
+    assert.equal(card.model().more.capabilities.settingsRevision, 8)
+    nodes = card.render()
+    await nodes.find(node => node.props?.['aria-label'] === 'MCP 名称').props.onChange({ target: { value: 'local-review' } })
+    nodes = card.render()
+    await nodes.find(node => node.props?.['aria-label'] === 'MCP 参数').props.onChange({ target: { value: 'server.js\n--read-only' } })
+    nodes = card.render()
+    await nodes.find(node => node.props?.['aria-label'] === 'MCP 环境变量引用').props.onChange({ target: { value: 'TOKEN=${MCP_TOKEN}' } })
+    nodes = card.render()
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('添加 MCP')).props.onClick()
+    nodes = card.render()
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('确认添加')).props.onClick()
+    const add = requests.filter(request => request.method === 'POST').at(-1)
+    assert.deepEqual(add.body, { action: 'add', name: 'local-review', expectedSettingsRevision: 8,
+      server: { transport: 'stdio', enabled: true, command: 'node', args: ['server.js', '--read-only'], env: { TOKEN: '${MCP_TOKEN}' } } })
+    nodes = card.render()
+    const skillRow = rowNamed(nodes, '本地复核')
+    await buttonIn(skillRow, '按需加载').props.onClick()
+    assert.equal(requests.filter(request => request.method === 'POST').at(-1).body.action, 'loadSkill')
+    assert.ok(textOf(card.render()).includes('# Local review'))
+    nodes = card.render()
+    await buttonIn(rowNamed(nodes, '本地复核'), '停用 Skill').props.onClick()
+    assert.deepEqual(requests.filter(request => request.method === 'POST').at(-1).body,
+      { action: 'setSkillEnabled', name: 'local-review', enabled: false })
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
 })
 
-test('a failed task card states the reason and offers a way in', async () => {
-  const card = await taskCardHarness({
-    status: 'failed', reason: '慕课登录态失效', phases: [
-      { id: 'p1', title: '刷完心理网课', status: 'failed' },
+test('runtime view captures, takes over, releases and confirms emergency stop', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let snapshot = { available: true, services: { browser: true, desktop: false, runtime: true }, control: { mode: 'auto', automaticActions: 'running' }, actions: [] }
+  globalThis.fetch = async (route, options = {}) => {
+    requests.push({ route, method: options.method ?? 'GET', body: options.body ? JSON.parse(options.body) : null })
+    if (route.endsWith('/runtime-view') && options.method === 'POST') {
+      const body = JSON.parse(options.body)
+      if (body.action === 'capture') return jsonResponse({ path: '/shots/view.png', source: body.payload.source, capturedAt: Date.now() })
+      if (body.action === 'stop') return jsonResponse({ stopped: true, cancelled: true, runId: body.payload.runId })
+      snapshot = { ...snapshot, control: { mode: body.action === 'takeover' ? 'manual' : 'auto', automaticActions: body.action === 'takeover' ? 'paused' : 'running' } }
+      return jsonResponse(snapshot)
+    }
+    if (route.endsWith('/runtime-view')) return jsonResponse(snapshot)
+    throw new Error(`unexpected route ${route}`)
+  }
+  try {
+    const card = await panelHarness({ detail: { id: 'run-1', goal: '检查', status: 'running' } })
+    let nodes = await openMore(card, '运行时视图')
+    for (const label of ['截图', '接管', '释放']) {
+      await nodes.find(node => node.type === 'button' && (node.children ?? []).includes(label)).props.onClick()
+      nodes = card.render()
+    }
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('停止')).props.onClick()
+    nodes = card.render()
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('确认停止')).props.onClick()
+    const posts = requests.filter(request => request.method === 'POST')
+    assert.deepEqual(posts.map(request => request.body.action), ['capture', 'takeover', 'release', 'stop'])
+    assert.deepEqual(posts[0].body.payload, { source: 'auto' })
+    assert.deepEqual(posts[3].body.payload, { runId: null }, 'More closes task detail before runtime stop')
+    assert.equal(card.model().more.runtimeActionResult.stopped, true)
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
+test('quality evidence, cost, profiles and device pairing load through the More hub', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let profiles = [{ id: 'agent-1', name: '研究员', role: 'researcher', model: 'test/model', enabled: true, revision: 1, tools: ['read_file'], permissions: ['workspace.read'] }]
+  let devices = [{ id: 'device-1', name: '旧手机', status: 'active', scopes: ['chat'], expiresAt: '2027-01-01T00:00:00.000Z' }]
+  globalThis.fetch = async (route, options = {}) => {
+    requests.push({ route, method: options.method ?? 'GET', body: options.body ? JSON.parse(options.body) : null })
+    if (route.includes('/runs/run-1/evidence?')) return jsonResponse({ runId: 'run-1', cards: [{ id: 'e1', title: '机器校验', category: 'machine', status: 'passed', basis: { summary: '退出码 0' }, confidence: { level: 'verified' } }], summary: { total: 1, byStatus: { passed: 1, failed: 0, unverified: 0 } } })
+    if (route.endsWith('/cost') && options.method === 'POST') return jsonResponse({ ok: true, status: 'selected', provider: 'test', model: 'model-v1', route: 'test/model-v1', role: 'worker', estimatedMicros: 10, currency: 'CNY' })
+    if (route.endsWith('/cost')) return jsonResponse({ runs: 1, records: 1, complete: false, byCurrency: { CNY: 100_000 }, byModel: { 'test/model': { calls: 1, totalTokens: 10, priced: true, amountMicros: 100_000 } }, unpricedItems: [{ model: 'unpriced/model', runId: 'run-1', reason: 'no usable price' }] })
+    if (route.endsWith('/profiles?includeDisabled=true')) return jsonResponse(profiles)
+    if (route.endsWith('/profiles') && options.method === 'POST') {
+      const body = JSON.parse(options.body)
+      profiles = profiles.map(profile => profile.id === body.id ? { ...profile, enabled: body.enabled, revision: profile.revision + 1 } : profile)
+      return jsonResponse(profiles[0])
+    }
+    if (route.endsWith('/device/status')) return jsonResponse(devices)
+    if (route.endsWith('/device/pair')) {
+      const body = JSON.parse(options.body)
+      const device = { id: 'device-2', name: body.name, status: 'active', scopes: body.scopes, expiresAt: '2026-11-27T00:00:00.000Z', token: 'dsm_test_token' }
+      devices = [...devices, device]
+      return jsonResponse(device)
+    }
+    throw new Error(`unexpected route ${route}`)
+  }
+  try {
+    const card = await panelHarness({ workbench: { runs: [{ id: 'run-1', goal: '最近任务', status: 'completed', parentSessionId: 'chat-a' }], goals: [], inbox: [] } })
+    let nodes = await openMore(card, '质量证据')
+    assert.match(requests[0].route, /\/runs\/run-1\/evidence\?limit=100$/)
+    assert.ok(nodes.some(node => (node.children ?? []).includes('机器校验')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('退出码 0')))
+
+    await card.dispatch({ type: 'closeMore' })
+    nodes = await openMore(card, '成本中心')
+    assert.ok(nodes.some(node => (node.children ?? []).includes('CNY 0.1')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('unpriced/model')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('no usable price')))
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('获取路由建议')).props.onClick()
+    assert.deepEqual(requests.filter(request => request.method === 'POST').at(-1).body,
+      { action: 'route', role: 'worker', complexity: 'medium', inputTokens: 4000 })
+    assert.ok(textOf(card.render()).includes('model-v1'))
+
+    await card.dispatch({ type: 'closeMore' })
+    nodes = await openMore(card, 'Agent 档案')
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('停用档案')).props.onClick()
+    assert.deepEqual(requests.filter(request => request.method === 'POST').at(-1).body, { action: 'toggle', id: 'agent-1', enabled: false })
+
+    await card.dispatch({ type: 'closeMore' })
+    nodes = await openMore(card, '设备配对')
+    assert.ok(nodes.some(node => (node.children ?? []).includes('旧手机')))
+    field(nodes, '设备名称').props.onChange({ target: { value: '新手机' } })
+    nodes = card.render()
+    const pairForm = nodes.find(node => node.type === 'form')
+    await pairForm.props.onSubmit({ preventDefault() {} })
+    const pair = requests.find(request => request.route.endsWith('/device/pair'))
+    assert.equal(pair.body.name, '新手机')
+    assert.deepEqual(pair.body.scopes, ['chat', 'tasks'])
+    nodes = card.render()
+    assert.ok(nodes.some(node => (node.children ?? []).includes('dsm_test_token')), 'pairing token is shown once')
+    await card.dispatch({ type: 'closeMore' })
+    assert.equal(card.model().more.pairing, null, 'closing the panel clears the one-time token')
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
+test('the global assistant editor saves every editable field through the profile revision contract', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let assistant = { id: 'global-assistant', name: 'Global Assistant', avatar: 'assistant', role: 'assistant',
+    provider: null, model: null, tools: ['read_file'], permissions: ['workspace.read', 'memory.global'],
+    memoryScope: 'global', workspaceScope: 'global', enabled: true, revision: 4 }
+  globalThis.fetch = async (route, options = {}) => {
+    const method = options.method ?? 'GET'
+    const body = options.body ? JSON.parse(options.body) : null
+    requests.push({ route, method, body })
+    if (route.endsWith('/profiles?includeDisabled=true')) return jsonResponse([assistant])
+    if (route.endsWith('/profiles') && method === 'POST' && body.action === 'update') {
+      assert.equal(body.expectedRevision, assistant.revision)
+      assistant = { ...assistant, ...body.patch, revision: assistant.revision + 1 }
+      return jsonResponse(assistant)
+    }
+    throw new Error(`unexpected route ${route}`)
+  }
+  try {
+    const card = await panelHarness()
+    let nodes = await openMore(card, 'Agent 档案')
+    assert.ok(textOf(nodes).includes('角色：assistant（不可修改）'))
+    assert.ok(textOf(nodes).includes('ID：global-assistant（保留且不可修改）'))
+    assert.ok(textOf(nodes).includes('记忆范围：global（固定）'))
+    assert.ok(textOf(nodes).includes('工作区范围：global（固定）'))
+    for (const [label, value] of [
+      ['全局助理名称', 'Release Assistant'], ['全局助理头像', 'bot'], ['全局助理 Provider', 'local'],
+      ['全局助理模型', 'test/model'], ['全局助理工具', 'read_file, write_file'],
+      ['全局助理权限', 'workspace.read, workspace.write, memory.global'],
+    ]) {
+      await nodes.find(node => node.props?.['aria-label'] === label).props.onChange({ target: { value } })
+      nodes = card.render()
+    }
+    await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} })
+    const saved = requests.find(request => request.method === 'POST')
+    assert.deepEqual(saved.body, { action: 'update', id: 'global-assistant', expectedRevision: 4, patch: {
+      name: 'Release Assistant', avatar: 'bot', provider: 'local', model: 'test/model',
+      tools: ['read_file', 'write_file'], permissions: ['workspace.read', 'workspace.write', 'memory.global'],
+      memoryScope: 'global', workspaceScope: 'global',
+    } })
+    assert.equal(card.model().more.profileDraft.expectedRevision, 5)
+    assert.equal(card.model().more.profileDraft.dirty, false)
+    await card.render().find(node => node.props?.['aria-label'] === '全局助理模型').props.onChange({ target: { value: 'test/model-v2' } })
+    await card.render().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} })
+    assert.equal(requests.filter(request => request.method === 'POST').at(-1).body.expectedRevision, 5)
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
+class VoiceTrack {
+  readyState = 'live'
+  stops = 0
+  stop() { this.stops += 1; this.readyState = 'ended' }
+}
+
+class VoiceRecorder {
+  static instances = []
+  static isTypeSupported() { return true }
+  constructor(stream, options) {
+    this.stream = stream
+    this.options = options
+    this.state = 'inactive'
+    this.listeners = new Map()
+    VoiceRecorder.instances.push(this)
+  }
+  addEventListener(type, listener) {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set())
+    this.listeners.get(type).add(listener)
+  }
+  removeEventListener(type, listener) { this.listeners.get(type)?.delete(listener) }
+  emit(type, event = {}) { for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event) }
+  start() { this.state = 'recording' }
+  data() { this.emit('dataavailable', { data: new Blob([Uint8Array.from([1, 2, 3, 4])], { type: this.options.mimeType }) }) }
+  stop() {
+    this.state = 'inactive'
+    this.data()
+    this.emit('stop')
+  }
+}
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
+}
+
+test('composer voice stub records PCM16 WAV, inserts a draft, and discards a late cancelled result', async () => {
+  const originalFetch = globalThis.fetch
+  const originalRecorder = globalThis.MediaRecorder
+  const originalContext = globalThis.AudioContext
+  const originalWindow = globalThis.window
+  const track = new VoiceTrack()
+  const requests = []
+  const closes = []
+  let pending = null
+  class Context {
+    async decodeAudioData() {
+      return { sampleRate: 16_000, length: 4, numberOfChannels: 1, getChannelData: () => Float32Array.from([0.25, -0.25, 0.5, -0.5]) }
+    }
+    async close() { closes.push('closed') }
+  }
+  globalThis.MediaRecorder = VoiceRecorder
+  globalThis.AudioContext = Context
+  globalThis.fetch = async (route, options = {}) => {
+    requests.push({ route, body: JSON.parse(options.body) })
+    if (pending) return pending.promise
+    return jsonResponse({ text: '识别文本' })
+  }
+  VoiceRecorder.instances = []
+  try {
+    const card = await taskCardHarness()
+    globalThis.window.navigator = { mediaDevices: { getUserMedia: async constraints => {
+      assert.equal(constraints.audio.channelCount, 1)
+      track.readyState = 'live'
+      return { getTracks: () => [track], getAudioTracks: () => [track] }
+    } } }
+    globalThis.window.MediaRecorder = VoiceRecorder
+    let nodes = card.render()
+    const mic = () => nodes.find(node => node.type === 'button' && node.props?.['aria-label']?.includes('语音') || node.props?.['aria-label'] === '停止录音')
+    const pointer = { button: 0, pointerId: 1, preventDefault() {}, currentTarget: { setPointerCapture() {}, releasePointerCapture() {} } }
+    mic().props.onPointerDown(pointer)
+    await settle()
+    assert.equal(VoiceRecorder.instances.length, 1)
+    nodes = card.render()
+    await nodes.find(node => node.props?.['aria-label'] === '停止录音').props.onPointerUp(pointer)
+    nodes = card.render()
+    assert.equal(card.composer(nodes).props.value, '识别文本')
+    assert.deepEqual(card.actions, [], 'transcription inserts text but never sends it')
+    assert.equal(requests[0].route, '/superagent/api/console/voice/transcribe')
+    const wav = Buffer.from(requests[0].body.audio, 'base64')
+    assert.equal(wav.subarray(0, 4).toString(), 'RIFF')
+    assert.equal(wav.readUInt16LE(22), 1)
+    assert.equal(wav.readUInt32LE(24), 16_000)
+    assert.equal(wav.readUInt16LE(34), 16)
+    assert.equal(track.stops, 1)
+    assert.deepEqual(closes, ['closed'])
+
+    mic().props.onPointerDown(pointer)
+    await settle()
+    nodes = card.render()
+    pending = deferred()
+    const stopping = nodes.find(node => node.props?.['aria-label'] === '停止录音').props.onPointerUp(pointer)
+    await settle()
+    nodes = card.render()
+    assert.ok(nodes.find(node => node.props?.['aria-label'] === '取消语音输入'))
+    nodes.find(node => node.props?.['aria-label'] === '取消语音输入').props.onPointerDown(pointer)
+    pending.resolve(jsonResponse({ text: '迟到的文本' }))
+    assert.equal(await stopping, null)
+    nodes = card.render()
+    assert.equal(card.composer(nodes).props.value, '识别文本', 'a cancelled late result cannot alter the draft')
+    assert.equal(track.stops, 2)
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+    if (originalRecorder === undefined) delete globalThis.MediaRecorder
+    else globalThis.MediaRecorder = originalRecorder
+    if (originalContext === undefined) delete globalThis.AudioContext
+    else globalThis.AudioContext = originalContext
+    globalThis.window = originalWindow
+  }
+})
+
+test('composer voice explains denied permission, missing devices and unavailable transcription', async () => {
+  const originalFetch = globalThis.fetch
+  const originalRecorder = globalThis.MediaRecorder
+  const originalContext = globalThis.AudioContext
+  const originalWindow = globalThis.window
+  class Context {
+    async decodeAudioData() { return { sampleRate: 16_000, length: 1, numberOfChannels: 1, getChannelData: () => Float32Array.from([0]) } }
+    async close() {}
+  }
+  globalThis.MediaRecorder = VoiceRecorder
+  globalThis.AudioContext = Context
+  VoiceRecorder.instances = []
+  try {
+    const card = await taskCardHarness()
+    let denial = 'NotAllowedError'
+    globalThis.window.navigator = { mediaDevices: { getUserMedia: async () => { throw Object.assign(new Error('denied'), { name: denial, code: 8 }) } } }
+    globalThis.window.MediaRecorder = VoiceRecorder
+    const pointer = { button: 0, pointerId: 1, preventDefault() {}, currentTarget: { setPointerCapture() {}, releasePointerCapture() {} } }
+    let nodes = card.render()
+    nodes.find(node => node.props?.['aria-label'] === '语音输入').props.onPointerDown(pointer)
+    await settle()
+    nodes = card.render()
+    assert.ok(nodes.some(node => node.props?.className?.includes('dsa-voice-status') && (node.children ?? []).join('').includes('麦克风权限被拒绝')))
+
+    denial = 'NotFoundError'
+    nodes = card.render()
+    nodes.find(node => node.props?.['aria-label'] === '语音输入').props.onPointerDown(pointer)
+    await settle()
+    nodes = card.render()
+    assert.ok(nodes.some(node => node.props?.className?.includes('dsa-voice-status') && (node.children ?? []).join('').includes('未检测到可用的麦克风')))
+
+    globalThis.window.navigator.mediaDevices.getUserMedia = async () => ({ getTracks: () => [new VoiceTrack()] })
+    globalThis.fetch = async () => jsonResponse({ message: 'remote.speech is unavailable' }, 503)
+    nodes = card.render()
+    nodes.find(node => node.props?.['aria-label'] === '语音输入').props.onPointerDown(pointer)
+    await settle()
+    nodes = card.render()
+    await nodes.find(node => node.props?.['aria-label'] === '停止录音').props.onPointerUp(pointer).catch(() => {})
+    nodes = card.render()
+    assert.ok(nodes.some(node => node.props?.className?.includes('dsa-voice-status') && (node.children ?? []).join('').includes('语音转写服务暂不可用')))
+    assert.equal(card.composer(nodes).props.value, '')
+    assert.deepEqual(card.actions, [])
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+    if (originalRecorder === undefined) delete globalThis.MediaRecorder
+    else globalThis.MediaRecorder = originalRecorder
+    if (originalContext === undefined) delete globalThis.AudioContext
+    else globalThis.AudioContext = originalContext
+    globalThis.window = originalWindow
+  }
+})
+
+test('artifact preview shares an explicit artifact id through POST /shares', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (route, options = {}) => {
+    requests.push({ route, method: options.method, body: JSON.parse(options.body) })
+    return jsonResponse({ share: { id: 'share-1' }, token: 'shr_test', url: 'https://example.test/s/shr_test' })
+  }
+  try {
+    const card = await panelHarness({
+      detail: { id: 'run-1', goal: '发布', status: 'completed', parentSessionId: 'chat-a' },
+      preview: { name: 'report.md', kind: 'md', url: '/superagent/api/console/artifact?path=report.md', item: { id: 'artifact-1', href: 'report.md', runId: 'run-1' } },
+      previewText: '# 报告',
+    })
+    let nodes = card.render()
+    const share = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '分享 report.md')
+    assert.ok(share, 'artifact preview has a share button')
+    await share.props.onClick()
+    assert.equal(requests.length, 0, 'sharing a bearer token requires confirmation')
+    nodes = card.render()
+    const confirm = nodes.find(node => node.type === 'button' && (node.children ?? []).includes('确认分享'))
+    assert.ok(confirm, 'the preview offers an explicit share confirmation')
+    await confirm.props.onClick()
+    assert.deepEqual(requests, [{ route: '/superagent/api/console/shares', method: 'POST',
+      body: { action: 'create', share: { artifactIds: ['artifact-1'], role: 'viewer' } } }])
+    nodes = card.render()
+    assert.ok(nodes.some(node => node.props?.role === 'status' && (node.children ?? []).join('').includes('https://example.test/s/shr_test')))
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
+test('artifact preview opens the original run or continues in a new conversation', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (route, options = {}) => {
+    requests.push({ route, method: options.method ?? 'GET' })
+    if (route === '/superagent/api/console/session' && options.method === 'POST') return jsonResponse({ sessionId: 'chat-b', capabilities: { chat: true } })
+    if (route.startsWith('/superagent/api/console/runs/run-1?')) return jsonResponse({ id: 'run-1', goal: '发布', status: 'completed', parentSessionId: 'chat-a' })
+    if (route.startsWith('/superagent/api/console/workbench')) return jsonResponse({ sessionId: 'chat-b', name: '测试工作台', projects: [], runs: [], goals: [], inbox: [] })
+    if (route === '/superagent/api/console/sources') return jsonResponse({ bindings: [], recent: [] })
+    throw new Error(`unexpected route ${route}`)
+  }
+  try {
+    const card = await panelHarness({
+      detail: { id: 'run-1', goal: '发布', status: 'completed', parentSessionId: 'chat-a' },
+      preview: { name: 'report.md', kind: 'md', url: '/superagent/api/console/artifact?path=report.md',
+        item: { id: 'artifact-1', href: 'report.md', runId: 'run-1', ownerSessionId: 'chat-a' } },
+      previewText: '# 报告',
+    })
+    let nodes = card.render()
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('在原任务打开')).props.onClick()
+    assert.equal(card.model().detail.id, 'run-1')
+    assert.ok(requests.some(request => request.route.includes('/runs/run-1?') && request.route.includes('owner=chat-a')))
+    const continued = await panelHarness({
+      routerRevision: -1,
+      detail: { id: 'run-1', goal: '发布', status: 'completed', parentSessionId: 'chat-a' },
+      preview: { name: 'report.md', kind: 'md', url: '/superagent/api/console/artifact?path=report.md',
+        item: { id: 'artifact-1', href: 'report.md', runId: 'run-1', ownerSessionId: 'chat-a' } },
+      previewText: '# 报告',
+    })
+    nodes = continued.render()
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('新对话继续')).props.onClick()
+    assert.equal(continued.model().sessionId, 'chat-b')
+    assert.match(continued.model().uploadInsert, /请基于产物「report.md」继续/)
+    assert.ok(requests.some(request => request.route === '/superagent/api/console/session' && request.method === 'POST'))
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
+test('candidate plan approval does not submit a blind message when Router support is absent', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  const planDigest = `sha256:${'a'.repeat(64)}`
+  const inputSnapshot = { version: 1, kind: 'candidate-plan-input', goal: '候选发布', project: '/work/a',
+    subtasks: [{ id: 'candidate-1', title: '起草', prompt: '写报告', capabilities: ['analysis'] }],
+    capabilities: ['analysis'], model: 'default', budget: null,
+    permissionScope: { tools: ['read', 'write'], allow: ['read', 'write'], deny: ['shell.execute', 'network'], approvalMode: 'policy' },
+    runtime: { cwd: '/work/a', isolation: 'workspace', provider: 'local', mode: 'execute', platform: 'host', shell: 'host' } }
+  const preview = { kind: 'candidate-plan-preview', status: 'ready', goal: { title: '候选发布' }, planDigest, inputSnapshot,
+    sideEffects: 'none', executionStarted: false, canApprove: true, estimate: { modelCalls: 2, tokens: { total: 100 }, cost: { totalMicros: 0, complete: true } },
+    issues: [], pendingConfirmations: [], dag: { tasks: [{ id: 'candidate-1', title: '起草' }] },
+    permissionScope: inputSnapshot.permissionScope, runtime: inputSnapshot.runtime }
+  globalThis.fetch = async (route, options = {}) => {
+    const method = options.method ?? 'GET'
+    const body = options.body ? JSON.parse(options.body) : null
+    requests.push({ route, method, body })
+    if (route.endsWith('/plan-preview') && body.action === 'candidate') return jsonResponse(preview)
+    if (route.endsWith('/plan-preview') && body.action === 'approve') return jsonResponse({ kind: 'plan-approval-credential',
+      state: 'approved', planDigest, goal: preview.goal, project: inputSnapshot.project,
+      permissionScope: inputSnapshot.permissionScope, runtime: inputSnapshot.runtime, approval: { confirmations: [] }, executionStarted: false })
+    if (route.endsWith('/router')) return jsonResponse({ revision: 1, messages: [], facts: [], pending: 0 })
+    throw new Error(`unexpected route ${route}`)
+  }
+  try {
+    const card = await panelHarness()
+    let nodes = await openMore(card, '计划预览')
+    const goalField = nodes.find(node => node.props?.['aria-label'] === '候选计划目标')
+    assert.ok(goalField, `candidate goal field missing: ${textOf(nodes).slice(-1200)}`)
+    await goalField.props.onChange({ target: { value: '候选发布' } })
+    nodes = card.render()
+    await field(nodes, '子任务（每行一个）').props.onChange({ target: { value: '起草：写报告' } })
+    nodes = card.render()
+    await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} })
+    assert.equal(requests[0].body.action, 'candidate')
+    assert.equal(requests[0].body.subtasks[0].title, '起草')
+    assert.deepEqual(requests[0].body.permissionScope.deny, ['shell.execute', 'network'])
+    assert.equal(requests[0].body.runtime.cwd, '/work/a')
+    assert.ok(textOf(card.render()).includes('权限范围'))
+    assert.ok(textOf(card.render()).includes('运行环境'))
+    assert.equal(card.model().more.planPreview.executionStarted, false)
+    await buttonIn(card.render(), '批准并运行').props.onClick()
+    assert.deepEqual(requests.filter(request => request.route.endsWith('/plan-preview')).map(request => request.body.action), ['candidate', 'approve'])
+    assert.equal(requests.some(request => request.route.endsWith('/message')), false)
+    assert.equal(card.model().more.planHandoff.state, 'awaiting-router')
+    assert.ok(textOf(card.render()).includes('未发送任务，避免无绑定执行'))
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
+test('an approved candidate plan is bound to the next Router submission', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  const planDigest = `sha256:${'b'.repeat(64)}`
+  let inputSnapshot
+  let approval
+  globalThis.fetch = async (route, options = {}) => {
+    const method = options.method ?? 'GET'
+    const body = options.body ? JSON.parse(options.body) : null
+    requests.push({ route, method, body })
+    if (route.endsWith('/plan-preview') && body.action === 'candidate') {
+      inputSnapshot = { version: 1, kind: 'candidate-plan-input', goal: body.goal, project: body.project,
+        subtasks: body.subtasks, capabilities: body.capabilities, model: body.model ?? null, budget: body.budget ?? null,
+        permissionScope: body.permissionScope, runtime: body.runtime }
+      return jsonResponse({ kind: 'candidate-plan-preview', status: 'ready', goal: { title: body.goal }, planDigest,
+        inputSnapshot, canApprove: true, issues: [], blocks: [], pendingConfirmations: [], executionStarted: false,
+        estimate: { modelCalls: 1, tokens: { total: 10 }, cost: { totalMicros: 0, complete: true } },
+        dag: { tasks: body.subtasks }, permissionScope: body.permissionScope, runtime: body.runtime })
+    }
+    if (route.endsWith('/plan-preview') && body.action === 'approve') {
+      assert.equal(body.planDigest, planDigest)
+      approval = { kind: 'plan-approval-credential', state: 'approved', planDigest, goal: { title: body.preview.goal.title },
+        project: inputSnapshot.project, permissionScope: inputSnapshot.permissionScope, runtime: inputSnapshot.runtime,
+        approval: { confirmations: [] }, executionStarted: false }
+      return jsonResponse(approval)
+    }
+    if (route.endsWith('/router')) return jsonResponse({ revision: 1, messages: [], facts: [], pending: 0,
+      planExecution: 'candidate-plan-v1' })
+    if (route.endsWith('/message') && method === 'POST') {
+      assert.deepEqual(body.planApproval, approval)
+      assert.deepEqual(body.candidatePlan, inputSnapshot)
+      return jsonResponse({ accepted: true, id: body.id, planDigest: body.planApproval.planDigest })
+    }
+    throw new Error(`unexpected route ${route}`)
+  }
+  try {
+    const card = await panelHarness()
+    let nodes = await openMore(card, '计划预览')
+    await nodes.find(node => node.props?.['aria-label'] === '候选计划目标').props.onChange({ target: { value: '发布候选' } })
+    nodes = card.render()
+    await nodes.find(node => node.props?.['aria-label'] === '候选计划子任务').props.onChange({ target: { value: '起草：写报告\n复核：检查证据' } })
+    nodes = card.render()
+    await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} })
+    await buttonIn(card.render(), '批准并运行').props.onClick()
+    const approveIndex = requests.findIndex(request => request.body?.action === 'approve')
+    const messageIndex = requests.findIndex(request => request.route.endsWith('/message'))
+    assert.ok(approveIndex >= 0 && messageIndex > approveIndex, 'Router receives the plan only after approval')
+    const message = requests[messageIndex]
+    assert.equal(message.body.text, '发布候选')
+    assert.equal(message.body.project, '/work/a')
+    assert.equal(message.body.intent, 'task')
+    assert.deepEqual(message.body.candidatePlan.subtasks.map(task => task.id), ['candidate-1', 'candidate-2'])
+    assert.equal(message.body.planApproval.planDigest, planDigest)
+    assert.equal(card.model().more.planHandoff.state, 'submitted', card.model().more.error)
+    assert.equal(card.model().more.planHandoff.planDigest, planDigest)
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
+test('blocked candidate plans expose no runnable approval control', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (route, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : null
+    requests.push({ route, body })
+    return jsonResponse({ kind: 'candidate-plan-preview', status: 'blocked', canApprove: false, planDigest: `sha256:${'c'.repeat(64)}`,
+      inputSnapshot: { goal: '阻塞发布', project: '/work/a', subtasks: [{ id: 'one' }], permissionScope: {}, runtime: {} },
+      issues: [{ severity: 'block', code: 'permission_not_allowed', message: '权限不足' }], blocks: [{ code: 'permission_not_allowed' }],
+      estimate: { cost: {} }, dag: { tasks: [{ id: 'one' }] }, executionStarted: false })
+  }
+  try {
+    const card = await panelHarness()
+    let nodes = await openMore(card, '计划预览')
+    await nodes.find(node => node.props?.['aria-label'] === '候选计划目标').props.onChange({ target: { value: '阻塞发布' } })
+    nodes = card.render()
+    await nodes.find(node => node.props?.['aria-label'] === '候选计划子任务').props.onChange({ target: { value: '执行：发布' } })
+    nodes = card.render()
+    await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} })
+    assert.equal(buttonIn(card.render(), '批准并运行').props.disabled, true)
+    assert.ok(textOf(card.render()).includes('阻塞计划不能运行'))
+    assert.equal(requests.filter(request => request.body?.action === 'approve').length, 0)
+    assert.equal(requests.some(request => request.route.endsWith('/message')), false)
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
+function textOf(tree) {
+  return [...walkTree(tree)].map(node => (node.children ?? []).filter(child => typeof child === 'string').join(' ')).join(' ')
+}
+
+function buttonIn(tree, label) {
+  return [...walkTree(tree)].find(node => node.type === 'button' && (node.children ?? []).includes(label))
+}
+
+function rowNamed(nodes, name) {
+  const row = nodes.find(node => node.props?.className === 'dsa-more-row' && textOf(node).includes(name))
+  assert.ok(row, `the panel has a row for ${name}; rendered: ${textOf(nodes).slice(-900)}`)
+  return row
+}
+
+async function clickConfirmed(card, label, confirmLabel, scope = null) {
+  const trigger = buttonIn(scope ?? card.render(), label)
+  assert.ok(trigger, `the panel offers ${label}`)
+  await trigger.props.onClick()
+  const confirm = buttonIn(card.render(), confirmLabel)
+  assert.ok(confirm, `${label} asks for ${confirmLabel}; rendered: ${textOf(card.render()).slice(-1200)}`)
+  await confirm.props.onClick()
+  return card.render()
+}
+
+test('automation rules preview, create, revise, toggle, run and list executions through the real action contract', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let conflictOnce = true
+  let rules = [{
+    id: 'rule-1', name: '每日检查', description: '检查发布状态', enabled: true, revision: 2,
+    trigger: { type: 'cron', cron: '0 9 * * *', timeZone: 'UTC' },
+    action: { type: 'run', prompt: '检查项目' }, output: { relativePath: 'artifacts/check.md' },
+    notify: { events: ['completed', 'failed'] }, budget: { maxRuns: 10, maxModelCalls: null, maxTokens: null, maxCost: null },
+  }]
+  globalThis.fetch = async (route, options = {}) => {
+    const method = options.method ?? 'GET'
+    const body = options.body ? JSON.parse(options.body) : null
+    requests.push({ route, method, body })
+    if (route === '/superagent/api/console/automations' && method === 'GET') return jsonResponse(rules)
+    if (route === '/superagent/api/console/automations/rule-1/executions?limit=100') return jsonResponse([
+      { id: 'exec-1', ruleId: 'rule-1', ruleRevision: 1, status: 'completed', recordedAt: '2026-11-25T09:00:00.000Z',
+        action: { prompt: '检查项目' }, usage: { modelCalls: 1, tokens: 20 } },
+    ])
+    if (route !== '/superagent/api/console/automations' || method !== 'POST') throw new Error(`unexpected route ${route}`)
+    if (body.action === 'preview') return jsonResponse({ valid: true, errors: [], warnings: ['missing permission: workspace.write'],
+      triggerTimes: ['2026-11-27T09:00:00.000Z'], matches: [], sideEffects: 'none', executionStarted: false })
+    if (body.action === 'create') {
+      const created = { ...body.rule, id: 'rule-2', enabled: false, revision: 1, createdAt: new Date().toISOString() }
+      rules = [...rules, created]
+      return jsonResponse({ ...created, scheduleId: null })
+    }
+    if (body.action === 'toggle') {
+      if (conflictOnce) {
+        conflictOnce = false
+        rules = [{ ...rules[0], revision: 3 }, ...rules.slice(1)]
+        return jsonResponse({ message: 'revision conflict' }, 409)
+      }
+      rules = rules.map(rule => rule.id === body.id ? { ...rule, enabled: body.enabled, revision: rule.revision + 1 } : rule)
+      return jsonResponse({ ...rules.find(rule => rule.id === body.id), scheduleId: 'schedule-1' })
+    }
+    if (body.action === 'run-now') return jsonResponse({ id: 'exec-manual', status: 'queued', result: { requestId: 'router-1' } })
+    if (body.action === 'update') {
+      rules = rules.map(rule => rule.id === body.id ? { ...rule, ...body.patch, revision: rule.revision + 1 } : rule)
+      return jsonResponse({ ...rules.find(rule => rule.id === body.id), scheduleId: 'schedule-1' })
+    }
+    if (body.action === 'remove') {
+      rules = rules.filter(rule => rule.id !== body.id)
+      return jsonResponse({ id: body.id, revision: body.expectedRevision, scheduleId: null })
+    }
+    throw new Error(`unexpected automation action ${body.action}`)
+  }
+  try {
+    const card = await panelHarness()
+    let nodes = await openMore(card, '自动化规则')
+    assert.ok(nodes.some(node => (node.children ?? []).includes('每日检查')))
+    await field(nodes, '规则名称').props.onChange({ target: { value: '每周汇总' } })
+    assert.equal(field(card.render(), '规则名称').props.value, '每周汇总', 'the automation draft keeps edits across renders')
+    await field(card.render(), 'Cron 表达式').props.onChange({ target: { value: '0 8 * * 1' } })
+    await field(card.render(), '执行 Prompt').props.onChange({ target: { value: '汇总本周进展' } })
+    await field(card.render(), '产物相对路径').props.onChange({ target: { value: 'artifacts/weekly.md' } })
+    await field(card.render(), '最大运行次数').props.onChange({ target: { value: '12' } })
+    nodes = card.render()
+    await buttonIn(nodes, '预览规则').props.onClick()
+    const preview = requests.find(request => request.body?.action === 'preview')
+    assert.equal(preview.body.rule.name, '每周汇总')
+    assert.equal(preview.body.rule.budget.maxRuns, 12)
+    assert.deepEqual(preview.body.rule.notify.events, ['completed', 'failed'])
+    nodes = card.render()
+    assert.ok(nodes.some(node => (node.children ?? []).includes('有效性：valid')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('副作用：none')))
+    assert.ok(textOf(nodes).includes('missing permission: workspace.write'))
+
+    await clickConfirmed(card, '创建规则', '确认创建')
+    const create = requests.find(request => request.body?.action === 'create')
+    assert.equal(create.body.rule.output.relativePath, 'artifacts/weekly.md')
+    assert.equal(card.model().more.automationEditId, 'rule-2')
+
+    await clickConfirmed(card, '立即运行', '确认运行', rowNamed(card.render(), '每日检查'))
+    const run = requests.find(request => request.body?.action === 'run-now')
+    assert.equal(run.body.id, 'rule-1')
+    assert.match(run.body.idempotencyKey, /^manual:rule-1:/)
+
+    nodes = card.render()
+    await buttonIn(rowNamed(nodes, '每日检查'), '执行历史').props.onClick()
+    assert.ok(requests.some(request => request.route.endsWith('/automations/rule-1/executions?limit=100')))
+    assert.ok(textOf(card.render()).includes('exec-1'))
+
+    nodes = await clickConfirmed(card, '停用', '确认停用', rowNamed(card.render(), '每日检查'))
+    assert.ok(nodes.some(node => node.props?.role === 'alert' && textOf(node).includes('revision conflict')))
+    const staleToggle = requests.filter(request => request.body?.action === 'toggle')[0]
+    assert.equal(staleToggle.body.expectedRevision, 2)
+    assert.equal(card.model().more.automations[0].name, '每日检查（已刷新）', 'revision conflicts refresh the visible rule')
+    await settle()
+    assert.equal(card.model().more.automations[0].revision, 3, 'revision conflicts refresh the visible rule')
+    await card.dispatch({ type: 'loadMore', panel: 'automations', force: true })
+    await clickConfirmed(card, '停用', '确认停用', rowNamed(card.render(), '每日检查'))
+    const freshToggle = requests.filter(request => request.body?.action === 'toggle')[1]
+    assert.equal(freshToggle.body.expectedRevision, 3, 'a conflict refreshes the revision before retry')
+    assert.equal(freshToggle.body.enabled, false)
+
+    nodes = card.render()
+    await buttonIn(rowNamed(nodes, '每日检查'), '编辑').props.onClick()
+    await field(card.render(), 'Cron 表达式').props.onChange({ target: { value: '0 10 * * *' } })
+    await clickConfirmed(card, '保存规则', '确认保存')
+    const update = requests.find(request => request.body?.action === 'update')
+    assert.equal(update.body.expectedRevision, 4)
+    assert.equal(update.body.patch.trigger.cron, '0 10 * * *')
+
+    await clickConfirmed(card, '删除', '确认删除', rowNamed(card.render(), '每日检查'))
+    const remove = requests.find(request => request.body?.action === 'remove')
+    assert.equal(remove.body.expectedRevision, 5)
+    assert.equal(card.model().more.automations.some(rule => rule.id === 'rule-1'), false)
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
+test('task detail builds plan preview from run.subtasks and shows blockers, warnings and cost', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  const run = {
+    id: 'run-1', goal: '准备发布', status: 'completed', parentSessionId: 'chat-a', project: '/work/a',
+    subtasks: [
+      { id: 'draft', title: '起草', model: 'test/model', inputTokens: 100, outputTokens: 50, capabilities: ['analysis'] },
+      { id: 'review', title: '复核', model: 'test/model', dependsOn: ['draft'], inputTokens: 80, outputTokens: 40 },
     ],
-  }, {
-    messages: [{ id: 'feed-fail', role: 'assistant', text: '任务失败', taskId: 'goal-empty' }],
-  })
-  const nodes = card.render()
-  const failed = nodes.find(node => String(node.props?.className ?? '') === 'dsa-task-failed')
-  assert.ok(failed, 'the failed row keeps a failure block')
-  const text = deepText(failed)
-  assert.match(text, /失败：刷完心理网课/)
-  assert.match(text, /慕课登录态失效/, 'the reason reaches the row, not only the rail')
-  const handle = nodes.find(node => node.type === 'button' && (node.children ?? []).includes('打开任务处理'))
-  assert.ok(handle, 'a failed row offers an entry instead of dead-ending')
-  handle.props.onClick()
-  assert.deepEqual(card.actions.at(-1), { type: 'openTask', taskId: 'goal-empty' })
+  }
+  globalThis.fetch = async (route, options = {}) => {
+    requests.push({ route, body: JSON.parse(options.body) })
+    return jsonResponse({
+      status: 'blocked', sideEffects: 'none', executionStarted: false,
+      issues: [
+        { severity: 'block', code: 'pricing_missing', message: '缺少模型价格' },
+        { severity: 'warning', code: 'budget_unverified', message: '预算尚未核验' },
+      ],
+      estimate: { modelCalls: 2, tokens: { total: 270 }, cost: { complete: false, totalMicros: null, currency: 'CNY', unpriced: ['test/model'] } },
+      dag: { tasks: [{ id: 'draft', title: '起草' }, { id: 'review', title: '复核', dependsOn: ['draft'] }] },
+    })
+  }
+  try {
+    const card = await panelHarness({ detail: run, workbench: { runs: [run], goals: [], inbox: [] } })
+    let nodes = card.render()
+    const preview = nodes.find(node => node.type === 'button' && (node.children ?? []).includes('预览计划'))
+    assert.ok(preview, 'current task detail offers plan preview')
+    await preview.props.onClick()
+    assert.equal(requests[0].route, '/superagent/api/console/plan-preview')
+    assert.equal(requests[0].body.action, 'preview')
+    assert.equal(requests[0].body.workspace, '/work/a')
+    assert.deepEqual(requests[0].body.plan.subtasks.map(task => task.id), ['draft', 'review'])
+    assert.deepEqual(requests[0].body.plan.subtasks[1].dependsOn, ['draft'])
+    assert.equal(requests[0].body.plan.subtasks[0].inputTokens, 100)
+    assert.ok(requests[0].body.capabilities.includes('model.test/model'))
+    nodes = card.render()
+    assert.ok(nodes.some(node => (node.children ?? []).includes('阻塞：缺少模型价格')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('警告：预算尚未核验')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('未定价模型：test/model')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('预计成本')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('未开始执行')))
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
 })

@@ -257,6 +257,109 @@ test('forget retracts a note without leaving it visible', async () => {
   })
 })
 
+test('manual edits persist revisions and reject stale writers across notebook instances', async () => {
+  await withRoot(async root => {
+    const first = createMemory(root)
+    const second = createMemory(root)
+    const initial = await first.set({ key: 'deploy', kind: 'decision', text: 'staging' })
+    assert.equal(initial.revision, 1)
+    const stale = (await second.read()).entries[0]
+    assert.equal(stale.revision, 1)
+
+    const updated = await first.set({ key: 'deploy', kind: 'decision', text: 'first edit remains', expectedRevision: 1 })
+    assert.equal(updated.revision, 2)
+    const isStale = error => {
+      assert.equal(error.code, 'REVISION_CONFLICT')
+      assert.equal(error.expectedRevision, 1)
+      assert.equal(error.currentRevision, 2)
+      return true
+    }
+    await assert.rejects(second.set({ key: 'deploy', text: 'stale edit', expectedRevision: 1 }), isStale)
+    await assert.rejects(second.forget({ key: 'deploy', expectedRevision: 1 }), isStale)
+    const current = (await second.read()).entries[0]
+    assert.equal(current.text, 'first edit remains')
+    assert.equal(current.revision, 2)
+
+    const forgotten = await second.forget({ key: 'deploy', expectedRevision: 2 })
+    assert.equal(forgotten.forgotten, true)
+    assert.equal(forgotten.revision, 3)
+    assert.equal((await first.read()).entries.length, 0)
+    const rows = (await fsp.readFile(first.fileOf('default'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    assert.deepEqual(rows.map(row => row.revision), [1, 2, 3])
+  })
+})
+
+test('concurrent notebook instances cannot both accept the same revision', async () => {
+  await withRoot(async root => {
+    const first = createMemory(root)
+    const second = createMemory(root)
+    await first.set({ key: 'deploy', text: 'staging' })
+    const results = await Promise.allSettled([
+      first.set({ key: 'deploy', text: 'first writer', expectedRevision: 1 }),
+      second.set({ key: 'deploy', text: 'stale writer', expectedRevision: 1 }),
+    ])
+    assert.equal(results.filter(result => result.status === 'fulfilled').length, 1)
+    const rejected = results.find(result => result.status === 'rejected')
+    assert.equal(rejected.reason.code, 'REVISION_CONFLICT')
+    const acceptedIndex = results.findIndex(result => result.status === 'fulfilled')
+    const current = (await second.read()).entries[0]
+    assert.equal(current.text, acceptedIndex === 0 ? 'first writer' : 'stale writer')
+    assert.equal(current.revision, 2)
+  })
+})
+
+test('legacy notebook rows without revisions remain editable at revision one', async () => {
+  await withRoot(async root => {
+    const memory = createMemory(root)
+    await memory.init()
+    await fsp.writeFile(memory.fileOf('default'), `${JSON.stringify({
+      v: 1, id: 'legacy', ts: '2026-11-20T10:00:00.000Z', runId: 'old-run',
+      key: 'deploy', kind: 'note', status: 'active', tags: [], text: 'legacy note',
+    })}\n`, 'utf8')
+    const updated = await memory.set({ key: 'deploy', text: 'migrated note', expectedRevision: 1 })
+    assert.equal(updated.revision, 2)
+    assert.equal((await memory.read()).entries[0].text, 'migrated note')
+  })
+})
+
+test('a guarded manual mutation refuses to write when the scope lock is unavailable', async () => {
+  await withRoot(async root => {
+    const warnings = []
+    const memory = createMemory(root, { warn: message => warnings.push(message) })
+    await memory.init()
+    const release = await acquireFileLock(path.join(memory.dir, 'default.lock'))
+    assert.ok(release)
+    try {
+      await assert.rejects(memory.set({ key: 'locked', text: 'must not land', expectedRevision: 0 }), { code: 'LOCK_UNAVAILABLE' })
+      await assert.rejects(memory.forget({ key: 'locked', expectedRevision: 0 }), { code: 'LOCK_UNAVAILABLE' })
+    } finally {
+      await release()
+    }
+    assert.match(warnings.join('\n'), /mutation rejected/)
+    assert.equal((await memory.read()).entries.length, 0)
+  })
+})
+
+test('run supersession advances revisions and a guarded edit wins over a slower clock', async () => {
+  await withRoot(async root => {
+    let clock = Date.parse('2026-11-20T10:00:00.000Z')
+    const memory = createMemory(root, { now: () => clock })
+    await memory.write({ runId: 'run-1', entries: [{ key: 'deploy', text: 'first run' }] })
+    clock = Date.parse('2026-11-21T10:00:00.000Z')
+    await memory.write({ runId: 'run-2', entries: [{ key: 'deploy', text: 'second run' }] })
+    assert.equal((await memory.read()).entries[0].revision, 2)
+
+    clock = Date.parse('2026-11-19T10:00:00.000Z')
+    await assert.rejects(memory.set({ key: 'deploy', text: 'stale', expectedRevision: 1 }), { code: 'REVISION_CONFLICT' })
+    const corrected = await memory.set({ key: 'deploy', text: 'guarded correction', expectedRevision: 2 })
+    assert.equal(corrected.revision, 3)
+    const current = (await memory.read()).entries[0]
+    assert.equal(current.text, 'guarded correction')
+    assert.equal(current.revision, 3)
+    assert.equal(current.ts, '2026-11-21T10:00:00.001Z')
+  })
+})
+
 test('a note with no text and an empty batch write nothing', async () => {
   await withRoot(async root => {
     const memory = createMemory(root)

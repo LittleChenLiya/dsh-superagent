@@ -108,8 +108,7 @@ test('a plan stays current per workspace across a restart and reads never call t
 
     await router.submit({ id: 'graph-plan-read-b', project: 'release-b', text: '/方案 发版' })
     const b = await settled(router)
-    assert.deepEqual(b.messages.slice(a.messages.length).map(message => message.role), ['user'],
-      'no empty plan bubble')
+    assert.equal(b.messages.at(-1).text, '这项任务还没有已确认的决定。')
 
     const factsA = await router.taskFacts({ id: 'goal-release-a', project: 'release-a' })
     const factsB = await router.taskFacts({ id: 'goal-release-b', project: 'release-b' })

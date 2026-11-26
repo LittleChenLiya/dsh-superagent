@@ -52,6 +52,26 @@ test('messages above the hourly cap are batched into the next one', async () => 
   })
 })
 
+test('a reservation can use the current notification preference cap', async () => {
+  await withState(async stateFile => {
+    const policy = createNotifyPolicy({ stateFile, maxPerHour: 3 })
+    assert.equal((await policy.reserve(run('a'))).allowed, true)
+    const held = await policy.reserve(run('b'), { maxPerHour: 1 })
+    assert.equal(held.allowed, false)
+    assert.match(held.reason, /limit of 1/)
+  })
+})
+
+test('a zero push preference suppresses delivery instead of removing the cap', async () => {
+  await withState(async stateFile => {
+    const policy = createNotifyPolicy({ stateFile, maxPerHour: 3 })
+    const verdict = await policy.reserve(run('a'), { maxPerHour: 0 })
+    assert.equal(verdict.allowed, false)
+    assert.match(verdict.reason, /disables push/)
+    assert.equal((await policy.summary()).count, 0)
+  })
+})
+
 test('a folded batch is retried in the next message when its send fails', async () => {
   await withState(async stateFile => {
     let clock = Date.parse('2026-11-14T01:05:00.000Z')

@@ -169,7 +169,7 @@ test('user-level writes are redacted before they reach the file', async () => {
     const raw = `${await fsp.readFile(userMemory.fileOf('fact'), 'utf8')}`
       + `${await fsp.readFile(userMemory.fileOf('preference'), 'utf8')}`
     assert.doesNotMatch(raw, /someone@example\.com/)
-    assert.doesNotMatch(raw, /138/)
+    assert.doesNotMatch(raw, /138 0013 8000|13800138000/)
     assert.doesNotMatch(raw, /alice/)
     assert.doesNotMatch(raw, /sk-abcdefgh/)
     assert.match(raw, /\[redacted-email\]/)

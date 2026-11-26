@@ -1,0 +1,978 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-T7H89bWc+yMMeqF4uJ3akHRwVVcgcMAhnUbH6N1Sspo='; style-src 'self' 'sha256-/E9mWhsj4Fv5EEVSpeSBuwHZ5xjG1rmKyvqqlSzeacU='; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#4176e6">
+<meta name="color-scheme" content="light dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="SuperAgent">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/superagent-192.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/superagent-192.svg">
+<title>SuperAgent 移动执行台</title>
+<style>
+  /* Shared with public/console.html: keep these host palette tokens in sync. */
+  :root {
+    color-scheme: light;
+    --bg: rgb(255, 255, 255);
+    --panel: rgb(255, 255, 255);
+    --panel-2: rgb(250, 250, 250);
+    --line: rgba(0, 0, 0, .10);
+    --line-soft: rgba(0, 0, 0, .06);
+    --line-strong: rgba(0, 0, 0, .16);
+    --text: rgb(15, 17, 21);
+    --muted: rgb(97, 102, 107);
+    --faint: rgb(129, 133, 140);
+    --accent: rgb(65, 118, 230);
+    --accent-ink: rgb(255, 255, 255);
+    --amber: rgb(221, 134, 41);
+    --amber-soft: color-mix(in srgb, rgb(245, 158, 11) 10%, transparent);
+    --red: rgb(236, 19, 19);
+    --green: rgb(34, 197, 94);
+    --hover: rgba(38, 49, 72, .06);
+    --active: rgba(38, 49, 72, .10);
+    --input-bg: rgb(255, 255, 255);
+    --card-bg: rgb(250, 250, 250);
+    --radius: 16px;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  :root[data-theme='dark'] {
+    color-scheme: dark;
+    --bg: rgb(21, 21, 23);
+    --panel: rgb(35, 35, 36);
+    --panel-2: rgb(44, 44, 46);
+    --line: rgba(255, 255, 255, .12);
+    --line-soft: rgba(255, 255, 255, .06);
+    --line-strong: rgba(255, 255, 255, .20);
+    --text: rgb(249, 250, 251);
+    --muted: rgb(207, 211, 214);
+    --faint: rgb(129, 133, 140);
+    --accent: rgb(122, 170, 255);
+    --accent-ink: rgb(15, 17, 21);
+    --amber: rgb(245, 158, 11);
+    --amber-soft: color-mix(in srgb, rgb(245, 158, 11) 12%, transparent);
+    --red: rgb(242, 90, 90);
+    --green: rgb(34, 197, 94);
+    --hover: rgba(255, 255, 255, .08);
+    --active: rgba(255, 255, 255, .14);
+    --input-bg: rgb(44, 44, 46);
+    --card-bg: rgb(44, 44, 46);
+  }
+  * { box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; margin: 0; overflow-x: hidden; }
+  body {
+    background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans);
+    -webkit-font-smoothing: antialiased; overflow-wrap: anywhere;
+  }
+  button, input, textarea { max-width: 100%; font: inherit; color: inherit; }
+  button { min-height: 44px; cursor: pointer; }
+  button:disabled { cursor: not-allowed; opacity: .55; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  [hidden] { display: none !important; }
+  .app {
+    display: flex; flex-direction: column; width: 100%; max-width: 720px;
+    height: 100%; height: 100dvh; margin: 0 auto; overflow: hidden;
+    border-inline: 1px solid var(--line-soft);
+  }
+  .topbar {
+    flex: none; display: flex; align-items: center; gap: 8px;
+    min-height: 60px; padding: calc(10px + var(--safe-top)) 12px 10px;
+    border-bottom: 1px solid var(--line-soft); background: var(--panel);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+  .brand img { width: 34px; height: 34px; flex: none; border-radius: 10px; }
+  .brand-text { min-width: 0; }
+  .brand-text strong, .brand-text span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .brand-text strong { font-size: 15px; }
+  .brand-text span { color: var(--faint); font-size: 11px; }
+  .topbar-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+  .topbar .btn { min-height: 38px; padding: 6px 9px; font-size: 12px; }
+  .connection { display: flex; align-items: center; gap: 6px; flex: none; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .connection::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+  .connection[data-state='online']::before { background: var(--green); }
+  .connection[data-state='offline']::before { background: var(--red); }
+  .banner {
+    flex: none; margin: 10px 12px 0; padding: 11px 12px; border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent);
+    background: var(--amber-soft); font-size: 13px;
+  }
+  .offline-banner { border-color: color-mix(in srgb, var(--red) 35%, transparent); color: var(--red); }
+  .banner strong { display: block; }
+  .banner p { margin: 3px 0 0; color: var(--muted); }
+  .banner-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
+  .btn {
+    min-height: 44px; padding: 8px 14px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--panel); color: var(--text);
+  }
+  .btn:hover { background: var(--hover); }
+  .btn.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+  .btn.danger { border-color: color-mix(in srgb, var(--red) 40%, transparent); color: var(--red); }
+  .btn.small { min-height: 36px; padding: 6px 10px; font-size: 12px; }
+  main { flex: 1; min-height: 0; overflow: hidden; padding: 12px; }
+  .page { height: 100%; min-width: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .pages { height: 100%; min-width: 0; }
+  .page-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+  .page-header h1 { margin: 0; font-size: 19px; }
+  .page-header p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+  .card {
+    min-width: 0; margin-bottom: 10px; padding: 14px; border: 1px solid var(--line-soft);
+    border-radius: var(--radius); background: var(--panel); overflow: hidden;
+  }
+  .card h2 { margin: 0 0 6px; font-size: 14px; }
+  .card h3 { margin: 0 0 6px; font-size: 14px; }
+  .card p { margin: 4px 0 0; color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+  .card .meta { color: var(--faint); font-size: 11px; }
+  .card .actions, .answer-options { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .empty { padding: 28px 18px; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius); }
+  .empty-icon { display: block; margin-bottom: 8px; color: var(--accent); font-size: 26px; }
+  .empty strong { display: block; }
+  .empty p { max-width: 280px; margin: 6px auto 0; color: var(--muted); font-size: 13px; }
+  .error-text { color: var(--red) !important; }
+  .composer { display: flex; align-items: flex-end; gap: 8px; margin-top: 12px; }
+  .composer textarea {
+    flex: 1; min-width: 0; min-height: 44px; max-height: 120px; padding: 11px 12px;
+    resize: none; border: 1px solid var(--line); border-radius: 12px; background: var(--input-bg);
+  }
+  .composer .btn { flex: none; width: 44px; padding: 0; }
+  .token-form { display: grid; gap: 8px; margin-top: 12px; }
+  .token-form label { color: var(--muted); font-size: 12px; }
+  .token-form input {
+    width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--input-bg);
+  }
+  .token-form .btn { width: 100%; }
+  .token-note { margin-top: 8px !important; color: var(--faint) !important; font-size: 11px !important; }
+  .tabs {
+    flex: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px; padding: 6px 8px calc(6px + var(--safe-bottom));
+    border-top: 1px solid var(--line-soft); background: var(--panel);
+  }
+  .tab {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2px; min-width: 0; min-height: 52px; padding: 5px 2px;
+    border: 0; border-radius: 10px; background: transparent; color: var(--muted); font-size: 11px;
+  }
+  .tab svg { width: 22px; height: 22px; flex: none; }
+  .tab[aria-selected='true'] { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
+  .tab:active { background: var(--active); }
+  .status-message { min-height: 20px; margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+  .auth-status { margin-top: 10px; color: var(--muted); font-size: 13px; }
+  .answer-form { display: grid; gap: 8px; margin-top: 10px; }
+  .answer-form input {
+    width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--input-bg);
+  }
+  .answer-form .btn { width: 100%; }
+  .report { max-height: 360px; overflow: auto; margin: 10px 0 0; padding: 10px; border-radius: 10px; background: var(--panel-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .section-label { margin: 14px 0 8px; color: var(--muted); font-size: 12px; }
+  @media (max-width: 420px) {
+    .topbar { padding-inline: 10px; gap: 6px; }
+    .brand { gap: 7px; }
+    .brand img { width: 30px; height: 30px; }
+    .brand-text span { display: none; }
+    .connection { font-size: 11px; }
+    main { padding: 10px; }
+    .banner { margin-inline: 10px; }
+    .page-header h1 { font-size: 18px; }
+    .card { padding: 12px; }
+  }
+  @media (max-width: 350px) {
+    .brand-text { display: none; }
+    .topbar-actions { gap: 2px; }
+    .topbar .btn { padding-inline: 7px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <img src="/icons/superagent-192.svg" alt="" width="34" height="34">
+      <div class="brand-text"><strong>SuperAgent</strong><span>移动执行台</span></div>
+    </div>
+    <div class="topbar-actions">
+      <span id="connection" class="connection" data-state="offline" role="status">未验证</span>
+      <button id="refresh-button" class="btn" type="button" hidden>刷新</button>
+      <button id="token-button" class="btn" type="button">设备</button>
+    </div>
+  </header>
+
+  <section id="offline-banner" class="banner offline-banner" role="alert" hidden>
+    <strong>无法连接执行服务</strong>
+    <p>当前网络不可用。只能查看已缓存的静态页面，数据刷新与消息、审批操作均不可用。</p>
+  </section>
+
+  <section id="install-banner" class="banner" aria-label="安装 SuperAgent" hidden>
+    <strong>安装到主屏幕</strong>
+    <p>像原生应用一样打开 SuperAgent，随时查看执行进展。</p>
+    <div class="banner-actions">
+      <button id="install-button" class="btn primary small" type="button">安装</button>
+      <button id="dismiss-install" class="btn small" type="button">稍后</button>
+    </div>
+  </section>
+
+  <main>
+    <section id="access-page" class="page" aria-labelledby="access-title">
+      <div class="card">
+        <h1 id="access-title">连接受限设备</h1>
+        <p>输入或粘贴在桌面控制台配对的设备 token。仅当前页签可以访问聊天、任务、收件箱、产物与审批。</p>
+        <form id="token-form" class="token-form">
+          <label for="token-input">设备 token</label>
+          <input id="token-input" type="password" maxlength="200" placeholder="dsm_…" required autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="token-note auth-status">
+          <button id="token-submit" class="btn primary" type="submit">验证并连接</button>
+        </form>
+        <p id="auth-status" class="auth-status" role="alert">请输入设备 token 后连接。</p>
+        <p id="token-note" class="token-note">token 只保存在 sessionStorage，不写入 URL 或其他持久存储；关闭页签后需要重新输入。验证成功后会按 token 的服务端权限显示数据。</p>
+      </div>
+    </section>
+
+    <div id="pages" class="pages" hidden>
+      <section id="page-chat" class="page" role="tabpanel" aria-labelledby="tab-chat" data-page="chat">
+        <div class="page-header"><div><h1>聊天</h1><p>向当前执行会话发送目标与指令</p></div></div>
+        <div id="session-list" class="card" aria-live="polite"><p>正在读取会话…</p></div>
+        <div id="chat-log" class="card" aria-live="polite"><p>本页发送的消息及投递结果会显示在这里。</p></div>
+        <form id="chat-form" class="composer">
+          <label for="chat-input" hidden>输入消息</label>
+          <textarea id="chat-input" rows="1" maxlength="20000" placeholder="输入目标或指令…" disabled required></textarea>
+          <button id="chat-send" class="btn primary" type="submit" aria-label="发送消息" disabled>↑</button>
+        </form>
+        <p id="chat-status" class="status-message" role="status">验证设备 token 后可用。</p>
+      </section>
+
+      <section id="page-tasks" class="page" role="tabpanel" aria-labelledby="tab-tasks" data-page="tasks" hidden>
+        <div class="page-header"><div><h1>任务</h1><p>读取当前会话的任务进度与结果</p></div></div>
+        <div id="task-list" class="card" aria-live="polite"><p>正在读取任务…</p></div>
+        <p id="task-status" class="status-message" role="status"></p>
+      </section>
+
+      <section id="page-todos" class="page" role="tabpanel" aria-labelledby="tab-todos" data-page="todos" hidden>
+        <div class="page-header"><div><h1>收件箱</h1><p>处理工具审批与任务问题</p></div></div>
+        <div id="inbox-list" class="card" aria-live="polite"><p>正在读取收件箱…</p></div>
+        <p id="inbox-status" class="status-message" role="status"></p>
+      </section>
+
+      <section id="page-artifacts" class="page" role="tabpanel" aria-labelledby="tab-artifacts" data-page="artifacts" hidden>
+        <div class="page-header"><div><h1>产物</h1><p>读取交付物清单与报告</p></div></div>
+        <div id="artifact-list" class="card" aria-live="polite"><p>正在读取产物…</p></div>
+        <p id="artifact-status" class="status-message" role="status"></p>
+      </section>
+    </div>
+  </main>
+
+  <nav id="tabs" class="tabs" role="tablist" aria-label="移动页面" hidden>
+    <button id="tab-chat" class="tab" type="button" role="tab" aria-selected="true" aria-controls="page-chat" data-page="chat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 11.5a8 8 0 0 1-8 8H5l-3 2v-10a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8Z"/><path d="M7 9h8M7 13h5"/></svg>
+      <span>聊天</span>
+    </button>
+    <button id="tab-tasks" class="tab" type="button" role="tab" aria-selected="false" aria-controls="page-tasks" data-page="tasks" tabindex="-1">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+      <span>任务</span>
+    </button>
+    <button id="tab-todos" class="tab" type="button" role="tab" aria-selected="false" aria-controls="page-todos" data-page="todos" tabindex="-1">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 12 4 4L17 6"/><path d="M13 18h8M5 6h4"/></svg>
+      <span>收件箱</span>
+    </button>
+    <button id="tab-artifacts" class="tab" type="button" role="tab" aria-selected="false" aria-controls="page-artifacts" data-page="artifacts" tabindex="-1">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v5h4M9 12h6M9 16h6"/></svg>
+      <span>产物</span>
+    </button>
+  </nav>
+</div>
+
+<script>
+(function () {
+  'use strict'
+  var TOKEN_KEY = 'superagent.mobile.token'
+  var TOKEN_PATTERN = /^dsm_[A-Za-z0-9_-]{43}$/
+  var API_BASES = Object.freeze(['/api', '/superagent/api'])
+  var ROUTES = Object.freeze({
+    status: { method: 'GET', path: '/api/console/device/status', scope: null },
+    sessions: { method: 'GET', path: '/api/console/sessions', scope: 'chat' },
+    events: { method: 'GET', path: '/api/console/events', scope: 'chat' },
+    runs: { method: 'GET', path: '/api/console/runs', scope: 'tasks' },
+    notifications: { method: 'GET', path: '/api/console/notifications', scope: 'inbox' },
+    artifacts: { method: 'GET', path: '/api/console/artifacts?limit=50', scope: 'artifacts' },
+    artifact: { method: 'GET', path: '/api/console/artifacts/', scope: 'artifacts' },
+    message: { method: 'POST', path: '/api/console/message', scope: 'chat' },
+    approval: { method: 'POST', path: '/api/console/approval', scope: 'approval' },
+    answer: { method: 'POST', path: '/api/console/answer', scope: 'approval' }
+  })
+  var pages = ['chat', 'tasks', 'todos', 'artifacts']
+  var state = {
+    token: '', apiBase: '', authenticated: false, connecting: false, sending: false,
+    activePage: 'chat', sessions: [], artifacts: [], currentSessionId: '', messages: [], artifactDetail: null,
+    loading: { chat: false, tasks: false, todos: false, artifacts: false }
+  }
+  var installEvent = null
+  var realtimeController = null
+  var realtimeReloadTimer = null
+  var connection = document.getElementById('connection')
+  var offlineBanner = document.getElementById('offline-banner')
+  var installBanner = document.getElementById('install-banner')
+  var accessPage = document.getElementById('access-page')
+  var pagesNode = document.getElementById('pages')
+  var tabsNode = document.getElementById('tabs')
+  var tokenInput = document.getElementById('token-input')
+  var tokenSubmit = document.getElementById('token-submit')
+  var authStatus = document.getElementById('auth-status')
+  var refreshButton = document.getElementById('refresh-button')
+  var chatInput = document.getElementById('chat-input')
+  var chatSend = document.getElementById('chat-send')
+
+  function byId(id) { return document.getElementById(id) }
+  function text(value, fallback) {
+    var result = typeof value === 'string' || typeof value === 'number' ? String(value) : ''
+    return result || fallback || ''
+  }
+  function make(tag, className, value) {
+    var node = document.createElement(tag)
+    if (className) node.className = className
+    if (value !== undefined) node.textContent = value
+    return node
+  }
+  function timeLabel(value) {
+    var at = Date.parse(value)
+    return Number.isFinite(at) ? new Date(at).toLocaleString('zh-CN', { hour12: false }) : ''
+  }
+  function empty(container, message) {
+    var node = make('div', 'empty')
+    node.append(make('span', 'empty-icon', '◎'), make('strong', '', message), make('p', '', '下拉刷新页面，或点击顶部“刷新”。'))
+    container.replaceChildren(node)
+  }
+  function loading(container, message) { container.replaceChildren(make('p', '', message || '正在读取…')) }
+  function failure(container, error) {
+    var node = make('p', 'error-text', error.message || '读取失败')
+    container.replaceChildren(node)
+  }
+
+  function preferredTheme() {
+    var asked = new URLSearchParams(location.search).get('theme')
+    if (asked === 'dark' || asked === 'light') return asked
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  }
+  document.documentElement.dataset.theme = preferredTheme()
+
+  function setConnection(value) {
+    connection.dataset.state = value
+    connection.textContent = value === 'online' ? '已连接' : value === 'connecting' ? '验证中' : value === 'offline' ? '离线' : '未验证'
+    offlineBanner.hidden = value !== 'offline'
+    var enabled = value === 'online' && state.authenticated
+    chatInput.disabled = !enabled || state.sending
+    chatSend.disabled = !enabled || state.sending
+    byId('chat-status').textContent = enabled ? '' : value === 'offline' ? '无法连接执行服务' : '验证设备 token 后可用。'
+  }
+
+  function readToken() {
+    try { return sessionStorage.getItem(TOKEN_KEY) || '' } catch { return '' }
+  }
+  function saveToken(value) {
+    try {
+      if (value) sessionStorage.setItem(TOKEN_KEY, value)
+      else sessionStorage.removeItem(TOKEN_KEY)
+      return true
+    } catch { return false }
+  }
+  function clearData() {
+    state.sessions = []
+    state.artifacts = []
+    state.currentSessionId = ''
+    state.messages = []
+    state.artifactDetail = null
+    for (var id of ['session-list', 'chat-log', 'task-list', 'inbox-list', 'artifact-list']) byId(id).replaceChildren()
+    renderMessages()
+  }
+  function stopRealtime() {
+    if (realtimeController) realtimeController.abort()
+    realtimeController = null
+    if (realtimeReloadTimer) clearTimeout(realtimeReloadTimer)
+    realtimeReloadTimer = null
+  }
+
+  function queueRealtimeRefresh() {
+    if (realtimeReloadTimer) return
+    realtimeReloadTimer = setTimeout(function () {
+      realtimeReloadTimer = null
+      if (state.authenticated && !document.hidden && navigator.onLine) loadPage(state.activePage)
+    }, 300)
+  }
+
+  async function startRealtime() {
+    stopRealtime()
+    while (state.authenticated) {
+      var controller = new AbortController()
+      realtimeController = controller
+      try {
+        var response = await fetch(routePath('events'), {
+          method: 'GET', headers: { authorization: 'Bearer ' + state.token, accept: 'text/event-stream' },
+          cache: 'no-store', credentials: 'omit', redirect: 'error', signal: controller.signal
+        })
+        if (response.status === 401) { authFailure({ status: 401 }); return }
+        if (!response.ok || !/text\/event-stream/i.test(response.headers.get('content-type') || '') || !response.body) return
+        var reader = response.body.getReader()
+        var decoder = new TextDecoder()
+        var buffer = ''
+        while (state.authenticated) {
+          var part = await reader.read()
+          if (part.done) break
+          buffer += decoder.decode(part.value, { stream: true })
+          var boundary
+          while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+            var packet = buffer.slice(0, boundary)
+            buffer = buffer.slice(boundary + 2)
+            var dataLine = packet.split('\n').find(function (line) { return line.indexOf('data: ') === 0 })
+            if (!dataLine) continue
+            try { JSON.parse(dataLine.slice(6)); queueRealtimeRefresh() } catch {}
+          }
+        }
+      } catch (error) {
+        if (error.status === 401) { authFailure(error); return }
+      } finally {
+        if (realtimeController === controller) realtimeController = null
+      }
+      if (!state.authenticated || controller.signal.aborted) return
+      await new Promise(function (resolve) { var timer = setTimeout(resolve, 2000); if (timer.unref) timer.unref() })
+    }
+  }
+
+  function lock(message) {
+    stopRealtime()
+    state.authenticated = false
+    state.connecting = false
+    state.token = ''
+    state.apiBase = ''
+    saveToken('')
+    clearData()
+    accessPage.hidden = false
+    pagesNode.hidden = true
+    tabsNode.hidden = true
+    refreshButton.hidden = true
+    tokenSubmit.disabled = false
+    tokenSubmit.textContent = '验证并连接'
+    tokenInput.disabled = false
+    tokenInput.value = ''
+    chatInput.value = ''
+    authStatus.textContent = message || '请输入设备 token 后连接。'
+    setConnection('offline')
+    offlineBanner.hidden = true
+    connection.textContent = '未验证'
+    byId('page-access')?.scrollTo?.(0, 0)
+    accessPage.scrollTo?.(0, 0)
+  }
+
+  function ApiError(message, status, code, hint) {
+    this.message = message
+    this.status = status
+    this.code = code
+    this.hint = hint
+  }
+  ApiError.prototype = Object.create(Error.prototype)
+  ApiError.prototype.name = 'ApiError'
+
+  function routePath(name, id) {
+    var route = ROUTES[name]
+    if (!route) throw new Error('Route is not allowed')
+    var path = route.path
+    if (name === 'artifact') {
+      if (typeof id !== 'string' || !/^art_[A-Za-z0-9_.-]{1,4096}$/.test(id)) throw new Error('Invalid artifact id')
+      path += encodeURIComponent(id)
+    }
+    return state.apiBase && state.apiBase !== '/api' ? path.replace(/^\/api/, state.apiBase) : path
+  }
+
+  async function request(name, options) {
+    options = options || {}
+    var route = ROUTES[name]
+    if (!route || name !== 'status' && !state.authenticated) throw new Error('Not authenticated')
+    var headers = { authorization: 'Bearer ' + (options.token || state.token), accept: 'application/json' }
+    if (options.body !== undefined) headers['content-type'] = 'application/json'
+    var controller = new AbortController()
+    var timer = setTimeout(function () { controller.abort() }, 20000)
+    var response
+    try {
+      response = await fetch(routePath(name, options.id), {
+        method: route.method,
+        headers: headers,
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        credentials: 'omit',
+        cache: 'no-store',
+        redirect: 'error',
+        referrerPolicy: 'no-referrer',
+        signal: controller.signal
+      })
+    } catch (error) {
+      if (error && error.name === 'AbortError') throw new ApiError('请求超时，请稍后重试。', 0, 'timeout')
+      throw new ApiError('无法连接执行服务，请检查网络后重试。', 0, 'network')
+    } finally {
+      clearTimeout(timer)
+    }
+    var payload = null
+    try { payload = await response.json() } catch { /* A non-JSON answer is reported below. */ }
+    if (!response.ok) {
+      var detail = payload && payload.error
+      throw new ApiError(text(detail?.summary || detail?.detail || payload?.message, '请求失败（HTTP ' + response.status + '）。'), response.status, text(detail?.id, 'http-error'), text(detail?.hint))
+    }
+    if (!payload || payload.ok !== true || !Object.hasOwn(payload, 'data')) {
+      throw new ApiError('执行服务返回了无法识别的响应。', response.status, 'bad-response')
+    }
+    return payload.data
+  }
+
+  function authFailure(error) {
+    if (error.status !== 401) return false
+    lock('设备 token 无效、已过期或已撤销。请重新配对并输入新 token。')
+    return true
+  }
+  function scopedFailure(error) {
+    return error.status === 403 ? '当前设备 token 没有此功能的权限，请联系配对设备的管理员调整 scope。' : ''
+  }
+
+  async function connect() {
+    if (state.connecting) return
+    var token = tokenInput.value.trim()
+    authStatus.textContent = ''
+    if (!token) {
+      authStatus.textContent = '缺少设备 token，请输入后再连接。'
+      tokenInput.focus()
+      return
+    }
+    if (!TOKEN_PATTERN.test(token)) {
+      authStatus.textContent = '设备 token 格式无效，应是以 dsm_ 开头的受限设备 token。'
+      tokenInput.focus()
+      return
+    }
+    if (!saveToken(token)) {
+      authStatus.textContent = '当前浏览器禁止 sessionStorage，无法安全保存 token。'
+      return
+    }
+    state.connecting = true
+    state.authenticated = false
+    state.token = token
+    state.apiBase = API_BASES[0]
+    clearData()
+    tokenSubmit.disabled = true
+    tokenSubmit.textContent = '正在验证…'
+    tokenInput.disabled = true
+    setConnection('connecting')
+    var lastError = null
+    for (var base of API_BASES) {
+      state.apiBase = base
+      try {
+        await request('status', { token: token })
+        state.authenticated = true
+        state.connecting = false
+        accessPage.hidden = true
+        pagesNode.hidden = false
+        tabsNode.hidden = false
+        refreshButton.hidden = false
+        tokenInput.value = ''
+        tokenInput.disabled = false
+        tokenSubmit.disabled = false
+        tokenSubmit.textContent = '验证并连接'
+        setConnection('online')
+        showPage(state.activePage, false)
+        startRealtime().catch(function () {})
+        await loadPage(state.activePage)
+        return
+      } catch (error) {
+        lastError = error
+        if (error.status === 401) { authFailure(error); return }
+        if (error.status !== 404 && error.status !== 405) break
+      }
+    }
+    state.connecting = false
+    tokenSubmit.disabled = false
+    tokenSubmit.textContent = '验证并连接'
+    tokenInput.disabled = false
+    setConnection('offline')
+    offlineBanner.hidden = true
+    connection.textContent = '未验证'
+    authStatus.textContent = scopedFailure(lastError) || (lastError?.message || '设备验证失败。')
+    if (lastError?.hint) authStatus.textContent += ' ' + lastError.hint
+    accessPage.hidden = false
+    pagesNode.hidden = true
+    tabsNode.hidden = true
+    refreshButton.hidden = true
+  }
+
+  function showPage(name, updateHash) {
+    if (pages.indexOf(name) < 0) name = 'chat'
+    state.activePage = name
+    pages.forEach(function (page) {
+      byId('page-' + page).hidden = page !== name
+      var tab = byId('tab-' + page)
+      tab.setAttribute('aria-selected', String(page === name))
+      tab.tabIndex = page === name ? 0 : -1
+    })
+    if (updateHash !== false && location.hash !== '#' + name) history.replaceState(null, '', '#' + name)
+  }
+  function routeFromHash() { showPage(location.hash.slice(1)) }
+
+  function renderSessions(data) {
+    var container = byId('session-list')
+    var rows = Array.isArray(data?.sessions) ? data.sessions : []
+    state.sessions = rows
+    state.currentSessionId = text(data?.currentSessionId)
+    container.replaceChildren()
+    if (!rows.length) {
+      container.append(make('h2', '', '会话'), make('p', '', text(data?.reason, '暂无会话；发送消息后服务端可能会创建当前会话。')))
+      return
+    }
+    container.append(make('h2', '', '会话（只读）'))
+    rows.forEach(function (session) {
+      var id = text(session.sessionId || session.id)
+      var card = make('article', 'card')
+      card.append(make('h3', '', text(session.title || session.name || id, '未命名会话')))
+      if (state.currentSessionId && state.currentSessionId === id) card.append(make('p', 'meta', '当前执行会话'))
+      card.append(make('p', 'meta', text(session.cwd || id)))
+      if (timeLabel(session.updatedAt)) card.append(make('p', 'meta', '更新于 ' + timeLabel(session.updatedAt)))
+      container.append(card)
+    })
+  }
+  function renderTasks(data) {
+    var container = byId('task-list')
+    var rows = Array.isArray(data?.runs) ? data.runs : []
+    container.replaceChildren()
+    if (!rows.length) { empty(container, '暂无任务'); return }
+    rows.forEach(function (run) {
+      var card = make('article', 'card')
+      card.append(make('h3', '', text(run.goal || run.title || run.id, '未命名任务')))
+      card.append(make('p', '', '状态：' + text(run.status, '未知')))
+      if (run.phase) card.append(make('p', '', '阶段：' + text(run.phase)))
+      if (timeLabel(run.updatedAt || run.finishedAt)) card.append(make('p', 'meta', '更新于 ' + timeLabel(run.updatedAt || run.finishedAt)))
+      card.append(make('p', 'meta', text(run.id)))
+      container.append(card)
+    })
+  }
+  function renderMessages() {
+    var container = byId('chat-log')
+    container.replaceChildren()
+    if (!state.messages.length) {
+      container.append(make('h2', '', '发送记录'), make('p', '', '本页发送的消息及投递结果会显示在这里。'))
+      return
+    }
+    state.messages.forEach(function (message) {
+      var card = make('article', 'card')
+      card.append(make('h3', '', '你'))
+      card.append(make('p', '', message.text))
+      card.append(make('p', 'meta' + (message.error ? ' error-text' : ''), message.error || '已发送'))
+      if (message.sessionId) card.append(make('p', 'meta', '会话：' + message.sessionId))
+      container.append(card)
+    })
+    container.scrollTop = container.scrollHeight
+  }
+  function inboxRows(data) {
+    return Array.isArray(data?.inbox) ? data.inbox : Array.isArray(data?.notifications) ? data.notifications : []
+  }
+  function renderInbox(data) {
+    var container = byId('inbox-list')
+    var rows = inboxRows(data)
+    container.replaceChildren()
+    if (!rows.length) { empty(container, '暂无待处理事项'); return }
+    rows.forEach(function (item) {
+      var kind = text(item.kind || item.event)
+      var card = make('article', 'card')
+      card.append(make('h3', '', text(item.title || item.toolName || kind, '收件箱事项')))
+      card.append(make('p', '', text(item.body || item.question || item.reason)))
+      if (timeLabel(item.at || item.askedAt)) card.append(make('p', 'meta', timeLabel(item.at || item.askedAt)))
+      var result = make('p', 'status-message', '')
+      if (kind === 'approval') {
+        var actions = make('div', 'actions')
+        var allow = make('button', 'btn small', '允许这一次')
+        var reject = make('button', 'btn small danger', '拒绝')
+        allow.type = reject.type = 'button'
+        allow.addEventListener('click', function () { decideApproval(item, 'allow', card, result) })
+        reject.addEventListener('click', function () { decideApproval(item, 'reject', card, result) })
+        actions.append(allow, reject)
+        card.append(actions)
+      } else if (kind === 'decision') {
+        var form = make('form', 'answer-form')
+        var input = make('input')
+        input.type = 'text'
+        input.maxLength = 4000
+        input.placeholder = '输入回答…'
+        input.required = true
+        var submit = make('button', 'btn small primary', '提交回答')
+        submit.type = 'submit'
+        form.append(input, submit)
+        var options = Array.isArray(item.options) ? item.options : []
+        if (options.length) {
+          var choices = make('div', 'answer-options')
+          options.forEach(function (option) {
+            var choice = make('button', 'btn small', text(option))
+            choice.type = 'button'
+            choice.addEventListener('click', function () { input.value = text(option); input.focus() })
+            choices.append(choice)
+          })
+          form.append(choices)
+        }
+        form.addEventListener('submit', function (event) {
+          event.preventDefault()
+          answerQuestion(item, input.value, form, result)
+        })
+        card.append(form)
+      }
+      card.append(result)
+      container.append(card)
+    })
+  }
+  function renderArtifacts(data) {
+    var container = byId('artifact-list')
+    var rows = Array.isArray(data?.artifacts) ? data.artifacts : []
+    state.artifacts = rows
+    container.replaceChildren()
+    if (!rows.length && !state.artifactDetail) { empty(container, '暂无产物'); return }
+    if (state.artifactDetail) {
+      var detail = state.artifactDetail
+      var detailCard = make('article', 'card')
+      var artifact = detail.artifact || {}
+      detailCard.append(make('h2', '', text(artifact.name || artifact.id, '产物详情')))
+      if (artifact.path) detailCard.append(make('p', 'meta', text(artifact.path)))
+      var report = text(detail.run?.report)
+      detailCard.append(report ? make('pre', 'report', report) : make('p', '', '该产物没有可预览的报告。'))
+      container.append(detailCard)
+    }
+    rows.forEach(function (artifact) {
+      var card = make('article', 'card')
+      card.append(make('h3', '', text(artifact.name || artifact.id, '未命名产物')))
+      card.append(make('p', '', text(artifact.goal || artifact.kind || '交付物')))
+      if (timeLabel(artifact.at)) card.append(make('p', 'meta', timeLabel(artifact.at)))
+      if (artifact.path) card.append(make('p', 'meta', text(artifact.path)))
+      if (artifact.id) {
+        var open = make('button', 'btn small', '查看报告')
+        open.type = 'button'
+        open.addEventListener('click', function () { openArtifact(artifact.id, open) })
+        card.append(open)
+      }
+      container.append(card)
+    })
+  }
+
+  async function loadPage(name) {
+    if (!state.authenticated || state.loading[name]) return
+    state.loading[name] = true
+    refreshButton.disabled = true
+    var route = name === 'chat' ? 'sessions' : name === 'tasks' ? 'runs' : name === 'todos' ? 'notifications' : 'artifacts'
+    var container = byId(name === 'chat' ? 'session-list' : name === 'tasks' ? 'task-list' : name === 'todos' ? 'inbox-list' : 'artifact-list')
+    var status = byId({ chat: 'chat-status', tasks: 'task-status', todos: 'inbox-status', artifacts: 'artifact-status' }[name])
+    loading(container)
+    status.textContent = '正在刷新…'
+    try {
+      var data = await request(route)
+      if (!state.authenticated || state.activePage !== name) return
+      if (name === 'chat') renderSessions(data)
+      else if (name === 'tasks') renderTasks(data)
+      else if (name === 'todos') renderInbox(data)
+      else { state.artifactDetail = null; renderArtifacts(data) }
+      status.textContent = '已刷新 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false })
+    } catch (error) {
+      if (!state.authenticated || authFailure(error)) return
+      failure(container, new Error(scopedFailure(error) || error.message))
+      status.textContent = error.hint || ''
+    } finally {
+      state.loading[name] = false
+      refreshButton.disabled = false
+    }
+  }
+
+  async function sendMessage(event) {
+    event.preventDefault()
+    var value = chatInput.value.trim()
+    if (!value || !state.authenticated || state.sending) return
+    state.sending = true
+    chatSend.disabled = true
+    chatInput.disabled = true
+    var message = { text: value, error: '' }
+    state.messages.push(message)
+    renderMessages()
+    byId('chat-status').textContent = '正在发送…'
+    try {
+      var data = await request('message', { body: { text: value } })
+      message.error = data?.accepted === false ? '服务端未接受消息。' : ''
+      message.sessionId = text(data?.sessionId)
+      if (message.sessionId) state.currentSessionId = message.sessionId
+      if (chatInput.value.trim() === value) chatInput.value = ''
+      byId('chat-status').textContent = '消息已发送。'
+    } catch (error) {
+      if (authFailure(error)) return
+      message.error = scopedFailure(error) || error.message
+      byId('chat-status').textContent = message.error
+    } finally {
+      state.sending = false
+      renderMessages()
+      if (state.authenticated) setConnection(navigator.onLine ? 'online' : 'offline')
+    }
+  }
+
+  async function decideApproval(item, decision, card, result) {
+    if (!state.authenticated) return
+    var id = text(item.approvalId || item.id)
+    if (!id) { result.textContent = '审批编号缺失，请刷新。'; return }
+    for (var button of card.querySelectorAll('button')) button.disabled = true
+    result.textContent = '正在提交…'
+    try {
+      await request('approval', { body: { id: id, decision: decision } })
+      result.textContent = decision === 'allow' ? '已允许这一次。' : '已拒绝。'
+      await loadPage('todos')
+    } catch (error) {
+      if (authFailure(error)) return
+      result.textContent = scopedFailure(error) || error.message
+      for (var button of card.querySelectorAll('button')) button.disabled = false
+    }
+  }
+  async function answerQuestion(item, value, form, result) {
+    var answer = value.trim()
+    var runId = text(item.runId || item.taskId)
+    if (!answer || !runId) { result.textContent = '回答和任务编号均不能为空。'; return }
+    for (var button of form.querySelectorAll('button')) button.disabled = true
+    result.textContent = '正在提交…'
+    try {
+      await request('answer', { body: {
+        owner: text(item.sessionId) || undefined,
+        runId: runId,
+        attentionId: text(item.decisionId || item.id) || undefined,
+        answer: answer
+      } })
+      result.textContent = '回答已提交。'
+      await loadPage('todos')
+    } catch (error) {
+      if (authFailure(error)) return
+      result.textContent = scopedFailure(error) || error.message
+      for (var button of form.querySelectorAll('button')) button.disabled = false
+    }
+  }
+  async function openArtifact(id, button) {
+    button.disabled = true
+    byId('artifact-status').textContent = '正在读取产物…'
+    try {
+      state.artifactDetail = await request('artifact', { id: id })
+      if (!state.authenticated) return
+      renderArtifacts({ artifacts: state.artifacts })
+      byId('artifact-status').textContent = '产物已读取。'
+      byId('page-artifacts').scrollTop = 0
+    } catch (error) {
+      if (authFailure(error)) return
+      byId('artifact-status').textContent = scopedFailure(error) || error.message
+    } finally {
+      button.disabled = false
+    }
+  }
+
+  byId('token-form').addEventListener('submit', function (event) { event.preventDefault(); return connect() })
+  byId('chat-form').addEventListener('submit', sendMessage)
+  byId('token-button').addEventListener('click', function () {
+    if (state.authenticated) {
+      lock('设备 token 已从本页签清除。')
+    } else if (state.connecting) {
+      return
+    } else {
+      accessPage.hidden = false
+      pagesNode.hidden = true
+      tabsNode.hidden = true
+      refreshButton.hidden = true
+      tokenInput.focus()
+    }
+  })
+  refreshButton.addEventListener('click', function () { return loadPage(state.activePage) })
+  pages.forEach(function (page) {
+    byId('tab-' + page).addEventListener('click', function () { showPage(page); if (state.authenticated) return loadPage(page) })
+  })
+  tabsNode.addEventListener('keydown', function (event) {
+    var current = event.target
+    if (!current || !current.dataset || !current.dataset.page || [37, 39, 40, 38].indexOf(event.keyCode) < 0) return
+    event.preventDefault()
+    var index = pages.indexOf(current.dataset.page)
+    var direction = event.keyCode === 37 || event.keyCode === 38 ? -1 : 1
+    var next = byId('tab-' + pages[(index + direction + pages.length) % pages.length])
+    showPage(next.dataset.page)
+    next.focus()
+    if (state.authenticated) loadPage(next.dataset.page)
+  })
+  window.addEventListener('hashchange', function () {
+    routeFromHash()
+    if (state.authenticated) loadPage(state.activePage)
+  })
+  window.addEventListener('offline', function () { setConnection('offline') })
+  window.addEventListener('online', function () {
+    if (!state.authenticated) return
+    setConnection('connecting')
+    tokenInput.value = readToken()
+    connect()
+  })
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && state.authenticated && navigator.onLine) loadPage(state.activePage)
+  })
+  setInterval(function () {
+    if (!document.hidden && state.authenticated && navigator.onLine) loadPage(state.activePage)
+  }, 15000)
+
+  /* Route integration can supply a token without ever persisting it outside this tab. */
+  window.SuperAgentMobile = Object.freeze({
+    getToken: readToken,
+    setToken: function (value) {
+      var token = String(value || '').trim()
+      if (token && !TOKEN_PATTERN.test(token)) return false
+      var saved = saveToken(token)
+      if (saved) {
+        tokenInput.value = token
+        authStatus.textContent = token ? 'token 已放入当前页签，请点击“验证并连接”。' : '设备 token 已从本页签清除。'
+      }
+      return saved
+    },
+    clearToken: function () { lock('设备 token 已从本页签清除。'); return true },
+    showPage: showPage
+  })
+
+  window.addEventListener('beforeinstallprompt', function (event) {
+    event.preventDefault()
+    installEvent = event
+    installBanner.hidden = false
+  })
+  byId('install-button').addEventListener('click', function () {
+    if (!installEvent) return
+    installEvent.prompt()
+    installEvent.userChoice.finally(function () {
+      installEvent = null
+      installBanner.hidden = true
+    })
+  })
+  byId('dismiss-install').addEventListener('click', function () { installBanner.hidden = true })
+  window.addEventListener('appinstalled', function () {
+    installEvent = null
+    installBanner.hidden = true
+  })
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {
+        byId('chat-status').textContent = '离线缓存不可用；在线 API 仍可尝试连接。'
+      })
+    })
+    navigator.serviceWorker.addEventListener('message', function (event) {
+      if (event.data && event.data.type === 'SUPERAGENT_OFFLINE') setConnection('offline')
+    })
+  }
+
+  routeFromHash()
+  var stored = readToken()
+  if (stored && TOKEN_PATTERN.test(stored)) {
+    tokenInput.value = stored
+    authStatus.textContent = '已恢复当前页签的设备 token，请验证后连接。'
+  } else {
+    if (stored) saveToken('')
+    lock('请输入设备 token 后连接。')
+  }
+})()
+</script>
+</body>
+</html>

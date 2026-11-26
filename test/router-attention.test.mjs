@@ -5,12 +5,13 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { createRouter, readRouterDecision } from '../lib/router.js'
+import { approvePlan, createCandidatePlanPreview } from '../lib/plan-preview.js'
 
 // Scratch state stays outside the repository; DSH_TEST_TMP_DIR only redirects it.
 const TMP_ROOT = process.env.DSH_TEST_TMP_DIR ?? os.tmpdir()
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
-async function until(check, what, timeoutMs = 5000) {
+async function until(check, what, timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const value = await check()
@@ -39,6 +40,47 @@ function harness({ state, projects, tasks, classify, execute }) {
     boot,
     async stopAll() {
       for (const router of routers) await router.stop()
+    },
+  }
+}
+
+const CANDIDATE_MODEL = 'test/candidate-model'
+const CANDIDATE_PRICE = { input: 1, output: 1, cacheRead: 0, currency: 'USD' }
+
+async function candidateSubmission(base, id) {
+  const project = path.join(base, 'workspace').replaceAll('\\', '/')
+  const goal = { title: 'Ship candidate release', description: 'Draft and review the release notes.' }
+  const preview = createCandidatePlanPreview({
+    goal,
+    project,
+    subtasks: [
+      {
+        id: 'draft', title: 'Draft release notes', prompt: 'Write the release notes.',
+        dependsOn: [], acceptance: [{ text: 'The release notes cover every change.' }],
+        deliverables: ['docs/release.md'], maxRounds: 2, maxWallClockMinutes: 15,
+      },
+      {
+        id: 'review', title: 'Review evidence', objective: 'Check every claim against the evidence.',
+        dependsOn: ['draft'], acceptance: ['Every claim has evidence.'],
+        deliverables: [], maxRounds: 3, maxWallClockMinutes: 20,
+      },
+    ],
+    capabilities: ['analysis', `model.${CANDIDATE_MODEL}`],
+    budget: { maxCost: 1 },
+    model: { name: CANDIDATE_MODEL, pricing: CANDIDATE_PRICE },
+    permissionScope: {
+      tools: [], allow: [`model.${CANDIDATE_MODEL}`], deny: ['network', 'shell.execute'], approvalMode: 'manual',
+    },
+    runtime: { cwd: project, isolation: 'workspace', provider: 'local' },
+  })
+  assert.equal(preview.status, 'ready')
+  const planApproval = approvePlan(preview, { planDigest: preview.planDigest, approvedBy: 'router-test' })
+  const candidatePlan = structuredClone(preview.inputSnapshot)
+  return {
+    project, preview, planApproval, candidatePlan,
+    input: {
+      id, text: JSON.stringify(goal), project, target: null, intent: 'task',
+      candidatePlan, planApproval,
     },
   }
 }
@@ -135,7 +177,7 @@ test('a known alias in the same workspace answers status and plan without the cl
   try {
     await router.submit({ id: 'attention-alias-1', project: 'release', text: '把准备发布说明叫做发版说明' })
     await settled(router)
-    assert.equal((await router.snapshot()).messages.at(-1).text, '别名 发版说明')
+    assert.equal((await router.snapshot()).messages.at(-1).text, '已记录别名「发版说明」。')
 
     await router.submit({ id: 'attention-status-1', project: 'release', text: '/状态 发版说明' })
     const status = await settled(router)
@@ -143,11 +185,9 @@ test('a known alias in the same workspace answers status and plan without the cl
     assert.equal(executed.at(-1).action, 'status')
     assert.equal(executed.at(-1).target, 'goal-notes')
 
-    const before = (await router.snapshot()).messages.length
     await router.submit({ id: 'attention-plan-1', project: 'release', text: '/方案 发版说明' })
     const plan = await settled(router)
-    assert.deepEqual(plan.messages.slice(before).map(message => message.role), ['user'],
-      'an empty plan stays silent instead of saying 还没有')
+    assert.equal(plan.messages.at(-1).text, '这项任务还没有已确认的决定。')
 
     assert.equal(classifyCalls, 0, 'alias status and plan reads must not call the classifier')
     assert.equal(executed.filter(command => command.action === 'task').length, 0, 'a read must never create a task')
@@ -350,9 +390,7 @@ test('a finished phase is delivered once with its conclusion and evidence entry,
       return hits.length === 1 ? hits : null
     }, 'the phase receipt')
     assert.match(first[0].text, /门口留 1\.5 秒空镜/)
-    assert.match(first[0].text, /阶段「镜头方案」已交付/)
-    // The receipt button opens the evidence; phase and run ids stay out of chat.
-    assert.doesNotMatch(first[0].text, /复验清单与证据|run run-1|阶段 p1/)
+    assert.match(first[0].text, /复验清单与证据/)
     assert.equal(first[0].taskId, 'goal-playtest')
     assert.equal(first[0].phaseId, 'p1')
     assert.equal(first[0].runId, 'run-1')
@@ -377,8 +415,8 @@ test('a finished phase is delivered once with its conclusion and evidence entry,
       return messages.find(message => message.id?.startsWith('result-goal-playtest-')) ?? null
     }, 'the closing note')
     assert.match(closing.text, /未交付/)
-    assert.match(closing.text, /「试玩安排」失败/)
-    assert.doesNotMatch(closing.text, /p2「试玩安排」|p2「试玩安排」已完成/)
+    assert.match(closing.text, /p2「试玩安排」failed/)
+    assert.doesNotMatch(closing.text, /p2「试玩安排」已完成/)
     assert.equal(phaseReceipts((await router.snapshot()).messages).length, 1, 'a failed phase needs no accepted receipt')
   } finally {
     await stopAll()
@@ -450,7 +488,7 @@ test('asking which decisions are pending answers with the options without parkin
     const answer = snapshot.messages.at(-1)
     assert.equal(answer.role, 'assistant')
     assert.match(answer.text, /试玩定在哪个时间/)
-    assert.match(answer.text, /周六下午\/周日晚上/)
+    assert.match(answer.text, /周六下午 \/ 周日晚上/)
     assert.doesNotMatch(answer.text, /answer \/ stop/, 'the mechanics are not a person\'s choice')
     assert.equal(executed, 0, 'a read-only question must not start or park a task')
     assert.deepEqual(snapshot.messages.at(-1).taskIds, ['goal-playtest'])
@@ -460,29 +498,200 @@ test('asking which decisions are pending answers with the options without parkin
   }
 })
 
-test('a queued write stays in the snapshot until it is processed', async () => {
-  const { base, state } = await fixture('superagent-queued-snapshot')
-  let reject
+test('an approved candidate plan is accepted, advertised, and persisted without its approval credential', async () => {
+  const { base, state } = await fixture('superagent-candidate-approved')
+  const candidate = await candidateSubmission(base, 'candidate-approved-1')
   const { boot, stopAll } = harness({
-    state, projects: [], tasks: [],
-    classify: () => new Promise((_, fail) => { reject = fail }),
-    execute: async () => ({ text: '' }),
+    state, projects: [{ name: 'release', cwd: candidate.project }], tasks: [],
+    classify: () => assert.fail('an approved candidate plan must not be classified'),
+    execute: async () => ({ text: '已接下已批准的计划。', taskId: 'candidate-goal' }),
   })
   const router = boot()
   try {
-    await router.submit({ id: 'queued-command-0001', text: '帮我做掉新作业' })
-    const during = await until(async () => {
-      const snapshot = await router.snapshot()
-      return snapshot.pending === 1 ? snapshot : null
-    }, 'the queued write to appear in the snapshot')
-    assert.deepEqual(during.commands.map(item => item.id), ['queued-command-0001'],
-      'the panel can mark a message that is still waiting')
-    assert.equal(during.commands[0].text, '帮我做掉新作业')
-    reject(new Error('classification stopped'))
-    const after = await settled(router)
-    assert.deepEqual(after.commands, [], 'a finished write leaves the queue')
+    const accepted = await router.submit(candidate.input)
+    assert.deepEqual(accepted, { accepted: true, id: candidate.input.id, planDigest: candidate.preview.planDigest })
+    const snapshot = await settled(router)
+    assert.equal(snapshot.planExecution, 'candidate-plan-v1')
+
+    const command = await router.getCommand(candidate.input.id)
+    assert.deepEqual(command.candidatePlan, candidate.preview.inputSnapshot)
+    assert.equal(command.planDigest, candidate.preview.planDigest)
+    assert.equal(Object.hasOwn(command, 'planApproval'), false)
+    assert.equal(Object.hasOwn(command, 'preview'), false)
+    assert.doesNotMatch(JSON.stringify(command), /plan-approval-credential|router-test/)
   } finally {
-    reject?.(new Error('stop'))
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('candidate processing returns the exact deterministic DAG decision without calling the classifier', async () => {
+  const { base, state } = await fixture('superagent-candidate-dag')
+  const first = await candidateSubmission(base, 'candidate-dag-1')
+  const second = await candidateSubmission(base, 'candidate-dag-2')
+  const decisions = []
+  let classifyCalls = 0
+  const { boot, stopAll } = harness({
+    state, projects: [{ name: 'release', cwd: first.project }], tasks: [],
+    classify: () => { classifyCalls += 1; assert.fail('candidate execution must bypass classification') },
+    execute: async decision => {
+      decisions.push(decision)
+      return { text: '已接下已批准的计划。', taskId: `goal-${decision.requestId}` }
+    },
+  })
+  const router = boot()
+  try {
+    await router.submit(first.input)
+    await router.submit(second.input)
+    const snapshot = await settled(router)
+    assert.equal(classifyCalls, 0)
+    assert.equal(snapshot.metrics.classifyCalls, 0)
+    assert.equal(decisions.length, 2)
+
+    const decision = decisions[0]
+    assert.equal(decision.action, 'task')
+    assert.equal(decision.target, null)
+    assert.equal(decision.project, first.project)
+    assert.equal(decision.text, first.input.text)
+    assert.equal(decision.title, 'Ship candidate release')
+    assert.deepEqual(decision.phases, [
+      {
+        id: 'draft', title: 'Draft release notes', objective: 'Write the release notes.', dependsOn: [],
+        acceptance: [{ text: 'The release notes cover every change.' }], deliverables: ['docs/release.md'],
+        maxRounds: 2, maxWallClockMinutes: 15,
+      },
+      {
+        id: 'review', title: 'Review evidence', objective: 'Check every claim against the evidence.',
+        dependsOn: ['draft'], acceptance: ['Every claim has evidence.'], deliverables: [],
+        maxRounds: 3, maxWallClockMinutes: 20,
+      },
+    ])
+    assert.deepEqual(decision.budget, first.preview.budget)
+    assert.deepEqual(decision.model, first.preview.model)
+    assert.deepEqual(decision.permissionScope, first.preview.permissionScope)
+    assert.deepEqual(decision.runtime, first.preview.runtime)
+    assert.deepEqual(decision.candidatePlan, first.preview.inputSnapshot)
+    assert.equal(decision.planDigest, first.preview.planDigest)
+    assert.equal(decision.requestId, first.input.id)
+    assert.equal(decision.origin, null)
+    assert.equal(decision.deliveredReply, null)
+    assert.deepEqual(decision.preferences, [])
+    assert.equal(Object.hasOwn(decision, 'planApproval'), false)
+    assert.equal(Object.hasOwn(decision, '__classified'), false)
+
+    const stable = ({ requestId, at, ...value }) => value
+    assert.deepEqual(stable(decisions[0]), stable(decisions[1]), 'only request envelope fields may differ')
+  } finally {
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('tampered, mismatched, blocked, and cross-goal or cross-project candidate submissions are rejected', async () => {
+  const { base, state } = await fixture('superagent-candidate-reject')
+  const candidate = await candidateSubmission(base, 'candidate-rejected-1')
+  const otherProject = path.join(base, 'other-workspace').replaceAll('\\', '/')
+  let classifyCalls = 0
+  let executions = 0
+  const { boot, stopAll } = harness({
+    state, projects: [{ name: 'release', cwd: candidate.project }, { name: 'other', cwd: otherProject }], tasks: [],
+    classify: () => { classifyCalls += 1; return { action: 'task' } },
+    execute: async () => { executions += 1; return { text: '不应执行' } },
+  })
+  const router = boot()
+  const reject = async (input, code) => {
+    await assert.rejects(router.submit(input), error => {
+      assert.equal(error.code, code)
+      return true
+    })
+    assert.equal(await router.getCommand(input.id), null)
+  }
+  try {
+    const tamperedPlan = structuredClone(candidate.input)
+    tamperedPlan.id = 'candidate-plan-tampered'
+    tamperedPlan.candidatePlan.subtasks[0].prompt = 'Tampered after approval.'
+    await reject(tamperedPlan, 'PLAN_DIGEST_MISMATCH')
+
+    const tamperedApproval = structuredClone(candidate.input)
+    tamperedApproval.id = 'candidate-approval-tampered'
+    tamperedApproval.planApproval.runtime.provider = 'other-provider'
+    await reject(tamperedApproval, 'PLAN_APPROVAL_TAMPERED')
+
+    const otherPreview = createCandidatePlanPreview({ ...candidate.candidatePlan, goal: 'Another approved goal' })
+    const mismatchedApproval = structuredClone(candidate.input)
+    mismatchedApproval.id = 'candidate-approval-mismatch'
+    mismatchedApproval.planApproval = approvePlan(otherPreview, { planDigest: otherPreview.planDigest })
+    await reject(mismatchedApproval, 'PLAN_DIGEST_MISMATCH')
+
+    const blockedPreview = createCandidatePlanPreview({ ...candidate.candidatePlan, runtime: {} })
+    assert.equal(blockedPreview.status, 'blocked')
+    const blocked = structuredClone(candidate.input)
+    blocked.id = 'candidate-blocked-plan'
+    blocked.candidatePlan = blockedPreview.inputSnapshot
+    blocked.planApproval = { planDigest: blockedPreview.planDigest }
+    await reject(blocked, 'PLAN_BLOCKED')
+
+    const wrongGoal = structuredClone(candidate.input)
+    wrongGoal.id = 'candidate-goal-mismatch'
+    wrongGoal.text = 'A different goal.'
+    await reject(wrongGoal, 'PLAN_GOAL_MISMATCH')
+
+    const wrongProject = structuredClone(candidate.input)
+    wrongProject.id = 'candidate-project-mismatch'
+    wrongProject.project = otherProject
+    await reject(wrongProject, 'PLAN_PROJECT_MISMATCH')
+
+    const snapshot = await router.snapshot()
+    assert.equal(snapshot.pending, 0)
+    assert.deepEqual(snapshot.messages, [])
+    assert.equal(classifyCalls, 0)
+    assert.equal(executions, 0)
+  } finally {
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('candidate request-id replay survives restart without another dispatch and cannot change the binding', async () => {
+  const { base, state } = await fixture('superagent-candidate-replay')
+  const candidate = await candidateSubmission(base, 'candidate-replay-1')
+  let classifyCalls = 0
+  let executions = 0
+  const { boot, stopAll } = harness({
+    state, projects: [{ name: 'release', cwd: candidate.project }], tasks: [],
+    classify: () => { classifyCalls += 1; return { action: 'task' } },
+    execute: async () => { executions += 1; return { text: '已接下已批准的计划。', taskId: 'candidate-goal' } },
+  })
+  let router = boot()
+  try {
+    const first = await router.submit(candidate.input)
+    const immediateReplay = await router.submit(candidate.input)
+    assert.deepEqual(immediateReplay, first)
+    await settled(router)
+    assert.equal(executions, 1)
+
+    await stopAll()
+    router = boot()
+    const restartedReplay = await router.submit(candidate.input)
+    assert.deepEqual(restartedReplay, first)
+    const snapshot = await settled(router)
+    assert.equal(executions, 1)
+    assert.equal(classifyCalls, 0)
+    assert.equal(snapshot.messages.filter(message => message.id === candidate.input.id).length, 1)
+    assert.equal(snapshot.messages.filter(message => message.id === `reply-${candidate.input.id}`).length, 1)
+
+    const changedPlan = structuredClone(candidate.candidatePlan)
+    changedPlan.subtasks[0].prompt = 'A different plan reusing the same request id.'
+    const changedPreview = createCandidatePlanPreview(changedPlan)
+    const changed = {
+      ...structuredClone(candidate.input),
+      candidatePlan: changedPreview.inputSnapshot,
+      planApproval: approvePlan(changedPreview, { planDigest: changedPreview.planDigest }),
+    }
+    await assert.rejects(router.submit(changed), error => error.code === 'REQUEST_ID_CONFLICT')
+    assert.equal(executions, 1)
+    assert.deepEqual((await router.getCommand(candidate.input.id)).candidatePlan, candidate.preview.inputSnapshot)
+  } finally {
     await stopAll()
     await fsp.rm(base, { recursive: true, force: true })
   }

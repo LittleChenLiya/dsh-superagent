@@ -54,15 +54,24 @@ test('two concurrent stale breakers cannot both acquire the same lock', async t 
   await Promise.all(releases.filter(Boolean).map(release => release()))
 })
 
-test('a stale breaker fails closed instead of racing another reclaimer', async t => {
+test('a stale breaker from a dead holder is reclaimed before acquiring the lock', async t => {
   const file = await tempLock(t)
   const stale = { pid: 4321, hostname: 'another-host', at: '2020-01-01T00:00:00.000Z', token: 'stale' }
   await fsp.writeFile(file, `${JSON.stringify(stale)}\n`)
   await fsp.writeFile(`${file}.break`, `${JSON.stringify(stale)}\n`)
 
+  const release = await acquireFileLock(file)
+  assert.ok(release)
+  assert.notEqual(JSON.parse(await fsp.readFile(file, 'utf8')).token, stale.token)
+  await assert.rejects(fsp.access(`${file}.break`), { code: 'ENOENT' })
+  await release()
+})
+
+test('an unreadable breaker fails closed instead of being treated as an expired lock', async t => {
+  const file = await tempLock(t)
+  await fsp.writeFile(file, '{}\n')
+  await fsp.writeFile(`${file}.break`, '')
   await assert.rejects(acquireFileLock(file), /stale lock breaker/)
-  assert.deepEqual(JSON.parse(await fsp.readFile(file, 'utf8')), stale)
-  assert.deepEqual(JSON.parse(await fsp.readFile(`${file}.break`, 'utf8')), stale)
 })
 
 test('a busy breaker makes release fail loudly instead of leaking the lock silently', async t => {

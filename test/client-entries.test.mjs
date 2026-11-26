@@ -11,13 +11,27 @@ const source = await readFile(path.join(root, 'lib', 'client.js'), 'utf8')
  * Phase 1 acceptance: every console capability the panel promises must be
  * reached by the panel itself, not left to a second page.
  */
-test('the panel sends through one router and keeps project selection local to the composer', () => {
+test('the panel sends through one router and keeps workspace selection local to the composer', () => {
   assert.ok(source.includes("call('/message',"))
   assert.ok(source.includes("call('/router')"))
   assert.ok(source.includes("call('/projects',"))
   assert.ok(!source.includes("call('/sessions')"))
   assert.ok(!source.includes("call('/session/switch'"))
   assert.ok(!source.includes('编辑助理名称'))
+  assert.ok(source.includes("const PANEL_LABEL = '全局助理'"))
+  assert.ok(source.includes('工作区文件夹绝对路径'))
+  assert.ok(!source.includes('项目助理'))
+  assert.ok(!source.includes('项目专属助理'))
+  assert.ok(!source.includes('项目文件夹'))
+})
+
+test('the global workbench reaches artifacts, automation, and all six rail tabs', () => {
+  assert.ok(source.includes('call(`/artifacts?${artifactQuery(query)}`)'))
+  assert.ok(source.includes("call('/schedules')"))
+  assert.ok(source.includes("label: '概览'") && source.includes("label: '自动化'") && source.includes("label: '更多'"))
+  assert.ok(source.includes('dsa-workbench-badge'))
+  assert.ok(source.includes('暂无自动化执行记录'))
+  assert.ok(source.includes('ownerSessionId ?? descriptor.owner'))
 })
 
 test('the panel reaches upload, answers and run-level cancel', () => {
@@ -41,88 +55,66 @@ test('questions and plans are answerable from the shared inbox', () => {
   assert.ok(source.includes("call('/answer'"), 'the answer path is wired')
   assert.ok(source.includes('item.options'), 'plan confirmations render one-tap options')
   assert.ok(source.includes("item.source === 'plan'"), 'plan confirmations say so')
-  assert.ok(source.includes("className: 'dsa-inbox-msg'"), 'pending items are spoken in the conversation')
+  assert.ok(source.includes("call('/notices/read'"), 'pending inbox items can be marked read')
   assert.ok(source.includes("frame.action === 'expired'"), 'an expired approval explains itself instead of vanishing')
 })
 
-test('every run card opens its detail in place instead of replacing the list', () => {
-  assert.ok(source.includes("'dsa-run-inline'"), 'a run card renders the shared run body inside itself')
-  assert.ok(source.includes("renderRunDetail: run => h(RunDetail,"), 'the card and the takeover view share one run body')
-  assert.ok(!source.includes("onOpen(card.run.id, card.run.parentSessionId)"),
-    'a left click no longer swaps the whole list for a run page')
+test('the run list is clickable instead of a dead list', () => {
+  assert.ok(source.includes('onClick: () => onOpen(task.id, task.parentSessionId ?? task.ownerSessionId)'), 'each run row opens its detail in the correct scope')
   assert.ok(source.includes("className: 'dsa-rowitem'") && source.includes("type: 'button'"), 'run rows are buttons')
   assert.ok(source.includes("waiting ? 'waiting' : task.status"), 'a run waiting on a person turns amber')
-  assert.ok(source.includes("'待决定'"), 'the waiting row says what it is waiting for')
+  assert.ok(source.includes("'等你决定'"), 'the waiting row says what it is waiting for')
 })
 
-test('sessions are cards that fit two or three per row and carry their own question', () => {
-  assert.ok(source.includes('repeat(auto-fill,minmax(min(118px,100%),1fr))'),
-    'the rail fits two or three normal cards and permits one narrow track')
-  assert.ok(source.includes('.dsa-session-card{'))
-  assert.ok(source.includes('.dsa-session-ask{'), 'a question has its own block inside the card')
-  assert.ok(source.includes("humanNote(questionText(attention.item?.question), 44) || '待处理'"), 'the card renders the question itself, in Chinese, without a URL')
-  assert.ok(!source.includes('正在调度'), 'the rail does not narrate a session count')
-  assert.ok(!source.includes('dsa-session-summary'), 'no summary strip sits above the session cards')
-  assert.ok(source.includes('.dsa-session-detail{grid-column:1/-1'), 'the detail spans the full grid width')
-  assert.ok(source.includes("style: { gridColumn: '1 / -1' }"), 'the detail pins its full-row span')
-  assert.ok(!source.includes('grid-auto-flow:dense'), 'expanding never re-packs or reorders cards')
-  assert.ok(!source.includes('.dsa-session-card[data-open=true]{grid-column'), 'the open card stays in its own cell')
-  assert.ok(!source.includes('.dsa-session-card[data-open=true]{height:auto'), 'the open card keeps its card size')
+test('the More hub reaches every first-batch integration and reserves second-batch entry points', () => {
+  const labels = ['通知中心', '能力中心', '记忆中心', '运行时视图', '质量证据', '成本中心', 'Agent 档案', '设备配对', '计划预览', '分享', '市场', '云端 Worker']
+  for (const label of labels) assert.ok(source.includes(`label: '${label}'`), `${label} has a native More entry`)
+  for (const route of ['/notifications/preferences', '/notifications', '/capabilities', '/memory', '/runtime-view',
+    '/evidence?limit=100', '/cost', '/profiles?includeDisabled=true', '/device/status', '/plan-preview',
+    '/voice/transcribe', '/shares', '/automations', '/market', '/cloud-worker']) {
+    assert.ok(source.includes(route), `the client reaches ${route}`)
+  }
+  assert.ok(source.includes("method: 'PATCH'"), 'notification preferences save through PATCH')
+  assert.ok(source.includes('expectedSettingsRevision'), 'MCP changes carry optimistic settings revisions')
+  assert.ok(source.includes("action: 'update'") && source.includes("action: 'forget'"), 'memory writes use the console action contract')
+  assert.ok(source.includes("action: 'capture'") && source.includes("action: 'takeover'")
+    && source.includes("action: 'release'") && source.includes("action: 'stop'"), 'runtime controls are wired')
+  assert.ok(source.includes('planFromRun(current, run)'), 'plan preview is built from run subtasks')
+  assert.ok(source.includes('artifactIds: [artifactId]'), 'artifact sharing names explicit artifact ids')
 })
 
-test('a finished goal never keeps a live-looking card or a duplicated run card', () => {
-  assert.ok(source.includes("const GOAL_OVER = new Set(['completed', 'cancelled'])"),
-    'the goal state overrides a phase left behind as running')
-  assert.ok(source.includes('GOAL_OVER.has(goal.status)'), 'a cancelled or completed goal has no live phase card')
-  assert.ok(source.includes('phase.currentRunId ?? phase.runId'), 'a phase run is found through currentRunId')
-  assert.ok(source.includes('...(Array.isArray(phase.runIds) ? phase.runIds : [])'),
-    'every run a phase used is claimed, so it cannot reappear as a second card')
+test('the second-batch More panels expose real actions, confirmations and safe handoffs', () => {
+  for (const action of ['previewAutomation', 'saveAutomation', 'automationAction', 'loadAutomationExecutions',
+    'shareArtifact', 'removeShare', 'searchMarket', 'marketDetail', 'marketHandoff', 'importMarketSkill',
+    'refreshCloudWorker', 'submitCloudWorker', 'cloudWorkerAction', 'openOriginalArtifact', 'continueArtifact',
+    'previewCandidatePlan', 'suggestRoute', 'updateRuntimePanel', 'updateMcpDraft', 'updatePlanDraft', 'updateRouteDraft']) {
+    assert.ok(source.includes(`${action}:`), `${action} has a client action`)
+  }
+  for (const action of ['create', 'update', 'remove', 'toggle', 'preview', 'run-now']) {
+    assert.ok(source.includes(`action: '${action}'`) || source.includes(`action, id`), `automation action ${action} is wired`)
+  }
+  assert.ok(source.includes("action: 'install-handoff'"), 'market installation stays a handoff')
+  assert.ok(source.includes('executed:'), 'handoff results expose whether anything executed')
+  assert.doesNotMatch(source, /marketInstallCommand\([^)]*\)[\s\S]{0,200}(exec|spawn|fetch)\(/, 'the displayed install command is never executed')
+  assert.ok(source.includes('expectedRevision'), 'automation writes carry revisions')
+  assert.ok(source.includes('idempotencyKey'), 'manual runs and Worker writes carry idempotency keys')
+  assert.ok(source.includes("confirmLabel: '确认分享'") && source.includes("confirmLabel: '确认删除'")
+    && source.includes("confirmLabel: '确认导入'") && source.includes("confirmLabel: '确认提交'"), 'mutations ask for confirmation')
+  assert.ok(!source.includes('第二批服务尚未接入'), 'the second batch is no longer a placeholder')
+  for (const label of ['产物开始日期', '产物结束日期', '在原任务打开', '新对话继续', '模型：', '权限：', 'IM：',
+    '实时画面', 'runtime-view/events', '执行前候选计划', '权限范围', '运行环境', '模型路由建议', '按需加载', '停用 Skill']) {
+    assert.ok(source.includes(label), `${label} is wired`)
+  }
 })
 
-test('a card status reads as a sentence and the dot is never the only signal', () => {
-  assert.ok(source.includes("running: '正在执行'"), 'a running card says what it is doing')
-  assert.ok(source.includes("cancelled: '已取消'"), 'a cancelled card says it was cancelled')
-  assert.ok(source.includes("completed: '已完成'"), 'a completed card says it is done')
-  assert.ok(source.includes("if (status === 'partial') return 'warning'"), 'partial is not painted green')
-  assert.ok(!source.includes("status === 'completed' || status === 'partial'"),
-    'green now means completed only, so the colour matches the words')
-})
-
-test('the red line says what happened, and the raw ledger stays in details', () => {
-  assert.ok(source.includes('plainFailure({'), 'cards build their failure line through one plain-language helper')
-  assert.ok(!source.includes('FAILURE_NEXT'), 'the card carries no how-to paragraph')
-  assert.ok(!source.includes('可打开详情'), 'no instruction paragraph on the card')
-  assert.ok(source.includes('machine-checked by the plugin'), 'machine-check tags are stripped from the card line')
-  assert.ok(source.includes('没完成：'), 'the line opens with what happened, in Chinese')
-  assert.ok(!source.includes('humanNote(run.report ?? run.output, 40)'),
-    'an agent report ledger line never reaches the card')
-})
-
-test('the rail refreshes on focus, on a settled event, and when the task state changes', () => {
-  assert.ok(source.includes("window.addEventListener('focus'"), 'returning to the window refreshes the rail')
-  assert.ok(source.includes("document.addEventListener('visibilitychange'"), 'returning to the tab refreshes the rail')
-  assert.ok(source.includes('seesSettled'), 'a run or goal reaching its end is detected')
-  assert.ok(source.includes("if (frame.type === 'runs' && seesSettled(before, frame))"),
-    'a settled event pulls the authoritative workbench immediately')
-})
-
-test('message timestamps wait for hover and receipts stay out of the reading line', () => {
-  assert.ok(source.includes("className: 'dsa-time'"), 'both roles render a send time element')
-  assert.ok(source.includes('message.at'), 'the time comes from the router timestamp, not the render clock')
-  assert.ok(source.includes('.dsa-msg:hover .dsa-time') && source.includes('.dsa-msg:focus-within .dsa-time'),
-    'the time is revealed on hover or keyboard focus')
-  assert.ok(source.includes('.dsa-msg[data-role=user] .dsa-msg-meta{flex-direction:row-reverse}'),
-    'a user message aligns its time to the right')
-  assert.ok(source.includes("className: ack ? 'dsa-msg dsa-ack' : 'dsa-msg'"), 'short instant acks take the quiet receipt style')
-  assert.ok(!source.includes("dsa-feed-open'"), 'the chat card no longer repeats a 报告 text next to its arrow')
-})
-
-test('optional composer tools fold into one quiet menu', () => {
-  assert.ok(source.includes("'aria-label': '更多'"), 'the composer has a single more button')
-  assert.ok(source.includes("className: 'dsa-card-menu dsa-tool-menu'"), 'the extra tools open in one menu')
-  assert.ok(source.includes("}, props.uploading ? '上传中…' : '添加文件')"), 'file upload is a menu item')
-  assert.ok(source.includes("withContext ? '✓ 沿用最近对话' : '沿用最近对话'"), 'recent context is a menu item')
-  assert.ok(source.includes("'插入批量清单'"), 'the batch template is a menu item')
-  assert.ok(!source.includes("'aria-label': '添加文件'") && !source.includes("'aria-label': '沿用最近对话'"),
-    'the old always-visible tool buttons are gone')
+test('voice capture is browser-native PCM16 WAV and never sends a message', () => {
+  assert.ok(source.includes('navigator.mediaDevices.getUserMedia'))
+  assert.ok(source.includes('recorder.start(250)'))
+  assert.ok(source.includes('context.decodeAudioData'))
+  assert.ok(source.includes('view.setUint32(24, 16_000, true)'), 'WAV samples are 16kHz')
+  assert.ok(source.includes('view.setUint16(22, 1, true)'), 'WAV is mono')
+  assert.ok(source.includes('view.setUint16(34, 16, true)'), 'WAV is PCM16')
+  assert.ok(source.includes('releaseVoiceStream(session.stream)'), 'recording always releases microphone tracks')
+  assert.ok(source.includes('if (!current(session)) return null'), 'late transcription results are discarded')
+  assert.doesNotMatch(source, /voice\/transcribe[\s\S]{0,400}call\('\/message'/, 'voice transcription cannot submit chat')
 })

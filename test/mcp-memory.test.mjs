@@ -5,6 +5,7 @@ import {
   createMCPMemoryBridge,
   DEFAULT_MCP_MEMORY_CONFIG,
   normalizeMCPMemoryConfig,
+  publicStatus,
 } from '../lib/mcp-memory.js'
 
 function managerWith(register, list = () => []) {
@@ -227,6 +228,13 @@ test('register failure is contained for synchronous and asynchronous managers', 
   assert.equal(asyncBridge.status().status, 'error')
 })
 
+test('publicStatus expands nested manager status.state without exposing details', () => {
+  assert.equal(publicStatus({ status: { state: 'connected', detail: 'secret' } }), 'connected')
+  assert.equal(publicStatus({ state: { status: 'connecting' } }), 'connecting')
+  assert.equal(publicStatus({ status: { state: '' } }), 'registered')
+  assert.equal(publicStatus({ status: 'not a valid state' }), 'registered')
+})
+
 test('status prefers manager list and falls back to registered when absent', async () => {
   let entries = [{ serverName: 'superagent-memory', status: 'connected', env: { TOKEN: 'hidden' } }]
   const bridge = createMCPMemoryBridge({
@@ -238,6 +246,10 @@ test('status prefers manager list and falls back to registered when absent', asy
     transport: 'stdio',
     status: 'connected',
   })
+  assert.doesNotMatch(JSON.stringify(bridge.status()), /hidden/)
+
+  entries = [{ serverName: 'superagent-memory', status: { state: 'connected', detail: 'hidden' } }]
+  assert.equal(bridge.status().status, 'connected')
   assert.doesNotMatch(JSON.stringify(bridge.status()), /hidden/)
 
   entries = [{ serverName: 'other', status: 'error' }]

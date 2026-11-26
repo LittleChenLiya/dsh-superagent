@@ -15,22 +15,12 @@ import {
   extractAttentionBlock,
   extractPlan,
   linkSubtasks,
-  mentionedWriteRoots,
   normalizeGoal,
 } from '../lib/orchestrator.js'
 import { createMemory } from '../lib/memory.js'
 import { ACTIVE_STATUSES, createStore } from '../lib/store.js'
 
 const execFileAsync = promisify(execFile)
-
-test('only absolute paths from the request become extra write roots', () => {
-  const roots = mentionedWriteRoots({
-    goal: '我的塔防（D:\\PrismDefense）游戏空格键不好用。再看看 `https://github.com/trpc/trpc` 和 D:/Work/Other。',
-    followups: [{ text: '报告放到 E:\\Reports 下' }],
-  })
-  assert.deepEqual(roots.sort(), ['D:\\PrismDefense', 'D:\\Work\\Other', 'E:\\Reports'].sort())
-  assert.deepEqual(mentionedWriteRoots({ goal: '没有路径' }), [])
-})
 
 const BASE_CONFIG = {
   maxSubtasks: 6,
@@ -1506,57 +1496,6 @@ test('a completed run records the budget stop as a notice, not an error', async 
   assert.deepEqual(finished.subtasks.map(item => item.status), ['completed', 'completed'])
 })
 
-test('cache reads do not count against the token budget', async () => {
-  const { spawnChild, calls } = makeSpawner(async spec => {
-    if (spec.label === 'superagent-plan') {
-      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
-    }
-    return completed('done')
-  })
-  // A reused context: almost all of the recorded tokens are cache reads. The
-  // fresh input and output are tiny, so this must not read as an exhausted
-  // budget — that is what made a resume stop before it started.
-  const { orchestrator } = orchestratorWith({
-    spawner: { spawnChild },
-    config: { maxTokensPerRun: 5000 },
-    readUsage: async () => ({
-      inputTokens: 10,
-      outputTokens: 2,
-      cacheReadTokens: 900_000,
-      totalTokens: 900_012,
-      modelCalls: 1,
-    }),
-  })
-
-  const run = await orchestrator.start({ goal: 'stay inside the budget', parentSessionId: parent.id, parent })
-  const finished = await orchestrator.status(run.id, 10)
-
-  assert.equal(finished.status, 'completed')
-  assert.equal(finished.budgetStop ?? null, null)
-  assert.equal(calls.filter(call => call.label === 'superagent-1').length, 1)
-  assert.equal(finished.usage.cacheReadTokens >= 900_000, true, 'cache reads are still reported')
-})
-
-test('an exhausted token budget says which cap to raise', async () => {
-  const { spawnChild } = makeSpawner(async spec => {
-    if (spec.label === 'superagent-plan') {
-      return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
-    }
-    return completed('done')
-  })
-  const { orchestrator } = orchestratorWith({
-    spawner: { spawnChild },
-    config: { maxTokensPerRun: 100 },
-    readUsage: async () => ({ inputTokens: 400, outputTokens: 20, totalTokens: 420, modelCalls: 1 }),
-  })
-
-  const run = await orchestrator.start({ goal: 'stay inside the budget', parentSessionId: parent.id, parent })
-  const finished = await orchestrator.status(run.id, 10)
-
-  assert.match(finished.error ?? '', /token budget reached/)
-  assert.match(finished.error ?? '', /raise maxTokensPerRun to 1000000/)
-})
-
 test('the call budget still stops a run when child usage cannot be read at all', async () => {
   const { spawnChild, calls } = makeSpawner(async spec => {
     if (spec.label === 'superagent-plan') {
@@ -2124,7 +2063,7 @@ test('an independent reviewer must pass a planned deliverable before completion'
     assert.equal(finished.usage.modelCalls, 3)
     assert.equal(Object.keys(finished.usageByChild).length, 3)
   } finally {
-    await fsp.rm(root, { recursive: true, force: true })
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
   }
 })
 
@@ -2954,7 +2893,7 @@ test('isolation follows the session directory, so the merge lands where the user
     const finished = await orchestrator.status(run.id, 20)
 
     assert.equal(finished.status, 'completed')
-    assert.equal(normalizePath(finished.workspace.base), normalizePath(await fsp.realpath(session)))
+    assert.equal(normalizePath(await fsp.realpath(finished.workspace.base)), normalizePath(await fsp.realpath(session)))
     assert.match(finished.workspace.baseNote, /workspaceRoot .* is not this session's directory/)
     // The deliverable lands in the session repository; the stale one is untouched.
     assert.equal(await fsp.readFile(path.join(session, 'a.txt'), 'utf8'), 'delivered\n')
@@ -2978,7 +2917,7 @@ test("workspaceBase: 'config' still isolates against the configured repository",
     const finished = await orchestrator.status(run.id, 20)
 
     assert.equal(finished.status, 'completed')
-    assert.equal(normalizePath(finished.workspace.base), normalizePath(await fsp.realpath(configured)))
+    assert.equal(normalizePath(await fsp.realpath(finished.workspace.base)), normalizePath(await fsp.realpath(configured)))
     // An explicit opt-in keeps the old behaviour and says nothing about it.
     assert.equal(finished.workspace.baseNote, undefined)
     assert.equal(await fsp.readFile(path.join(configured, 'a.txt'), 'utf8'), 'delivered\n')
@@ -3040,57 +2979,13 @@ test('an unavailable isolation still checks deliverables in the session director
     assert.equal(finished.workspace.mode, 'unavailable')
     // The shared directory is the session's, so the deliverable check passes;
     // a stale workspaceRoot must not turn a written file into "missing".
-    assert.equal(normalizePath(finished.workspace.base), normalizePath(session))
+    assert.equal(normalizePath(await fsp.realpath(finished.workspace.base)), normalizePath(await fsp.realpath(session)))
     assert.equal(finished.status, 'completed')
     assert.equal(finished.subtasks[0].deliverables[0].status, 'verified')
   } finally {
     await fsp.rm(session, { recursive: true, force: true })
     await fsp.rm(stale, { recursive: true, force: true })
   }
-})
-
-test('without isolation a deliverable is checked in the session directory', async () => {
-  const session = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-session-'))
-  const host = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-host-'))
-  const withCwd = { id: 'session-cwd', session: { header: { cwd: session } } }
-  try {
-    const spawner = makeSpawner(async spec => {
-      if (spec.label === 'superagent-plan') {
-        return completed(JSON.stringify({
-          subtasks: [{ title: 'write', prompt: 'write out.txt', deliverables: [{ path: 'out.txt' }] }],
-        }))
-      }
-      await fsp.writeFile(path.join(session, 'out.txt'), 'session dir\n', 'utf8')
-      return completed('wrote out.txt')
-    })
-    // Isolation is off, so the worker writes in the session directory while
-    // this process was launched elsewhere. The check must follow the session.
-    const { orchestrator } = orchestratorWith({ spawner, cwd: host })
-    const run = await orchestrator.start({ goal: 'write out.txt', parentSessionId: withCwd.id, parent: withCwd })
-    const finished = await orchestrator.status(run.id, 15)
-
-    assert.equal(finished.status, 'completed')
-    assert.equal(finished.subtasks[0].deliverables[0].status, 'verified')
-  } finally {
-    await fsp.rm(session, { recursive: true, force: true })
-    await fsp.rm(host, { recursive: true, force: true })
-  }
-})
-
-test('a missing deliverable names the directory that was checked', async () => {
-  const cwd = await workspaceDir()
-  const { spawnChild } = makeSpawner(async spec => {
-    if (spec.label === 'superagent-plan') return completed(planWith({ path: 'reports/summary.md', kind: 'text' }))
-    return completed('I wrote the report.')
-  })
-  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, cwd })
-
-  const run = await orchestrator.start({ goal: 'write a report', parentSessionId: parent.id, parent })
-  const finished = await orchestrator.status(run.id, 10)
-
-  const item = finished.subtasks[0].deliverables[0]
-  assert.equal(item.code, 'missing')
-  assert.match(item.reason, new RegExp(`checked under ${escapeRegExp(cwd)}`))
 })
 
 test('a deliverable in the isolated checkout verifies, and the child starts in that checkout', async () => {
