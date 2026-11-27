@@ -8,6 +8,10 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.27.1 — 2026-11-27
+
+- 将根 README 与中英文手册中的安装命令同步到 0.27.1，确保新用户直接获得默认开启版。
+
 ## 0.27.0 — 2026-11-27
 
 ### 默认行为
