@@ -725,7 +725,9 @@ test('temporary failures re-check authorization and stop at a bounded retry budg
         throw error
       },
     }
-    const ingress = ingressFor({ store, router: rejecting, config: githubConfig, retry: { baseMs: 5, maxAttempts: 2 } })
+    let clock = Date.now()
+    const ingress = ingressFor({ store, router: rejecting, config: githubConfig,
+      retry: { baseMs: 5, maxAttempts: 2 }, now: () => clock })
     const server = await serve(ingress)
     try {
       await ingress.bind({
@@ -736,7 +738,10 @@ test('temporary failures re-check authorization and stop at a bounded retry budg
       await fetch(`${server.url}/hooks/github`, {
         method: 'POST', headers: githubHeaders('retry-budget', body), body,
       })
-      await waitFor(async () => (await ingress.snapshot()).recent[0]?.status === 'failed')
+      await ingress.flush()
+      assert.equal((await ingress.snapshot()).recent[0].status, 'retrying')
+      clock += 6
+      await ingress.recover()
       const failed = (await ingress.snapshot()).recent[0]
       assert.equal(failed.attempts, 2)
       assert.match(failed.reason, /重试预算耗尽/)

@@ -456,6 +456,60 @@ async function waitForJson(file, timeoutMs = 3000) {
   }
 }
 
+test('superagent sessions join a workspace and receive a readable title', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-session-meta-'))
+  const consoleRoot = path.join(stateDir, 'console-root')
+  await fsp.mkdir(consoleRoot)
+  const created = []
+  const renamed = []
+  const workspacePaths = []
+  const sessionController = {
+    create: async options => {
+      created.push(options)
+      return { sessionId: 'session-meta' }
+    },
+    rename: async options => { renamed.push(options) },
+    list: async () => ({ items: [] }),
+    prompt: async () => {},
+    follow: async function* () {},
+  }
+  const workspaceController = {
+    create: async options => {
+      workspacePaths.push(options.path)
+      return { workspace: { workspaceId: 'workspace-1' } }
+    },
+  }
+  const disposers = []
+  const ctx = {
+    tools: { register: () => {} },
+    effect: execute => { disposers.push(execute()) },
+    get: service => service === 'sessionController' ? sessionController
+      : service === 'workspaceController' ? workspaceController : undefined,
+  }
+  try {
+    apply(ctx, { stateDir, consoleRoot, consolePort: 0, notifyOnComplete: false })
+    const discovery = await waitForJson(path.join(stateDir, 'console.json'), 5000)
+    const response = await fetch(`${discovery.url}/api/console/message`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${discovery.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ text: '修复塔防镜头', project: consoleRoot, intent: 'task', id: 'session-meta-request' }),
+    })
+    assert.equal(response.status, 200)
+    for (let attempt = 0; attempt < 1000 && !renamed.length; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.deepEqual(workspacePaths, [await fsp.realpath(consoleRoot)])
+    assert.equal(created[0].workspaceId, 'workspace-1')
+    assert.equal(created[0].cwd, undefined)
+    assert.deepEqual(renamed, [{ sessionId: 'session-meta', title: '修复塔防镜头' }])
+  } finally {
+    for (const dispose of disposers.reverse()) if (typeof dispose === 'function') {
+      try { await dispose() } catch {}
+    }
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
 test('the control plane is off by default and starts runs through a live session when enabled', async () => {
   const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
   const offDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
