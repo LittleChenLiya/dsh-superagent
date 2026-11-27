@@ -144,7 +144,7 @@ test('a resume keeps a checkout recorded under the previous pool location', asyn
   const resumed = await managerFor(repo).prepare({ runId: 'run-old', index: 1 })
   assert.equal(resumed.ok, true, resumed.reason)
   assert.equal(resumed.reused, true)
-  assert.equal(normalize(resumed.dir), normalize(legacy.dir))
+  assert.equal(normalize(await fsp.realpath(resumed.dir)), normalize(await fsp.realpath(legacy.dir)))
 })
 
 test('preparing the same worker twice reuses its checkout instead of failing', async () => {
@@ -155,7 +155,7 @@ test('preparing the same worker twice reuses its checkout instead of failing', a
   const again = await manager.prepare({ runId: 'run-b', index: 1 })
   assert.equal(again.ok, true, again.reason)
   assert.equal(again.reused, true)
-  assert.equal(again.dir, first.dir)
+  assert.equal(normalize(await fsp.realpath(again.dir)), normalize(await fsp.realpath(first.dir)))
   assert.equal(await fsp.readFile(path.join(again.dir, 'notes.txt'), 'utf8'), 'kept\n')
 })
 
