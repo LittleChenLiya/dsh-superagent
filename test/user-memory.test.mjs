@@ -352,19 +352,20 @@ test('without the profile enabled the prompts and the state directory are unchan
   })
 })
 
-test('the plugin default config creates no user-memory directory and no user-memory tool', async () => {
+test('the plugin default config enables user-level memory without adding a tool', async () => {
   await withRoot(async root => {
     const tools = new Map()
     const ctx = { tools: { register: tool => tools.set(tool.name, tool) }, get: () => undefined }
-    apply(ctx, { stateDir: root })
-    // Every registered tool is one of the documented set; the user profile adds
-    // no tool of its own, it only widens superagent_memory.
+    apply(ctx, { stateDir: root, runtime: { enabled: false } })
     assert.equal(tools.size, 15)
     assert.equal(tools.has('superagent_memory'), true)
-    const result = await tools.get('superagent_memory').execute({ action: 'list', layer: 'user' }, {
-      agent: { id: 'session-1' },
-    })
-    assert.match(result, /user-level memory is off/)
-    await assert.rejects(fsp.access(path.join(root, 'user-memory')), /ENOENT/)
+    const agent = { id: 'session-1' }
+    const saved = await tools.get('superagent_memory').execute({
+      action: 'set', layer: 'user', category: 'fact', key: 'default-on', text: 'user memory is enabled by default',
+    }, { agent })
+    assert.match(saved, /recorded user fact/)
+    const result = await tools.get('superagent_memory').execute({ action: 'list', layer: 'user' }, { agent })
+    assert.match(result, /default-on/)
+    assert.ok((await fsp.stat(path.join(root, 'user-memory'))).isDirectory())
   })
 })

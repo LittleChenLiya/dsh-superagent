@@ -765,7 +765,7 @@ test('mounting with no plan leaves the scheduler off and writes no schedule file
     get: () => undefined,
   }
   try {
-    apply(ctx, { stateDir: dir, notifyOnComplete: false })
+    apply(ctx, { stateDir: dir, notifyOnComplete: false, runtime: { enabled: false } })
     assert.equal(tools.size, 15)
     const listed = await tools.get('superagent_schedule').execute({ action: 'list' }, { agent: { id: OWNER } })
     assert.match(listed, /no scheduled runs/)

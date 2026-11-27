@@ -8,6 +8,15 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.27.0 — 2026-11-27
+
+### 默认行为
+
+- 运行时控制默认开启：浏览器保持 headless 与回环限制，Windows 桌面默认允许后台点击和输入，但不自动激活窗口。
+- `guard.allowRuntimeTools` 默认开启，worker 可使用仍受审计、域名和不可逆确认保护的浏览器/桌面工具。
+- 用户画像、metadata-only observability 和满额排队默认开启。
+- reviewer、MCP memory、来源接入、远端 Worker 和市场服务仍需显式配置，避免默认产生付费调用、下载进程或外发数据。
+
 ## 0.26.0 — 2026-11-27
 
 ### 新增

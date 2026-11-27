@@ -27,8 +27,8 @@ const estimate = text => {
 // without failing this file. Both are estimates, deliberately conservative.
 const ALWAYS_ON_CHARS_MAX = 7000
 const ALWAYS_ON_TOKENS_MAX = 1750
-const ALL_TOOLS_CHARS_MAX = 20000
-const ALL_TOOLS_TOKENS_MAX = 5000
+const ALL_TOOLS_CHARS_MAX = 30000
+const ALL_TOOLS_TOKENS_MAX = 7500
 const GUIDANCE_CHARS_MAX = 320
 const GUIDANCE_TOKENS_MAX = 150
 

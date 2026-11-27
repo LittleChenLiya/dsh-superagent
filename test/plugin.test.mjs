@@ -45,7 +45,7 @@ test('the plugin mounts, registers the fifteen tools, and runs a goal end to end
   }
 
   try {
-    apply(ctx, { stateDir, notifyOnComplete: false })
+    apply(ctx, { stateDir, notifyOnComplete: false, runtime: { enabled: false } })
 
     assert.equal(name, 'dsh-superagent')
     assert.deepEqual(inject, ['tools', 'agents'])
@@ -120,7 +120,7 @@ test('a host that reads the delegation spec flat (dsh 0.2.2-rc.3) starts every c
   }
 
   try {
-    apply(ctx, { stateDir, notifyOnComplete: false })
+    apply(ctx, { stateDir, notifyOnComplete: false, runtime: { enabled: false } })
 
     const started = await tools.get('superagent_start').execute(
       { goal: 'say hi', wait_seconds: 20 },
@@ -179,7 +179,7 @@ test('a worker session cannot start, resume, or cancel a run', async () => {
   }
 
   try {
-    apply(ctx, { stateDir, notifyOnComplete: false })
+    apply(ctx, { stateDir, notifyOnComplete: false, runtime: { enabled: false } })
     const owner = { agent: { id: 'session-owner' } }
     const started = await tools.get('superagent_start').execute({ goal: 'say hi' }, owner)
     const runId = /run ([0-9A-Za-z-]+) —/.exec(started)?.[1]
@@ -255,7 +255,7 @@ test('notes written by one run reach the next plan and can be corrected', async 
   }
 
   try {
-    apply(ctx, { stateDir, notifyOnComplete: false })
+    apply(ctx, { stateDir, notifyOnComplete: false, runtime: { enabled: false } })
     const owner = { agent: { id: 'session-1' } }
 
     const first = await tools.get('superagent_start').execute({ goal: 'first goal', wait_seconds: 10 }, owner)
@@ -376,7 +376,7 @@ test('without a subagents service the tools still mount and explain what is miss
   }
 
   try {
-    apply(ctx, { stateDir })
+    apply(ctx, { stateDir, runtime: { enabled: false } })
     assert.equal(tools.size, 15, 'the tools must not vanish when the service is optional')
 
     const started = await tools.get('superagent_start').execute({ goal: 'needs workers' }, { agent: { id: 'session-1' } })
@@ -963,7 +963,7 @@ test('an unusable attention block is visible in status and stays in the report',
   }
 
   try {
-    apply(ctx, { stateDir, notifyOnComplete: false })
+    apply(ctx, { stateDir, notifyOnComplete: false, runtime: { enabled: false } })
     const started = await tools.get('superagent_start').execute(
       { goal: 'bad decision' },
       { agent: { id: 'session-1' } },
@@ -1011,7 +1011,7 @@ test('a second start for the same goal joins the active run and says so', async 
   }
 
   try {
-    apply(ctx, { stateDir, notifyOnComplete: false })
+    apply(ctx, { stateDir, notifyOnComplete: false, runtime: { enabled: false } })
     const start = args => tools.get('superagent_start').execute(args, { agent: { id: 'session-1' } })
 
     const first = await start({ goal: 'Explain  threads' })
@@ -1074,7 +1074,7 @@ test('follow-up and answer say what they did and when it takes effect', async ()
   }
 
   try {
-    apply(ctx, { stateDir, notifyOnComplete: false })
+    apply(ctx, { stateDir, notifyOnComplete: false, runtime: { enabled: false } })
     const exec = { agent: { id: 'session-1' } }
     const started = await tools.get('superagent_start').execute({ goal: 'write the memo' }, exec)
     const runId = /run (\S+) —/.exec(started)?.[1]
@@ -1133,7 +1133,7 @@ test('a policy file beside the state refuses a start and leaves a blocked event'
 
   try {
     await fsp.writeFile(path.join(stateDir, 'policy.json'), '{ "defaultLevel": "deny" }\n', 'utf8')
-    apply(ctx, { stateDir, notifyOnComplete: false })
+    apply(ctx, { stateDir, notifyOnComplete: false, runtime: { enabled: false } })
 
     const refused = await tools.get('superagent_start').execute(
       { goal: 'spend money' },
@@ -1346,7 +1346,7 @@ test('the multi-step nudge is injected once, at the first step of a top-level se
   }
 
   try {
-    apply(ctx, { stateDir, notifyOnComplete: false })
+    apply(ctx, { stateDir, notifyOnComplete: false, runtime: { enabled: false } })
     const preStep = listeners.get('agent/pre-step')
     assert.equal(typeof preStep, 'function')
 

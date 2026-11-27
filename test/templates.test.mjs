@@ -334,7 +334,7 @@ test('starting from a template still hits the active-run quota', async () => {
     const host = mount({
       stateDir,
       home,
-      config: { maxActiveRuns: 1 },
+      config: { maxActiveRuns: 1, queueOnFull: false },
       spawn: async spec => {
         if (spec.label === 'superagent-plan') {
           return activation(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
