@@ -486,7 +486,7 @@ test('a start held for confirmation needs approve_policy, which is logged', asyn
       parent: { id: 'session-1' },
       approvePolicy: true,
     })
-    assert.match(run.status, /^(queued|planning|running)$/, 'the approved start is accepted')
+    assert.match(run.status, /^(queued|planning|running|aggregating)$/, 'the approved start is accepted')
     const finished = await orchestrator.status(run.id, 10)
     assert.equal(finished.status, 'completed')
 

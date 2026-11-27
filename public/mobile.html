@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-T7H89bWc+yMMeqF4uJ3akHRwVVcgcMAhnUbH6N1Sspo='; style-src 'self' 'sha256-/E9mWhsj4Fv5EEVSpeSBuwHZ5xjG1rmKyvqqlSzeacU='; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-VybXDcRqATDxwIjzqKl1VcyC+zJbHALrEcmMWGW6UtE='; style-src 'self' 'sha256-/E9mWhsj4Fv5EEVSpeSBuwHZ5xjG1rmKyvqqlSzeacU='; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#4176e6">
 <meta name="color-scheme" content="light dark">
@@ -241,7 +241,7 @@
       <section id="page-chat" class="page" role="tabpanel" aria-labelledby="tab-chat" data-page="chat">
         <div class="page-header"><div><h1>聊天</h1><p>向当前执行会话发送目标与指令</p></div></div>
         <div id="session-list" class="card" aria-live="polite"><p>正在读取会话…</p></div>
-        <div id="chat-log" class="card" aria-live="polite"><p>本页发送的消息及投递结果会显示在这里。</p></div>
+        <div id="chat-log" class="card" aria-live="polite"><p>尚无消息；发送目标后这里会显示你和超级智能体的回复。</p></div>
         <form id="chat-form" class="composer">
           <label for="chat-input" hidden>输入消息</label>
           <textarea id="chat-input" rows="1" maxlength="20000" placeholder="输入目标或指令…" disabled required></textarea>
@@ -299,6 +299,7 @@
   var ROUTES = Object.freeze({
     status: { method: 'GET', path: '/api/console/device/status', scope: null },
     sessions: { method: 'GET', path: '/api/console/sessions', scope: 'chat' },
+    router: { method: 'GET', path: '/api/console/router', scope: 'chat' },
     events: { method: 'GET', path: '/api/console/events', scope: 'chat' },
     runs: { method: 'GET', path: '/api/console/runs', scope: 'tasks' },
     notifications: { method: 'GET', path: '/api/console/notifications', scope: 'inbox' },
@@ -311,7 +312,7 @@
   var pages = ['chat', 'tasks', 'todos', 'artifacts']
   var state = {
     token: '', apiBase: '', authenticated: false, connecting: false, sending: false,
-    activePage: 'chat', sessions: [], artifacts: [], currentSessionId: '', messages: [], artifactDetail: null,
+    activePage: 'chat', sessions: [], artifacts: [], currentSessionId: '', messages: [], routerSnapshot: null, artifactDetail: null,
     loading: { chat: false, tasks: false, todos: false, artifacts: false }
   }
   var installEvent = null
@@ -388,6 +389,7 @@
     state.artifacts = []
     state.currentSessionId = ''
     state.messages = []
+    state.routerSnapshot = null
     state.artifactDetail = null
     for (var id of ['session-list', 'chat-log', 'task-list', 'inbox-list', 'artifact-list']) byId(id).replaceChildren()
     renderMessages()
@@ -656,16 +658,35 @@
   }
   function renderMessages() {
     var container = byId('chat-log')
+    var authoritative = state.routerSnapshot && Array.isArray(state.routerSnapshot.messages)
+      ? state.routerSnapshot.messages : []
+    var messages = authoritative.filter(function (message) {
+      return message && (message.role === 'user' || message.role === 'assistant')
+    }).map(function (message) {
+      return {
+        id: text(message.id), role: message.role, text: text(message.text), at: message.at,
+        error: message.error ? '服务端处理失败。' : '', sessionId: ''
+      }
+    })
+    // Keep a local echo until the router snapshot contains the same request id.
+    // After that the authoritative user message and assistant reply replace it.
+    state.messages.forEach(function (local) {
+      if (local.id && messages.some(function (message) { return message.id === local.id })) return
+      if (!local.id && messages.some(function (message) { return message.role === 'user' && message.text === local.text })) return
+      messages.push(local)
+    })
     container.replaceChildren()
-    if (!state.messages.length) {
-      container.append(make('h2', '', '发送记录'), make('p', '', '本页发送的消息及投递结果会显示在这里。'))
+    if (!messages.length) {
+      container.append(make('h2', '', '对话'), make('p', '', '尚无消息；发送目标后这里会显示你和超级智能体的回复。'))
       return
     }
-    state.messages.forEach(function (message) {
+    messages.forEach(function (message) {
       var card = make('article', 'card')
-      card.append(make('h3', '', '你'))
+      card.append(make('h3', '', message.role === 'assistant' ? 'Superagent' : '你'))
       card.append(make('p', '', message.text))
-      card.append(make('p', 'meta' + (message.error ? ' error-text' : ''), message.error || '已发送'))
+      card.append(make('p', 'meta' + (message.error ? ' error-text' : ''),
+        message.error || (message.role === 'assistant' ? '超级智能体回复' : '已发送')))
+      if (timeLabel(message.at)) card.append(make('p', 'meta', timeLabel(message.at)))
       if (message.sessionId) card.append(make('p', 'meta', '会话：' + message.sessionId))
       container.append(card)
     })
@@ -768,12 +789,27 @@
     loading(container)
     status.textContent = '正在刷新…'
     try {
-      var data = await request(route)
-      if (!state.authenticated || state.activePage !== name) return
-      if (name === 'chat') renderSessions(data)
-      else if (name === 'tasks') renderTasks(data)
-      else if (name === 'todos') renderInbox(data)
-      else { state.artifactDetail = null; renderArtifacts(data) }
+      var data
+      if (name === 'chat') {
+        var results = await Promise.all([
+          request('sessions'),
+          request('router').catch(function (error) {
+            if (error.status === 404) return null
+            throw error
+          })
+        ])
+        data = results[0]
+        if (!state.authenticated || state.activePage !== name) return
+        renderSessions(data)
+        state.routerSnapshot = results[1] && Array.isArray(results[1].messages) ? results[1] : null
+        renderMessages()
+      } else {
+        data = await request(route)
+        if (!state.authenticated || state.activePage !== name) return
+        if (name === 'tasks') renderTasks(data)
+        else if (name === 'todos') renderInbox(data)
+        else { state.artifactDetail = null; renderArtifacts(data) }
+      }
       status.textContent = '已刷新 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false })
     } catch (error) {
       if (!state.authenticated || authFailure(error)) return
@@ -792,17 +828,22 @@
     state.sending = true
     chatSend.disabled = true
     chatInput.disabled = true
-    var message = { text: value, error: '' }
+    var message = {
+      id: 'local-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2),
+      role: 'user', text: value, at: new Date().toISOString(), error: ''
+    }
     state.messages.push(message)
     renderMessages()
     byId('chat-status').textContent = '正在发送…'
     try {
-      var data = await request('message', { body: { text: value } })
+      var data = await request('message', { body: { id: message.id, text: value } })
       message.error = data?.accepted === false ? '服务端未接受消息。' : ''
+      message.id = text(data?.id) || message.id
       message.sessionId = text(data?.sessionId)
       if (message.sessionId) state.currentSessionId = message.sessionId
       if (chatInput.value.trim() === value) chatInput.value = ''
       byId('chat-status').textContent = '消息已发送。'
+      await loadPage('chat').catch(function () {})
     } catch (error) {
       if (authFailure(error)) return
       message.error = scopedFailure(error) || error.message

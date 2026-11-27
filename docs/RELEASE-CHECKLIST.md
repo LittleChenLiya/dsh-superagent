@@ -37,7 +37,7 @@ an offline test.
   tool-using model, could quietly spend an unbounded amount of money.
 - **Who is hit.** Every user, on the first pathological goal.
 - **Fix.** Two hard budgets per run — `maxModelCallsPerRun` (default 80) and
-  `maxTokensPerRun` (default 2,000,000) — checked before every child spawn.
+  `maxTokensPerRun` (default 0, disabled) — checked before every child spawn only when explicitly configured.
   Exceeding a budget stops new spawns, ends the run `partial` with a readable
   error, and still merges the work that finished.
 - **Effort.** S.

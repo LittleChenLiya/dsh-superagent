@@ -6,7 +6,8 @@ import path from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
 
-import { apply } from '../lib/index.js'
+import { apply, approvalRisk, deterministicSubtasks, parseAutomationText, statusGuidance } from '../lib/index.js'
+import { createStore } from '../lib/store.js'
 
 const execFileAsync = promisify(execFile)
 const OWNER = 'session-host-integration'
@@ -165,9 +166,19 @@ async function git(cwd, args) {
   })
 }
 
+test('automatic helpers produce safe defaults and explicit approval guidance', () => {
+  assert.deepEqual(parseAutomationText('每天9点 总结项目状态').trigger, { type: 'cron', cron: '0 9 * * *', timeZone: 'UTC' })
+  assert.equal(parseAutomationText('每30分钟检查构建').trigger.everyMs, 1_800_000)
+  assert.equal(deterministicSubtasks('第一项；然后第二项', { maxSubtasks: 2 }).length, 2)
+  assert.equal(approvalRisk('read', '{"path":"README.md"}').recommendation, 'allow')
+  assert.equal(approvalRisk('bash', '{"command":"rm -rf /"}').recommendation, 'deny')
+  assert.match(approvalRisk('write', '{"path":"a.txt"}').riskSummary, /可逆性/)
+  assert.deepEqual(statusGuidance({ status: 'completed', subtasks: [] }).nextSteps, ['查看最终报告；如需补充要求，使用 superagent_followup。'])
+})
+
 test('default host integrations stay off and the plugin still mounts all tools', async t => {
   const host = await mount(t)
-  assert.equal(host.tools.size, 14)
+  assert.equal(host.tools.size, 15)
   const status = parseStatus(await host.execute('superagent_audit', { format: 'status' }))
   assert.equal(status.observability.configured, false)
   assert.equal(status.observability.enabled, false)
@@ -175,6 +186,155 @@ test('default host integrations stay off and the plugin still mounts all tools',
   assert.equal(status.hostSchedule, 'unavailable')
   assert.equal(status.workspaceProvider, 'local')
   assert.equal(status.reviewer, 'disabled')
+})
+
+test('planner preset automatically falls back when the host has no agentPresets registry', async t => {
+  const specs = []
+  const subagents = {
+    async startActivation(spec) {
+      specs.push(spec)
+      const text = spec.label === 'superagent-plan'
+        ? JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] })
+        : 'done'
+      return { childId: `child-${spec.label}`, result: Promise.resolve(completed(text)), dispose: async () => {} }
+    },
+  }
+  const host = await mount(t, { subagents })
+  const started = await host.execute('superagent_start', { goal: 'one small task', wait_seconds: 5 }, owner(host.temporary))
+  assert.doesNotMatch(started, /^\[error\]/, started)
+  assert.equal(specs.some(spec => spec.label === 'superagent-plan'), true)
+  assert.equal(specs.some(spec => spec.request?.agentPreset === 'planner'), false)
+})
+
+test('capability preflight intersects parent tools with the selected child preset', async t => {
+  const specs = []
+  const scopes = []
+  const presets = {
+    async acquireScope(id) {
+      scopes.push(id)
+      return { key: { id }, async [Symbol.asyncDispose]() {} }
+    },
+  }
+  const subagents = {
+    async startActivation(spec) {
+      specs.push(spec)
+      const text = spec.label === 'superagent-plan'
+        ? JSON.stringify({ subtasks: [{ id: 'w1', title: 'Browse', prompt: 'inspect the site', requires: ['browser'] }] })
+        : 'done'
+      return { childId: `child-${spec.label}`, result: Promise.resolve(completed(text)), dispose: async () => {} }
+    },
+  }
+  const host = await mount(t, {
+    subagents,
+    services: { agentPresets: presets },
+    config: { childPreset: 'worker', plannerPreset: 'planner', guard: { allowRuntimeTools: true }, attempts: 1 },
+  })
+  host.ctx.tools.definitions = scope => scope?.id === 'worker'
+    ? [{ name: 'read_file' }]
+    : scope?.id === 'planner'
+      ? []
+      : [{ name: 'read_file' }, { name: 'browser_open' }, { name: 'superagent_start' }]
+  const session = owner(host.temporary)
+  const started = await host.execute('superagent_start', { goal: 'inspect one site' }, session)
+  const runId = /run ([0-9A-Za-z-]+) —/.exec(started)?.[1]
+  assert.ok(runId, started)
+  await host.execute('superagent_status', { run_id: runId, wait_seconds: 5 }, session)
+  const finished = await createStore(host.stateDir).read(runId)
+
+  assert.equal(finished.status, 'completed')
+  assert.ok(scopes.includes('worker'))
+  assert.equal(finished.preflight.toolCount, 1)
+  assert.equal(finished.preflight.degraded, 1)
+  assert.deepEqual(finished.subtasks[0].missingCapabilities, ['browser'])
+  const worker = specs.find(spec => spec.label === 'superagent-1')
+  assert.equal(worker.request.agentPreset, 'worker')
+  assert.match(worker.request.prompt[0].text, /does not have: browser/)
+})
+
+test('direct preflight removes browser tools forbidden by the guard', async t => {
+  const specs = []
+  const host = await mount(t, {
+    subagents: {
+      async startActivation(spec) {
+        specs.push(spec)
+        return { childId: `child-${spec.label}`, result: Promise.resolve(completed('partial answer')), dispose: async () => {} }
+      },
+    },
+    config: { attempts: 1 },
+  })
+  host.ctx.tools.definitions = () => [{ name: 'read_file' }, { name: 'browser_open' }]
+  const session = owner(host.temporary)
+  const started = await host.execute('superagent_start', {
+    goal: 'inspect the site', mode: 'direct', requires: ['browser'],
+  }, session)
+  const runId = /run ([0-9A-Za-z-]+) —/.exec(started)?.[1]
+  assert.ok(runId, started)
+  await host.execute('superagent_status', { run_id: runId, wait_seconds: 5 }, session)
+  const finished = await createStore(host.stateDir).read(runId)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.preflight.status, 'checked')
+  assert.equal(finished.preflight.toolCount, 1)
+  assert.equal(finished.preflight.degraded, 1)
+  assert.deepEqual(finished.subtasks[0].missingCapabilities, ['browser'])
+  assert.equal(specs.length, 1)
+  assert.match(specs[0].request.prompt[0].text, /Capability limitation:/)
+  assert.match(specs[0].request.prompt[0].text, /does not have: browser/)
+})
+
+test('auto isolation probes the selected plain project instead of trusting the git host', async t => {
+  const repo = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-git-host-'))
+  const plain = await fsp.mkdtemp(path.join(os.tmpdir(), 'dsh-plain-project-'))
+  t.after(async () => {
+    await fsp.rm(repo, { recursive: true, force: true })
+    await fsp.rm(plain, { recursive: true, force: true })
+  })
+  await git(repo, ['init', '-b', 'main'])
+  await fsp.writeFile(path.join(repo, 'README.md'), 'host\n')
+  await git(repo, ['add', '-A'])
+  await git(repo, ['commit', '-m', 'initial'])
+
+  let running = 0
+  let peak = 0
+  const host = await mount(t, {
+    config: { workspaceIsolation: 'auto', workspaceRoot: repo, maxParallel: 3, attempts: 1 },
+    subagents: {
+      async startActivation(spec) {
+        if (spec.label === 'superagent-plan') {
+          return {
+            childId: 'child-plan',
+            result: Promise.resolve(completed(JSON.stringify({
+              subtasks: [{ title: 'A', prompt: 'do A' }, { title: 'B', prompt: 'do B' }],
+            }))),
+            dispose: async () => {},
+          }
+        }
+        running++
+        peak = Math.max(peak, running)
+        return {
+          childId: `child-${spec.label}`,
+          result: Promise.resolve().then(async () => {
+            await new Promise(resolve => setTimeout(resolve, 20))
+            running--
+            return completed('done')
+          }),
+          dispose: async () => {},
+        }
+      },
+    },
+  })
+  const session = owner(plain)
+  const started = await host.execute('superagent_start', { goal: 'two plain-project tasks' }, session)
+  const runId = /run ([0-9A-Za-z-]+) —/.exec(started)?.[1]
+  assert.ok(runId, started)
+  await host.execute('superagent_status', { run_id: runId, wait_seconds: 5 }, session)
+  const finished = await createStore(host.stateDir).read(runId)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.workspace.mode, 'unavailable')
+  assert.match(finished.workspace.reason, /not a git working tree/)
+  assert.equal(finished.limits.maxParallel, 1)
+  assert.equal(peak, 1, `plain-project workers peaked at ${peak} concurrent writers`)
 })
 
 test('MCP memory registration has exactly name and entry and is released by ctx disposal', async t => {

@@ -36,12 +36,12 @@ Three steps. The desktop app and the CLI install the same plugin; each step says
 
 ### 1. Install
 
-Desktop: **Plugins** → **Add plugin** → enter `@xiangyixie/dsh-superagent@0.25.0` → install.
+Desktop: **Plugins** → **Add plugin** → enter `@xiangyixie/dsh-superagent@0.26.0` → install.
 
 CLI:
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.25.0
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.26.0
 ```
 
 **Restart DSH** afterwards — plugins are loaded once at host startup. You can also add the [plugin index](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/plugin-index.json) on the **Discover** page for one-click installs; upgrades are always remove-then-add.
@@ -76,7 +76,7 @@ Yes. The plugin runs on DeepSeek Harness; a local host started with `dsh --profi
 
 **What does it cost?**
 
-Every run pays for at least one planning call, several model calls per subtask, and one aggregation. The sample run in this document with two subtasks used 4 calls and about 4.6k input / 0.5k output tokens; longer work costs more. No prices are built in; configure `pricing` and each run prints its cost. Hard caps are `maxModelCallsPerRun` (default 80) and `maxTokensPerRun` (default 2,000,000).
+Every run pays for at least one planning call, several model calls per subtask, and one aggregation. The sample run in this document with two subtasks used 4 calls and about 4.6k input / 0.5k output tokens; longer work costs more. No prices are built in; configure `pricing` and each run prints its cost. The hard call cap is `maxModelCallsPerRun` (default 80); `maxTokensPerRun` defaults to `0` (no hard token cap) and is enforced only when the user configures it explicitly.
 
 ## When not to use it
 
@@ -126,7 +126,7 @@ Row config in `<profile>/cordis.patch.yml`:
 | `attempts` | `2` | Attempts per subtask before it is marked failed. A failure that looks transient (quota, rate limit, timeout, 5xx) waits 2s, then 4s, then 8s before the next attempt. |
 | `deadlineMinutes` | `120` | Wall-clock budget; on expiry the run ends `partial` or `failed`. |
 | `maxModelCallsPerRun` | `80` | Hard cap on child model calls per run; `0` disables. |
-| `maxTokensPerRun` | `2000000` | Hard cap on prompt + completion tokens per run; `0` disables. |
+| `maxTokensPerRun` | `0` | Hard cap on prompt + completion tokens per run; disabled by default and enforced only when explicitly configured. |
 | `pricing` | empty | Per-1M-token prices, keyed exactly as the usage log names the model (`provider/model`). Model routing also requires explicit `capabilities` per price row (for example `planning`, `reasoning`, `coding`, `review`, `summarization`); optional `available` and `maxContextTokens` are honored. Nothing is priced out of the box, so routing explicitly reports no candidate. |
 | `resultCapBytes` | `32768` | Bytes kept per subtask report. |
 | `notifyOnComplete` | `true` | Master switch for proactive messages. Off means the plugin never wakes the session. |
@@ -143,6 +143,12 @@ Row config in `<profile>/cordis.patch.yml`:
 | `memoryDigestEntries` | `12` | Notes injected into a prompt. |
 | `memoryDigestChars` | `1600` | Character budget for the note part of that prompt. |
 | `memoryUserProfile` | `false` | Cross-task user profile (facts, preferences, decisions) under `<stateDir>/user-memory`. Off means nothing is constructed and no directory is created. See [User profile](#user-profile). |
+| `repoWiki.enabled` | `true` | Local repository ontology and knowledge cards. See [Repository ontology and RepoWiki](#repository-ontology-and-repowiki). |
+| `repoWiki.autoContext` | `true` | Scan the active workspace before a task and inject relevant module knowledge into planner/worker context. |
+| `repoWiki.maxFiles` | `4000` | Maximum files included in one scan; exceeding it marks the graph truncated. |
+| `repoWiki.maxBytes` | `8388608` | Maximum total bytes included in one scan. |
+| `repoWiki.maxDepth` | `8` | Maximum directory scan depth. |
+| `repoWiki.contextChars` | `5000` | Character budget for ontology context injected into execution. |
 | `keepRuns` | `0` | Delete terminal runs older than this many days at mount; `0` keeps everything. |
 | `guard` | on | Worker path and command policy. See [Worker safety guard](#worker-safety-guard) for every default and the reason behind it. |
 | `audit` | `true` | Append-only audit trail. It only observes; turning it off removes the trail, never the run behaviour. |
@@ -802,8 +808,14 @@ lookup, one edit, one command, one short piece of writing — does not need a ru
   (project rules), `profile` (user preferences), or the run scope. `search`
   ranks notes against `query` (the current goal works well) and/or exact `tags`,
   so a relevant old note is found instead of only the newest ones; notes can
-  carry `tags` when set. The tool is additive: the twelve other tools keep their
+  carry `tags` when set. The tool is additive: the other tools keep their
   arguments and output.
+- `superagent_repo_wiki(action, project_path?, path?, query?, source_path?, target_path?, kind?, reason?)`
+  generates, inspects, or queries the local repository ontology. `action` accepts
+  `generate`, `status`, `list`, `read`, `query`, `link`, and `unlink`; omitting
+  `project_path` uses the current session workspace. Cards and module relations
+  carry real file-and-line sources. See
+  [Repository ontology and RepoWiki](#repository-ontology-and-repowiki).
 - `superagent_template(action, id?, params?, template?, limit?)` lists, shows,
   expands, saves, or deletes a workflow template: a fixed goal skeleton with
   required parameters, when it fits, and when it does not. `expand` returns one
@@ -1231,6 +1243,20 @@ and the run notebook behaves exactly as before.
   emails, phone numbers, and usernames inside home paths. The profile lives
   under `<stateDir>/user-memory` with the same nested `.gitignore` as the
   notebook, and is never in the package `files` whitelist.
+
+## Repository ontology and RepoWiki
+
+The plugin turns the active workspace into a queryable repository knowledge graph locally. It does not call a paid model and does not modify source files. The first task scans the workspace; later scans update incrementally from file fingerprints.
+
+- **Module ontology.** Source directories, entry files, and import/require edges become module boundaries with `depends_on` and `related_to` relations.
+- **Eleven knowledge-card categories.** Every module gets overview, architecture design, tech stack, coding conventions, setup and commands, configuration, dependency management, logging, error handling, build system, and frontend style. Missing evidence is reported as “not detected”, never invented.
+- **Six repository pages.** Project overview, architecture, module inventory, dependencies, conventions, and setup, with Mermaid architecture diagrams where useful.
+- **Checkable sources.** Cards carry real file and line citations; search results include snippets and sources instead of treating model claims as evidence.
+- **Manual relations.** You can add `depends_on` / `related_to` edges in the panel, and rescans preserve them.
+
+Open **More → Repository knowledge**. Alternatively call `superagent_help`, then use `superagent_repo_wiki(action=generate|status|list|read|query|link|unlink)`. With the default `repoWiki.autoContext: true`, relevant module knowledge is injected into planner/worker context before a task; disabling it does not affect manual queries.
+
+Scans are stored under `<stateDir>/repo-wiki/`. They ignore `.git`, `node_modules`, build output, `.env`, secret files, and binaries, and do not follow symlinks. File-count, byte, and depth limits are enforced; truncation is shown in both the UI and the graph.
 
 ## Watch and report
 
@@ -1791,7 +1817,7 @@ appears to "hang" until the ignored-abort child returns.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.25.0` and read the host log for `[dsh-superagent]` lines. |
+| `superagent_*` tools do not exist | The bundle row is not mounted, or the host refused to load the plugin. | Run `--dump-config` and check for the `@xiangyixie/dsh-superagent` block; reinstall with `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.26.0` and read the host log for `[dsh-superagent]` lines. |
 | `Cannot find module .../lib/control.js` (or `watch.js` / `report.js` / `wizard.js`), or `[dsh-superagent] dsh-superagent failed to load because a file it imports is missing: ...` in the host log | The copy in that profile is incomplete — an `add` that was interrupted leaves a partial extraction. From 0.14.3 the entry point names the missing file itself. The published package is not the cause: every version ships all thirty-four `lib/` files. | Delete the plugin's directory under the profile's `node_modules` (scoped `@xiangyixie/dsh-superagent`, or unscoped `dsh-superagent` from an older tarball install) and run the same `add` command again, with the version number. Do not copy files in by hand. |
 | `[error] the model provider rejected the API key` | The key env var is missing in the process that started the host. | Export `DEEPSEEK_API_KEY` (the default route) or the variable your route names, then restart `dsh`. |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | The profile's route has no credential in the environment. | Set the env var named for that route and restart. The error line names the route, so use that, not this page. |

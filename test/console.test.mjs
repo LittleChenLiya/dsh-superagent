@@ -9,6 +9,7 @@ import { createConsole } from '../lib/console.js'
 import { createOrchestrator } from '../lib/orchestrator.js'
 import { createStore } from '../lib/store.js'
 import { createRouter } from '../lib/router.js'
+import { createDevicePairingStore } from '../lib/device-pairing.js'
 import { createSourceStore } from '../lib/sources/store.js'
 import { createSourceIngress } from '../lib/sources/ingress.js'
 import { currentFacts, putFact } from '../lib/work-context.js'
@@ -1720,14 +1721,14 @@ test('notices stay read after the page is closed and the console restarts', asyn
   }
 })
 
-test('the host-origin relay carries the console API and adds the token itself', async () => {
+test('the host-origin relay adds the console token only for credential-free native panel calls', async () => {
   const { state } = await fixture()
   const panel = await startConsole(state, fakeHost())
   const relay = http.createServer((req, res) => panel.proxy(req, res))
   await new Promise(resolve => relay.listen(0, '127.0.0.1', resolve))
   const origin = `http://127.0.0.1:${relay.address().port}`
   try {
-    // The panel sends no credentials: the node half supplies them.
+    // The trusted native panel sends no credentials; the node half supplies them.
     const state1 = await fetch(`${origin}/superagent/api/console/state`, { headers: { accept: 'application/json' } })
     assert.equal(state1.status, 200)
     const body = await state1.json()
@@ -1743,6 +1744,58 @@ test('the host-origin relay carries the console API and adds the token itself', 
     await new Promise(resolve => relay.close(resolve))
     await panel.stop()
     await fsp.rm(path.dirname(state), { recursive: true, force: true })
+  }
+})
+
+test('the host-origin relay preserves a device bearer and enforces its scopes', async () => {
+  const { base, state } = await fixture()
+  const devices = createDevicePairingStore({ file: path.join(state, 'devices.json') })
+  const fake = fakeHost()
+  fake.host.devicePairing = (action, payload = {}) => action === 'verify'
+    ? devices.verify(payload.token)
+    : devices[action](payload)
+  const panel = await startConsole(state, fake.host)
+  const relay = http.createServer((req, res) => panel.proxy(req, res))
+  await new Promise(resolve => relay.listen(0, '127.0.0.1', resolve))
+  const origin = `http://127.0.0.1:${relay.address().port}`
+  const relayed = (method, route, body, bearer) => fetch(`${origin}/superagent/api${route}`, {
+    method,
+    headers: {
+      accept: 'application/json',
+      ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  try {
+    const paired = await request(panel, 'POST', '/api/console/device/pair', {
+      name: 'Low-scope phone', scopes: ['chat'], expiresInSeconds: 120,
+    })
+    assert.equal(paired.status, 200)
+    const token = paired.json.data.token
+
+    const allowed = await relayed('POST', '/console/message', { text: 'hello through relay' }, token)
+    assert.equal(allowed.status, 200, await allowed.text())
+    assert.equal(fake.prompts.at(-1).text, 'hello through relay')
+
+    const pair = await relayed('POST', '/console/device/pair', {
+      name: 'Escalated device', scopes: ['chat', 'tasks'], expiresInSeconds: 120,
+    }, token)
+    assert.equal(pair.status, 403)
+    assert.equal((await pair.json()).error.id, 'device-scope-forbidden')
+    assert.equal((await devices.status()).length, 1, 'a low-scope relay request must not pair another device')
+
+    const automations = await relayed('GET', '/console/automations', undefined, token)
+    assert.equal(automations.status, 403)
+    assert.equal((await automations.json()).error.id, 'device-scope-forbidden')
+
+    const invalid = await relayed('POST', '/console/message', { text: 'must not be upgraded' }, 'dsm_invalid')
+    assert.equal(invalid.status, 401, 'a supplied invalid bearer must not be replaced with the console token')
+  } finally {
+    await devices.dispose()
+    await new Promise(resolve => relay.close(resolve))
+    await panel.stop()
+    await fsp.rm(base, { recursive: true, force: true })
   }
 })
 

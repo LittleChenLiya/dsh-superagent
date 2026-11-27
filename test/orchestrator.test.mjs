@@ -14,6 +14,7 @@ import {
   dedupeKeyOf,
   extractAttentionBlock,
   extractPlan,
+  explainStatus,
   linkSubtasks,
   normalizeGoal,
 } from '../lib/orchestrator.js'
@@ -235,6 +236,68 @@ test('four independent subtasks run at once when the cap allows it', async () =>
   const finished = await orchestrator.status(run.id, 10)
   assert.equal(finished.status, 'completed')
   assert.equal(peak, 4, `peak concurrency was ${peak}`)
+})
+
+test('an explicit batch keeps every planned item and executes the overflow in waves', async () => {
+  let running = 0
+  let peak = 0
+  const items = Array.from({ length: 11 }, (_, index) => ({ title: `item-${index + 1}`, prompt: `do ${index + 1}` }))
+  const { spawnChild, calls } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') return completed(JSON.stringify({ subtasks: items }))
+    if (spec.label === 'superagent-aggregate') return completed('merged')
+    running++
+    peak = Math.max(peak, running)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    running--
+    return completed(`done ${spec.label}`)
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, config: { maxParallel: 3, maxSubtasks: 8 } })
+
+  const run = await orchestrator.start({
+    goal: 'batch eleven independent items',
+    parentSessionId: parent.id,
+    parent,
+    origin: { kind: 'long-goal', batch: true },
+  })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.subtasks.length, items.length, 'no batch item may be dropped at the ordinary cap')
+  assert.ok(finished.subtasks.every(subtask => subtask.status === 'completed'))
+  assert.deepEqual(finished.blockers, [])
+  assert.ok(finished.nextSteps.some(text => /Review the final report/.test(text)))
+  assert.ok(peak <= 3 && peak >= 2, `peak concurrency was ${peak}`)
+  assert.match(calls.find(call => call.label === 'superagent-plan').prompt, /at most 256 subtasks/)
+})
+
+test('ordinary planning still truncates at the configured safety cap', async () => {
+  const items = Array.from({ length: 5 }, (_, index) => ({ title: `item-${index + 1}`, prompt: `do ${index + 1}` }))
+  const { spawnChild } = makeSpawner(async spec => {
+    if (spec.label === 'superagent-plan') return completed(JSON.stringify({ subtasks: items }))
+    if (spec.label === 'superagent-aggregate') return completed('merged')
+    return completed('done')
+  })
+  const { orchestrator } = orchestratorWith({ spawner: { spawnChild }, config: { maxSubtasks: 2, maxParallel: 2 } })
+
+  const run = await orchestrator.start({ goal: 'ordinary plan', parentSessionId: parent.id, parent })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.subtasks.length, 2)
+})
+
+test('status explains blockers and next steps for a waiting run', async () => {
+  const explanation = explainStatus({
+    id: 'run-waiting',
+    status: 'running',
+    subtasks: [{ key: 'w1', status: 'blocked', blockedReason: 'missing browser capability' }],
+    attention: { items: [{ id: 'q1', question: 'Which directory?', options: ['docs', 'tmp'] }] },
+  })
+
+  assert.ok(explanation.blockers.some(text => /missing browser capability/.test(text)))
+  assert.ok(explanation.blockers.some(text => /Which directory/.test(text)))
+  assert.ok(explanation.nextSteps.some(text => /superagent_answer/.test(text)))
+  assert.ok(explanation.nextSteps.some(text => /Enable the missing capability/.test(text)))
 })
 
 test('subtasks that declare the same file are never in flight at the same time', async () => {
@@ -2063,7 +2126,7 @@ test('an independent reviewer must pass a planned deliverable before completion'
     assert.equal(finished.usage.modelCalls, 3)
     assert.equal(Object.keys(finished.usageByChild).length, 3)
   } finally {
-    await fsp.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    await fsp.rm(root, { recursive: true, force: true })
   }
 })
 
@@ -2316,6 +2379,47 @@ test('a permanent failure is not re-run by the self-heal round', async () => {
 
   assert.equal(finished.status, 'failed')
   assert.equal(spawner.calls.filter(call => call.label === 'superagent-1').length, 1)
+  assert.equal(finished.selfHeal, null)
+})
+
+test('a transient direct failure is retried on the fallback model', async () => {
+  let attempt = 0
+  const spawner = makeSpawner(async () => {
+    attempt++
+    return attempt === 1
+      ? { output: [], stopReason: 'error', diagnostic: 'rate limit 429' }
+      : completed('recovered direct answer')
+  })
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    config: { attempts: 1, autoResumeRounds: 1, childModelFallback: 'fallback/model' },
+    sleep: async () => {},
+  })
+
+  const run = await orchestrator.start({ goal: 'recover directly', parentSessionId: parent.id, parent, mode: 'direct' })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.report, 'recovered direct answer')
+  assert.deepEqual(spawner.calls.map(call => call.model), [null, 'fallback/model'])
+  assert.equal(finished.selfHeal.retried, 1)
+  assert.equal(finished.selfHeal.recovered, 1)
+  assert.equal(finished.selfHeal.model, 'fallback/model')
+})
+
+test('a permanent direct refusal is not retried by self-heal', async () => {
+  const spawner = makeSpawner(async () => failed('refusal'))
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    config: { attempts: 1, autoResumeRounds: 1, childModelFallback: 'fallback/model' },
+    sleep: async () => {},
+  })
+
+  const run = await orchestrator.start({ goal: 'refuse directly', parentSessionId: parent.id, parent, mode: 'direct' })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(spawner.calls.length, 1)
   assert.equal(finished.selfHeal, null)
 })
 
@@ -2893,7 +2997,7 @@ test('isolation follows the session directory, so the merge lands where the user
     const finished = await orchestrator.status(run.id, 20)
 
     assert.equal(finished.status, 'completed')
-    assert.equal(normalizePath(await fsp.realpath(finished.workspace.base)), normalizePath(await fsp.realpath(session)))
+    assert.equal(normalizePath(finished.workspace.base), normalizePath(await fsp.realpath(session)))
     assert.match(finished.workspace.baseNote, /workspaceRoot .* is not this session's directory/)
     // The deliverable lands in the session repository; the stale one is untouched.
     assert.equal(await fsp.readFile(path.join(session, 'a.txt'), 'utf8'), 'delivered\n')
@@ -2917,7 +3021,7 @@ test("workspaceBase: 'config' still isolates against the configured repository",
     const finished = await orchestrator.status(run.id, 20)
 
     assert.equal(finished.status, 'completed')
-    assert.equal(normalizePath(await fsp.realpath(finished.workspace.base)), normalizePath(await fsp.realpath(configured)))
+    assert.equal(normalizePath(finished.workspace.base), normalizePath(await fsp.realpath(configured)))
     // An explicit opt-in keeps the old behaviour and says nothing about it.
     assert.equal(finished.workspace.baseNote, undefined)
     assert.equal(await fsp.readFile(path.join(configured, 'a.txt'), 'utf8'), 'delivered\n')
@@ -2979,7 +3083,7 @@ test('an unavailable isolation still checks deliverables in the session director
     assert.equal(finished.workspace.mode, 'unavailable')
     // The shared directory is the session's, so the deliverable check passes;
     // a stale workspaceRoot must not turn a written file into "missing".
-    assert.equal(normalizePath(await fsp.realpath(finished.workspace.base)), normalizePath(await fsp.realpath(session)))
+    assert.equal(normalizePath(finished.workspace.base), normalizePath(session))
     assert.equal(finished.status, 'completed')
     assert.equal(finished.subtasks[0].deliverables[0].status, 'verified')
   } finally {
@@ -3084,6 +3188,7 @@ test('isolation falls back to the shared directory when the target is not a git 
   assert.equal(finished.status, 'completed')
   assert.equal(finished.workspace.mode, 'unavailable')
   assert.match(finished.workspace.reason, /not a git working tree/)
+  assert.equal(finished.limits.maxParallel, 1)
   assert.equal(workspace.prepared.length, 0)
   for (const call of spawner.calls.filter(call => call.label !== 'superagent-plan')) {
     assert.doesNotMatch(call.prompt, /Isolated working directory/)
@@ -3188,7 +3293,7 @@ test('desktop dispatch investigates planner uncertainties and still surfaces an 
     [['subtask-1', '请在执行浏览器中扫码登录']])
 })
 
-test('a subtask missing a declared capability is blocked and never spawns', async () => {
+test('a missing browser capability degrades the worker instead of skipping the task', async () => {
   const { spawnChild, calls } = makeSpawner(async spec => {
     if (spec.label === 'superagent-plan') {
       return completed(JSON.stringify({
@@ -3208,14 +3313,57 @@ test('a subtask missing a declared capability is blocked and never spawns', asyn
   const run = await orchestrator.start({ goal: 'school work and a PR', parentSessionId: parent.id, parent })
   const finished = await orchestrator.status(run.id, 10)
 
-  const blocked = finished.subtasks.find(subtask => subtask.key === 'w1')
-  assert.equal(blocked.status, 'blocked')
-  assert.deepEqual(blocked.missingCapabilities, ['browser'])
-  assert.match(blocked.blockedReason, /missing browser capability; not started/)
+  const degraded = finished.subtasks.find(subtask => subtask.key === 'w1')
+  assert.equal(degraded.status, 'completed')
+  assert.equal(degraded.blockKind, 'degraded')
+  assert.deepEqual(degraded.missingCapabilities, ['browser'])
   assert.equal(finished.subtasks.find(subtask => subtask.key === 'w2').status, 'completed')
-  assert.equal(finished.status, 'partial')
-  assert.equal(calls.some(call => call.label === 'superagent-1'), false, 'a blocked subtask must not spawn')
-  assert.equal(calls.some(call => call.label === 'superagent-2'), true)
+  assert.equal(finished.preflight.blocked, 0)
+  assert.equal(finished.preflight.degraded, 1)
+  assert.equal(calls.some(call => call.label === 'superagent-1'), true, 'a degraded subtask still spawns')
+  assert.match(calls.find(call => call.label === 'superagent-1').prompt, /Capability limitation:/)
+  assert.match(calls.find(call => call.label === 'superagent-1').prompt, /does not have: browser/)
+})
+
+test('direct mode preflights declared capabilities and tells a degraded worker its limitation', async () => {
+  const spawner = makeSpawner(async () => completed('finished the parts that do not need a browser'))
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    toolInventory: () => ['read_file'],
+  })
+
+  const run = await orchestrator.start({
+    goal: 'inspect the school site', parentSessionId: parent.id, parent, mode: 'direct', requires: ['browser'],
+  })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.preflight.status, 'checked')
+  assert.equal(finished.preflight.degraded, 1)
+  assert.deepEqual(finished.subtasks[0].missingCapabilities, ['browser'])
+  assert.equal(spawner.calls.length, 1)
+  assert.match(spawner.calls[0].prompt, /Capability limitation:/)
+  assert.match(spawner.calls[0].prompt, /does not have: browser/)
+})
+
+test('direct mode blocks a hard capability gap before spawning its worker', async () => {
+  const spawner = makeSpawner(async () => completed('must not spawn'))
+  const { orchestrator } = orchestratorWith({
+    spawner,
+    toolInventory: () => ['read_file'],
+  })
+
+  const run = await orchestrator.start({
+    goal: 'run the build', parentSessionId: parent.id, parent, mode: 'direct', requires: ['shell'],
+  })
+  const finished = await orchestrator.status(run.id, 10)
+
+  assert.equal(finished.status, 'failed')
+  assert.equal(finished.preflight.blocked, 1)
+  assert.equal(finished.subtasks[0].status, 'blocked')
+  assert.match(finished.error, /no worker started/)
+  assert.match(finished.report, /No worker was started/)
+  assert.equal(spawner.calls.length, 0)
 })
 
 test('all-blocked plan fails with zero workers and names the missing capabilities', async () => {
@@ -3223,8 +3371,8 @@ test('all-blocked plan fails with zero workers and names the missing capabilitie
     if (spec.label === 'superagent-plan') {
       return completed(JSON.stringify({
         subtasks: [
-          { id: 'w1', title: 'school site', prompt: 'submit homework', requires: ['browser'] },
-          { id: 'w2', title: 'asset redesign', prompt: 'open the DCC and rebuild assets', requires: ['gui'] },
+          { id: 'w1', title: 'school site', prompt: 'submit homework', requires: ['unobtainium'] },
+          { id: 'w2', title: 'asset redesign', prompt: 'open the DCC and rebuild assets', requires: ['shell'] },
         ],
       }))
     }
@@ -3232,7 +3380,7 @@ test('all-blocked plan fails with zero workers and names the missing capabilitie
   })
   const { orchestrator } = orchestratorWith({
     spawner: { spawnChild },
-    toolInventory: () => ['bash', 'read', 'write'],
+    toolInventory: () => ['read'],
   })
 
   const run = await orchestrator.start({ goal: 'four blocked lines', parentSessionId: parent.id, parent })
@@ -3243,11 +3391,9 @@ test('all-blocked plan fails with zero workers and names the missing capabilitie
   assert.equal(calls[0].label, 'superagent-plan')
   assert.equal(finished.subtasks.every(subtask => subtask.status === 'blocked'), true)
   assert.match(finished.error, /no worker started/)
-  assert.match(finished.error, /browser/)
-  assert.match(finished.error, /gui/)
+  assert.match(finished.error, /unobtainium/)
+  assert.match(finished.error, /shell/)
   assert.match(finished.report, /No worker was started/)
-  assert.match(finished.report, /browser-control plugin/)
-  assert.match(finished.report, /desktop\/computer-use plugin/)
   assert.equal(finished.preflight.status, 'checked')
   assert.equal(finished.preflight.blocked, 2)
 })
@@ -3257,7 +3403,7 @@ test('blocked is a capability gap, skipped is a dependency that cannot run', asy
     if (spec.label === 'superagent-plan') {
       return completed(JSON.stringify({
         subtasks: [
-          { id: 'w1', title: 'school site', prompt: 'submit homework', requires: ['browser'] },
+          { id: 'w1', title: 'school site', prompt: 'submit homework', requires: ['unobtainium'] },
           { id: 'w2', title: 'summarise it', prompt: 'summarise the result', dependsOn: ['w1'], requires: ['shell'] },
         ],
       }))
@@ -3275,7 +3421,7 @@ test('blocked is a capability gap, skipped is a dependency that cannot run', asy
   const blocked = finished.subtasks.find(subtask => subtask.key === 'w1')
   const skipped = finished.subtasks.find(subtask => subtask.key === 'w2')
   assert.equal(blocked.status, 'blocked')
-  assert.deepEqual(blocked.missingCapabilities, ['browser'])
+  assert.deepEqual(blocked.missingCapabilities, ['unobtainium'])
   assert.equal(skipped.status, 'skipped')
   assert.equal(skipped.skipKind, 'upstream')
   assert.match(skipped.skippedReason, /w1 was blocked/)

@@ -129,6 +129,49 @@ test('global assistant saves carry immutable identity, fixed scopes and optimist
   ]), /多个助理/)
 })
 
+test('approval risk is translated first and raw tool details stay collapsed', async () => {
+  const { exports } = await materialize()
+  const translated = exports.approvalRiskView({ toolName: 'shell.execute', callArguments: '{"cmd":"rm -rf build"}',
+    riskSummary: '可能删除构建目录。', recommendation: '请确认目录后允许。' })
+  assert.equal(translated.impact, '可能删除构建目录。')
+  assert.equal(translated.recommendation, '请确认目录后允许。')
+  assert.deepEqual(translated.details[0], ['工具', 'shell.execute'])
+  assert.match(exports.approvalRiskView({ toolName: 'shell.execute' }).impact, /可能修改文件/)
+  assert.match(exports.approvalRiskView({ toolName: 'shell.execute', callArguments: '{"cmd":"rm -rf build"}' }).impact, /cmd/)
+  assert.match(exports.approvalRiskView({ toolName: 'read_file' }).impact, /预计读取信息/)
+
+  const approval = { id: 'approval-1', kind: 'approval', toolName: 'shell.execute', callArguments: '{"cmd":"rm -rf build"}',
+    riskSummary: '可能删除构建目录。', recommendation: '请确认目录后允许。', ownerSessionId: 'chat-a' }
+  const card = await panelHarness({ approvals: [approval], workbench: { projects: [], runs: [], goals: [],
+    inbox: [{ id: 'inbox-1', kind: 'approval', item: approval, project: { cwd: '/work/a', name: 'A' } }] } })
+  card.model().more = { panel: 'inbox', loading: false, busy: {}, confirming: {} }
+  let nodes = card.render()
+  nodes.find(node => node.props?.role === 'tab' && node.children.includes('更多')).props.onClick()
+  nodes = card.render()
+  const detail = nodes.find(node => node.type === 'details' && node.props?.className === 'dsa-approval-details')
+  assert.ok(detail, textOf(nodes))
+  assert.equal(detail.props.open, undefined, 'raw tool name and arguments are collapsed by default')
+  assert.ok(textOf(nodes).includes('影响'))
+  assert.ok(textOf(nodes).includes('可能删除构建目录。'))
+  assert.ok(textOf(nodes).includes('建议'))
+  assert.ok(buttonIn(nodes, '允许一次'))
+  assert.ok(buttonIn(nodes, '本会话都放行'))
+  assert.ok(buttonIn(nodes, '拒绝'))
+})
+
+test('assistant next steps and blockers render inline without another panel', async () => {
+  const card = await panelHarness({ messages: [{ id: 'm1', role: 'assistant', text: '已完成初稿。',
+    nextSteps: ['复核证据', '提交评审'], blockers: ['缺少定价'] }] })
+  const nodes = card.render()
+  const status = nodes.find(node => node.props?.className === 'dsa-message-status')
+  assert.ok(status)
+  assert.ok(textOf(status).includes('下一步'))
+  assert.ok(textOf(status).includes('复核证据'))
+  assert.ok(textOf(status).includes('阻塞'))
+  assert.ok(textOf(status).includes('缺少定价'))
+  assert.equal(nodes.some(node => node.props?.['aria-label'] === '下一步' || node.props?.['aria-label'] === '阻塞'), false)
+})
+
 test('the client bundle parses as JavaScript', () => {
   const result = spawnSync(process.execPath, ['--check', clientPath], { encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr)
@@ -148,7 +191,7 @@ test('reloading the client refreshes an existing stylesheet without appending an
   try {
     const ctx = { slots: { inject() {} } }
     exports.apply(ctx)
-    assert.match(previous.textContent, /\.dsa-header-start,\.dsa-header-actions\{display:flex/)
+    assert.match(previous.textContent, /\.dsa-header\{[^}]*justify-content:flex-end/)
     assert.match(previous.textContent, /\.dsa-receipt-copy\{display:grid/)
     exports.apply(ctx)
     assert.equal(appended.length, 0)
@@ -171,7 +214,7 @@ test('the bundle registers under the package id and exports apply/inject', async
   assert.deepEqual(exports.inject, ['slots'])
 })
 
-test('apply seats the 全局助理 entry between 插件 and 自动化任务', async () => {
+test('apply seats the 超级智能体 entry between 插件 and 自动化任务', async () => {
   const { exports } = await materialize()
   const registered = []
   const ctx = {
@@ -188,7 +231,7 @@ test('apply seats the 全局助理 entry between 插件 and 自动化任务', as
   const row = registered.find(entry => entry.props.name === 'sidebar.panellist')
   assert.equal(main?.props.key, 'superagent')
   assert.equal(row?.props.id, 'superagent')
-  assert.equal(row?.props.label, '全局助理')
+  assert.equal(row?.props.label, '超级智能体')
   assert.ok(row.props.order > 0 && row.props.order < 10, 'the row sorts between 插件 (0) and 自动化任务 (10)')
   assert.equal(typeof row.component, 'function')
 })
@@ -239,7 +282,7 @@ test('the main panel renders its own loading seat, without a frame', async () =>
   assert.equal(tree.props.className, 'dsa-root')
   const note = tree.children[0].children[0]
   assert.equal(note.props.className, 'dsa-note')
-  assert.equal(note.children[0], '正在连接全局助理…')
+  assert.equal(note.children[0], '正在连接超级智能体…')
 
   const row = registered.find(entry => entry.props.name === 'sidebar.panellist')
   const icon = row.component({ size: 16, active: true })
@@ -330,12 +373,13 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   const button = (nodes, label) => nodes.find(node => node.type === 'button'
     && (node.children.includes(label) || node.props.title === label || node.props['aria-label'] === label))
   const initial = render()
-  assert.equal(initial.some(node => node.type === 'aside'), true, 'the desktop workbench starts open')
-  assert.ok(initial.some(node => (node.children ?? []).includes('全局助理')), 'the assistant has one global identity')
-  assert.ok(initial.some(node => node.props?.role === 'tab' && node.props['aria-selected'] === true
-    && (node.children ?? []).includes('概览')), 'overview is the default tab')
-  button(initial, first.goal).props.onClick()
+  assert.equal(initial.some(node => node.type === 'aside'), false, 'the workbench stays out of the way until requested')
+  assert.ok(initial.some(node => node.type === 'h1' && node.props.className === 'dsa-sr-only'
+    && node.children.includes('超级智能体')), 'the assistant keeps one accessible heading')
+  assert.equal(initial.some(node => node.props?.className === 'dsa-hero'), false, 'the empty state has no duplicate brand block')
+  button(initial, '侧栏').props.onClick()
   const nodes = render()
+  button(nodes, first.goal).props.onClick()
   button(nodes, '补充要求').props.onClick()
   button(nodes, 'feedback.md').props.onClick()
   assert.equal(actions[0].taskId, goal.id)
@@ -346,20 +390,62 @@ test('the ready panel links a task receipt, a scoped follow-up, and a direct art
   button(nodes, '补充阶段要求 Review').props.onClick()
   assert.equal(actions.at(-1).run.id, goal.id)
   assert.equal(actions.at(-1).phase.id, 'p2')
-  button(render(), '待办').props.onClick()
-  // A phase receipt is a different button from a whole-task receipt: clicking
-  // it must open that phase's execution evidence.
+  // Phase receipts update the single task card instead of adding another card.
   const withPhase = render()
   const phaseButton = withPhase.find(node => node.type === 'button'
     && node.props?.title === '打开阶段 p1 的执行证据')
-  assert.ok(phaseButton, 'the phase receipt offers its own evidence entry')
-  phaseButton.props.onClick()
-  assert.equal(actions.at(-1).type, 'openReceipt')
-  assert.equal(actions.at(-1).message.runId, first.id)
-  const inbox = render({ inboxOpen: true })
-  assert.equal(inbox.some(node => node.children.includes('暂无待处理事项')), true)
-  assert.equal(inbox.find(node => node.props?.['aria-label'] === '任务列表')?.props.hidden, true,
-    'the task list stays mounted so its search can survive a view change')
+  assert.equal(phaseButton, undefined, 'phase receipts do not add a duplicate task card')
+})
+
+test('assistant replies use bubbles and task receipts collapse into one card', async () => {
+  const card = await panelHarness({
+    messages: [
+      { id: 'plain-reply', role: 'assistant', text: '普通回复', at: Date.now() },
+      { id: 'task-reply', role: 'assistant', text: '已接下这项任务。我会在后台推进。',
+        receipt: 'registered', taskId: 'goal-1', at: Date.now() },
+      { id: 'phase-reply', role: 'assistant', text: '阶段已完成。',
+        receipt: 'accepted', taskId: 'goal-1', phaseId: 'p2', runId: 'run-phase', at: Date.now() },
+    ],
+    workbench: { name: '测试工作台', projects: [], runs: [], inbox: [], goals: [
+      { id: 'goal-1', title: '处理任务', goal: '处理任务', status: 'running', phases: [
+        { id: 'p1', status: 'completed' }, { id: 'p2', status: 'running' },
+      ] },
+    ] },
+  })
+  const nodes = card.render()
+  const bubble = nodes.find(node => String(node.props?.className ?? '').includes('dsa-assistant-bubble'))
+  assert.ok(bubble, 'plain assistant replies are wrapped in a bubble')
+  assert.ok(textOf(bubble).includes('普通回复'))
+  const cards = nodes.filter(node => String(node.props?.className ?? '').includes('dsa-task-receipt-card'))
+  assert.equal(cards.length, 1, 'task state, title and progress share one card')
+  assert.ok(textOf(cards[0]).includes('处理任务'))
+  assert.equal(cards[0].props['data-receipt'], 'registered')
+  assert.ok(textOf(cards[0]).includes('进行中'))
+  assert.ok(textOf(cards[0]).includes('已完成 1/2 阶段'))
+  assert.equal(textOf(nodes).includes('已接下这项任务'), false, 'generic receipt prose is not duplicated')
+  assert.equal(textOf(nodes).includes('阶段已完成。'), false, 'phase receipts do not add duplicate cards')
+})
+
+test('assistant markdown keeps paragraphs and renders markdown, bare, and autolinks', async () => {
+  const card = await panelHarness({
+    messages: [{
+      id: 'markdown-reply', role: 'assistant', at: Date.now(),
+      text: '第一段。\n\n第二行\n继续第二段。\n\n- [PR #8204](https://github.com/trpc/trpc/pull/8204)\n- https://example.com/report\n- <https://example.org/query>\n\n**重点**和 `代码`。\n\n[直接评审请求查询]\n(https://api.github.com/search/issues?q=test)',
+    }],
+  })
+  const nodes = card.render()
+  assert.equal(nodes.filter(node => node.props?.className === 'dsa-md-paragraph').length, 4)
+  assert.equal(nodes.filter(node => node.type === 'br').length, 1)
+  assert.equal(nodes.filter(node => node.type === 'li').length, 3)
+  assert.deepEqual(nodes.filter(node => node.type === 'a').map(node => node.props.href), [
+    'https://github.com/trpc/trpc/pull/8204',
+    'https://example.com/report',
+    'https://example.org/query',
+    'https://api.github.com/search/issues?q=test',
+  ])
+  assert.equal(textOf(nodes).includes('[直接评审请求查询]'), false)
+  assert.ok(nodes.some(node => node.type === 'strong' && textOf(node).includes('重点')))
+  assert.ok(nodes.some(node => node.type === 'code' && textOf(node).includes('代码')))
 })
 
 /** Hook storage that keeps component state across explicit re-renders. */
@@ -404,7 +490,7 @@ function* walkTree(tree) {
 }
 
 /** Mount the stateful panel without a browser; effects remain inert. */
-async function panelHarness(patch = {}) {
+async function panelHarness(patch = {}, options = {}) {
   const cache = hookCache()
   let currentModel = {
     phase: 'ready', sessionId: 'chat-a', project: { cwd: '/work/a', name: '工作区 A' },
@@ -414,6 +500,8 @@ async function panelHarness(patch = {}) {
   }
   let shell
   let firstPanelHook = true
+  let panelAttemptHook = true
+  let firstSeatHook = true
   let renderedModel = null
   const { exports } = await materialize(null, {
     ...cache.hooks,
@@ -421,6 +509,14 @@ async function panelHarness(patch = {}) {
       if (firstPanelHook) {
         firstPanelHook = false
         return [currentModel, updater => { currentModel = updater(currentModel) }]
+      }
+      if (panelAttemptHook) {
+        panelAttemptHook = false
+        return cache.hooks.useState(initial)
+      }
+      if (firstSeatHook) {
+        firstSeatHook = false
+        if (options.defaultRailOpen !== false && initial === false) return cache.hooks.useState(true)
       }
       return cache.hooks.useState(initial)
     },
@@ -455,16 +551,20 @@ async function panelHarness(patch = {}) {
   }
 }
 
-test('the workbench keeps one global identity, switches tabs, and reopens after the narrow drawer closes', async () => {
-  const card = await panelHarness()
+test('the workbench stays closed by default, switches tabs, and reopens after the narrow drawer closes', async () => {
+  const card = await panelHarness({}, { defaultRailOpen: false })
   let nodes = card.render()
   const tab = (label) => nodes.find(node => node.props?.role === 'tab' && (node.children ?? []).includes(label))
+  assert.equal(nodes.some(node => node.type === 'aside'), false, 'the default view keeps only the conversation')
+  nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '侧栏').props.onClick()
+  nodes = card.render()
   assert.ok(nodes.some(node => node.type === 'aside'))
-  assert.ok(nodes.some(node => (node.children ?? []).includes('测试工作台')))
-  assert.ok(nodes.some(node => (node.children ?? []).includes('全局助理')))
-  assert.ok(nodes.some(node => (node.children ?? []).includes('在线')))
-  assert.ok(nodes.some(node => (node.children ?? []).includes('当前工作区：工作区 A')))
+  assert.ok(nodes.some(node => (node.children ?? []).includes('超级智能体')))
+  assert.equal(nodes.some(node => (node.children ?? []).includes('模型：')), false, 'technical identity metadata is not repeated')
+  assert.equal(nodes.some(node => (node.children ?? []).includes('当前工作区：')), false, 'the rail does not repeat composer context')
   assert.equal(tab('概览').props['aria-selected'], true)
+  assert.equal(tab('概览').props.id, 'dsa-tab-overview')
+  assert.equal(nodes.find(node => node.props?.id === 'dsa-rail-overview')?.props['aria-labelledby'], 'dsa-tab-overview')
 
   tab('任务').props.onClick()
   nodes = card.render()
@@ -472,13 +572,73 @@ test('the workbench keeps one global identity, switches tabs, and reopens after 
   assert.equal(nodes.find(node => node.props?.['aria-label'] === '任务列表')?.props.hidden, false)
   assert.ok(nodes.some(node => node.props?.className === 'dsa-rail-scrim'), 'the same rail can become the narrow drawer scrim')
 
-  nodes.find(node => node.props?.['aria-label'] === '关闭侧栏' && node.props.className === 'dsa-iconbtn').props.onClick()
+  nodes.find(node => node.props?.['aria-label'] === '侧栏').props.onClick()
   nodes = card.render()
   assert.equal(nodes.some(node => node.type === 'aside'), false)
-  nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '任务').props.onClick()
+  nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '侧栏').props.onClick()
   nodes = card.render()
-  assert.equal(nodes.some(node => node.type === 'aside'), true, 'the header reopens the preserved tab')
-  assert.equal(tab('任务').props['aria-selected'], true)
+  assert.equal(nodes.some(node => node.type === 'aside'), true, 'the header reopens the current view')
+  assert.equal(tab('概览').props['aria-selected'], true)
+})
+
+test('a workspace suggestion offers one recommended choice and a change path', async () => {
+  const card = await panelHarness({ workspaceSuggestion: { cwd: '/work/b', name: '项目 B', reason: '当前任务引用这个目录。' } })
+  let nodes = card.render()
+  const suggestion = nodes.find(node => node.props?.['aria-label'] === '工作区建议')
+  assert.ok(suggestion)
+  assert.ok(textOf(suggestion).includes('项目 B'))
+  assert.ok(textOf(suggestion).includes('当前任务引用这个目录。'))
+  await buttonIn(suggestion, '使用推荐').props.onClick()
+  assert.equal(card.model().project.cwd, '/work/b')
+  nodes = card.render()
+  assert.ok(buttonIn(nodes.find(node => node.props?.['aria-label'] === '工作区建议'), '更改'))
+
+  const plain = await panelHarness()
+  assert.equal(plain.render().some(node => node.props?.['aria-label'] === '工作区建议'), false)
+})
+
+test('the empty composer keeps one primary path and discloses secondary input tools', async () => {
+  const card = await panelHarness({
+    project: { cwd: null, name: '默认工作区' },
+    workbench: { name: '测试工作台', projects: [], runs: [], goals: [], inbox: [{ id: 'new', read: false }, { id: 'old', read: true }] },
+  }, { defaultRailOpen: false })
+  let nodes = card.render()
+  assert.equal(nodes.some(node => node.type === 'aside'), false)
+  assert.equal(nodes.some(node => node.props?.className === 'dsa-hero'), false)
+  assert.ok(nodes.some(node => node.type === 'h1' && node.props.className === 'dsa-empty-title'
+    && node.children.includes('超级智能体')), 'the empty state names the assistant above the composer')
+  assert.ok(nodes.some(node => node.type === 'textarea' && node.props.placeholder === '给超级智能体发消息…'))
+  assert.ok(nodes.some(node => node.props?.['aria-label'] === '发送给超级智能体'))
+  assert.ok(nodes.some(node => node.props?.['aria-label'] === '语音输入'))
+  const voiceIndex = nodes.findIndex(node => node.props?.['aria-label'] === '语音输入')
+  const sendIndex = nodes.findIndex(node => node.props?.['aria-label'] === '发送给超级智能体')
+  assert.ok(voiceIndex >= 0 && voiceIndex < sendIndex, 'voice sits immediately before send')
+  assert.ok(nodes.some(node => node.props?.['aria-label'] === '更多输入选项'))
+  assert.equal(nodes.filter(node => node.props?.className === 'dsa-header-action').length, 1, 'the header permanently keeps only the sidebar button')
+  assert.equal(nodes.some(node => node.props?.['aria-label'] === '待办 1 项'), false, 'the header has no secondary inbox button')
+  for (const label of ['添加文件', '切换工作区', '沿用最近对话', '插入批量清单']) {
+    assert.equal(nodes.some(node => node.props?.['aria-label'] === label), false, `${label} is not in the default toolbar`)
+  }
+  assert.equal(nodes.some(node => String(node.props?.['aria-label'] ?? '').startsWith('工作区，')), false,
+    'the default workspace does not need a persistent chip')
+
+  nodes.find(node => node.props?.['aria-label'] === '更多输入选项').props.onClick()
+  nodes = card.render()
+  assert.ok(nodes.some(node => node.props?.id === 'dsa-compose-menu'))
+  for (const label of ['添加文件', '切换工作区']) {
+    assert.ok(nodes.some(node => node.props?.['aria-label'] === label), `${label} remains available on demand`)
+  }
+  const menu = nodes.find(node => node.props?.id === 'dsa-compose-menu')
+  assert.ok(menu)
+  const menuNodes = [...walkTree(menu)]
+  for (const label of ['语音输入', '沿用最近对话', '插入批量清单']) {
+    assert.equal(menuNodes.some(node => node.props?.['aria-label'] === label), false, `${label} is not duplicated in the menu`)
+  }
+  assert.equal(nodes.filter(node => node.props?.['aria-label'] === '语音输入').length, 1)
+  nodes.find(node => node.props?.['aria-label'] === '切换工作区').props.onClick()
+  nodes = card.render()
+  assert.ok(nodes.some(node => node.props?.role === 'dialog' && node.props['aria-label'] === '工作区'),
+    'the default workspace still has a reachable switcher')
 })
 
 test('today summary is deterministic and the overview makes no model request', async () => {
@@ -508,12 +668,69 @@ test('today summary is deterministic and the overview makes no model request', a
   try {
     const card = await panelHarness({ workbench: model.workbench })
     const nodes = card.render()
-    assert.ok(nodes.some(node => node.props?.className === 'dsa-summary-grid'))
+    const overview = nodes.find(node => node.props?.['aria-label'] === '概览')
+    assert.equal([...walkTree(overview)].filter(node => node.props?.className === 'dsa-overview-task').length, 1)
+    const text = nodes.map(node => node.children?.join?.(' ') ?? '').join(' ')
+    assert.equal(text.includes('需要关注'), false)
+    assert.equal(text.includes('今日摘要'), false)
+    assert.equal(text.includes('按本地日期确定性统计'), false)
+    assert.equal(text.includes('待办摘要'), false)
+    assert.equal(text.includes('暂无待处理事项'), false)
     assert.equal(calls, 0)
   } finally {
     if (originalFetch === undefined) delete globalThis.fetch
     else globalThis.fetch = originalFetch
   }
+})
+
+test('an empty overview keeps only a compact status and no duplicate action', async () => {
+  const card = await panelHarness()
+  const nodes = card.render()
+  const overview = nodes.find(node => node.props?.['aria-label'] === '概览')
+  assert.ok(overview)
+  assert.equal([...walkTree(overview)].filter(node => node.props?.className === 'dsa-overview-status').length, 1)
+  assert.equal([...walkTree(overview)].filter(node => node.props?.className === 'dsa-overview-task').length, 0)
+  assert.equal(buttonIn(nodes, '发起任务'), undefined)
+  assert.equal(textOf(overview).includes('今日摘要'), false)
+  assert.equal(textOf(overview).includes('暂无产物'), false)
+})
+
+test('overview shows one current task and suppresses duplicate inbox demand', async () => {
+  const at = minutes => new Date(Date.now() - minutes * 60_000).toISOString()
+  const goals = [
+    { id: 'done-new', goal: '最新完成', status: 'completed', createdAt: at(1), finishedAt: at(1), phases: [] },
+    { id: 'done-old', goal: '较早完成', status: 'completed', createdAt: at(2), finishedAt: at(2), phases: [] },
+    { id: 'active', goal: '正在执行', status: 'running', createdAt: at(30), phases: [] },
+    { id: 'decision', goal: '等待决定', status: 'needs-decision', createdAt: at(40), phases: [] },
+    { id: 'done-oldest', goal: '最久完成', status: 'completed', createdAt: at(50), finishedAt: at(50), phases: [] },
+  ]
+  const runs = [{ id: 'run-artifacts', goal: '产物任务', status: 'completed', createdAt: at(60), finishedAt: at(60),
+    artifacts: [1, 2, 3, 4].map(index => ({ name: `产物 ${index}.md`, href: `artifact-${index}.md`, at: at(index) })) }]
+  const inbox = [1, 2, 3].map(index => ({ id: `inbox-${index}`, goalId: 'decision', title: `待办 ${index}`, read: false }))
+  const card = await panelHarness({ workbench: { goals, runs, inbox } })
+  const nodes = card.render()
+  const overview = nodes.find(node => node.props?.['aria-label'] === '概览')
+  const preview = [...walkTree(overview)]
+  const text = preview.map(node => node.children?.join?.(' ') ?? '').join(' ')
+  const tasks = preview.filter(node => node.props?.className === 'dsa-overview-task')
+  assert.equal(tasks.length, 1)
+  assert.deepEqual(tasks.map(node => node.props.title), ['等待决定'])
+  assert.equal(preview.filter(node => String(node.props?.className ?? '').includes('dsa-overview-row')).length, 0)
+  assert.equal(preview.filter(node => node.props?.className === 'dsa-detail-label').length, 0)
+  assert.equal(preview.filter(node => node.props?.className === 'dsa-inbox-summary').length, 0, 'the task card already carries the decision demand')
+  assert.equal(text.includes('待办 1'), false)
+  assert.equal(text.includes('产物 4.md'), false)
+  assert.equal(text.includes('今日摘要'), false)
+  assert.equal(preview.some(node => node.type === 'button' && node.props.variant === 'primary'), false)
+
+  const mixed = await panelHarness({ workbench: { goals, runs, inbox: [
+    { id: 'same', goalId: 'decision', title: '当前任务待办', read: false },
+    { id: 'other', goalId: 'other', title: '其它任务待办', read: false },
+  ] } })
+  const mixedOverview = mixed.render().find(node => node.props?.['aria-label'] === '概览')
+  const mixedPreview = [...walkTree(mixedOverview)]
+  assert.equal(mixedPreview.filter(node => node.props?.className === 'dsa-inbox-summary').length, 1)
+  assert.ok(textOf(mixedOverview).includes('1 项待处理'), 'unrelated pending work remains visible')
 })
 
 test('long-goal phase runs do not duplicate the goal task card', async () => {
@@ -560,7 +777,7 @@ async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {})
     return nodes
   }
   const openRail = () => {
-    const tasks = render().find(node => node.type === 'button' && node.props?.['aria-label'] === '任务')
+    const tasks = render().find(node => node.type === 'button' && node.props?.['aria-label'] === '侧栏')
     assert.ok(tasks, 'the header offers the task view')
     tasks.props.onClick()
     return render()
@@ -568,7 +785,7 @@ async function taskCardHarness(goalPatch = {}, modelPatch = {}, benchPatch = {})
   const button = (nodes, label) => nodes.find(node => node.type === 'button' && (node.children ?? []).includes(label))
   const composer = nodes => nodes.find(node => node.type === 'textarea')
   const hint = (nodes, name) => nodes.find(node => String(node.props?.className ?? '').includes(name))?.children?.[0]
-  return { render, openRail, actions, goal, button, composer, hint }
+  return { render, openRail, actions, goal, model, button, composer, hint }
 }
 
 test('a phase decision shows one conclusion and hides raw failure detail by default', async () => {
@@ -585,8 +802,8 @@ test('a phase decision shows one conclusion and hides raw failure detail by defa
     inbox: [{ id: 'goal:goal-empty:d1', kind: 'decision', title: '阶段失败', goalId: 'goal-empty',
       sessionId: 'chat-a', project: null, read: false, item: decision }],
   })
-  card.render().find(node => node.type === 'button' && (node.children ?? []).includes('待办')).props.onClick()
-  const nodes = card.render({ inboxOpen: true })
+  card.openRail().find(node => node.props?.role === 'tab' && node.children.includes('更多')).props.onClick()
+  const nodes = card.render({ more: { ...card.model.more, panel: 'inbox', loading: false } })
   const attention = nodes.find(node => node.props?.className === 'dsa-attention-card')
   assert.ok(attention, 'the decision card is present in the inbox')
   const inner = [...walkTree(attention)]
@@ -806,15 +1023,16 @@ test('global artifacts use the console filters, descriptor ownership, visible er
   try {
     const card = await panelHarness()
     let nodes = card.render()
-    const tab = label => nodes.find(node => node.props?.role === 'tab' && (node.children ?? []).includes(label))
-    tab('产物').props.onClick()
+    nodes.find(node => node.props?.role === 'tab' && (node.children ?? []).includes('更多')).props.onClick()
+    nodes = card.render()
+    nodes.find(node => node.props?.['aria-label'] === '产物库').props.onClick()
     await new Promise(resolve => setImmediate(resolve))
     nodes = card.render()
     assert.equal(new URL(requests[0], 'http://local').searchParams.get('limit'), '50')
     assert.match(requests[0], /[?&]q=&kind=&project=&from=&to=&limit=50$/)
     assert.equal(new URL(requests[0], 'http://local').searchParams.get('from'), '')
     assert.equal(new URL(requests[0], 'http://local').searchParams.get('to'), '')
-    assert.equal(tab('产物').props['aria-selected'], true)
+    assert.equal(card.model().more.panel, 'artifacts')
 
     const artifactCard = nodes.find(node => node.props?.className === 'dsa-artifact-card')
     assert.ok(artifactCard, 'the API descriptor is a clickable card')
@@ -831,13 +1049,13 @@ test('global artifacts use the console filters, descriptor ownership, visible er
     assert.match(card.model().previewError, /读取失败/)
     assert.equal(card.model().toast.kind, 'err', 'a failed preview is not silent')
 
-    await nodes.find(node => node.props?.['aria-label'] === '返回产物').props.onClick()
+    await nodes.find(node => node.props?.['aria-label'] === '返回更多').props.onClick()
     nodes = card.render()
     assert.equal(card.model().preview, null)
     assert.equal(card.model().detail.id, 'run-1', 'preview keeps the existing return-to-detail behavior')
-    await nodes.find(node => node.props?.['aria-label'] === '返回产物').props.onClick()
+    await nodes.find(node => node.props?.['aria-label'] === '返回更多').props.onClick()
     nodes = card.render()
-    assert.equal(tab('产物').props['aria-selected'], true, 'closing the detail returns to the originating tab')
+    assert.equal(card.model().more.panel, 'artifacts', 'closing the detail returns to the originating panel')
     assert.equal(card.model().detail, null)
 
     const searchArtifacts = nodes.find(node => node.props?.['aria-label'] === '搜索产物')
@@ -877,36 +1095,13 @@ test('global artifacts use the console filters, descriptor ownership, visible er
   }
 })
 
-test('automation lists recent schedule runs and states the empty case explicitly', async () => {
-  const originalFetch = globalThis.fetch
-  const requests = []
-  let sessions = [{ sessionId: 'schedule-a', title: '每日发布检查', cwd: '/work/a', rows: [
-    { id: 'run-a', goal: '检查发布产物', status: 'completed', parentSessionId: 'schedule-a', finishedAt: new Date().toISOString(), origin: { kind: 'scheduled', scheduleId: 'schedule-1' } },
-    { id: 'run-manual', goal: '手动任务不应混入自动化', status: 'completed', parentSessionId: 'schedule-a', finishedAt: new Date().toISOString() },
-  ] }]
-  globalThis.fetch = async route => {
-    requests.push(route)
-    return { ok: true, status: 200, json: async () => ({ ok: true, data: { sessions, reason: null } }) }
-  }
-  try {
-    const card = await panelHarness()
-    let nodes = card.render()
-    nodes.find(node => node.props?.role === 'tab' && (node.children ?? []).includes('自动化')).props.onClick()
-    await new Promise(resolve => setImmediate(resolve))
-    nodes = card.render()
-    assert.deepEqual(requests, ['/superagent/api/console/schedules'])
-    assert.ok(nodes.some(node => (node.children ?? []).includes('检查发布产物')))
-    assert.ok(nodes.some(node => (node.children ?? []).includes('每日发布检查')))
-    assert.equal(nodes.some(node => (node.children ?? []).includes('手动任务不应混入自动化')), false)
-
-    sessions = []
-    await card.dispatch({ type: 'loadAutomation' })
-    nodes = card.render()
-    assert.ok(nodes.some(node => (node.children ?? []).includes('暂无自动化执行记录')))
-  } finally {
-    if (originalFetch === undefined) delete globalThis.fetch
-    else globalThis.fetch = originalFetch
-  }
+test('run history is not a separate global destination', async () => {
+  const card = await panelHarness()
+  let nodes = card.render()
+  nodes.find(node => node.props?.role === 'tab' && (node.children ?? []).includes('更多')).props.onClick()
+  nodes = card.render()
+  assert.equal(nodes.some(node => node.props?.['aria-label'] === '运行记录'), false)
+  assert.equal(nodes.some(node => node.props?.['aria-label'] === '自动化规则'), false)
 })
 
 test('an empty task offers 加别名 and 记决定, and 加别名 only prefills the composer', async () => {
@@ -923,7 +1118,7 @@ test('an empty task offers 加别名 and 记决定, and 加别名 only prefills 
   assert.deepEqual(card.actions, [], 'a prefill never sends by itself')
   const after = card.render()
   assert.equal(card.composer(after).props.value, '/别名 goal-empty | ')
-  assert.equal(card.composer(after).props['aria-label'], '给全局助理发消息',
+  assert.equal(card.composer(after).props['aria-label'], '给超级智能体发消息',
     'the command goes through the plain message entry, not a task follow-up')
 })
 
@@ -1106,7 +1301,7 @@ test('todo and phase-receipt controls stay inside a narrow, 200%-zoomed panel', 
       'the task receipt must be capped by its container')
     assert.match(css, /\.dsa-task-receipt[^}]*min-width:0/u)
     assert.match(css, /\.dsa-receipt-copy\{[^}]*min-width:0/u)
-    assert.match(css, /\.dsa-receipt-copy strong\{[^}]*overflow-wrap:anywhere/u)
+    assert.match(css, /\.dsa-receipt-heading strong\{[^}]*overflow-wrap:anywhere/u)
     assert.match(css, /\.dsa-answer-row\{[^}]*flex-wrap:wrap/u,
       'todo buttons and the answer field must wrap instead of overflowing')
     assert.match(css, /\.dsa-answer-row > button\{[^}]*max-width:100%[^}]*min-width:0/u)
@@ -1115,16 +1310,22 @@ test('todo and phase-receipt controls stay inside a narrow, 200%-zoomed panel', 
       'a narrow panel must not hide the receipt')
     assert.doesNotMatch(css, /\.dsa-answer-row > button[^}]*display:none/u,
       'a narrow panel must not hide a todo action')
+    assert.match(css, /\.dsa-workbench\{[^}]*box-sizing:border-box/u, 'the drawer border stays inside its viewport width')
     assert.match(css, /@container dsa-shell \(max-width:820px\)\{[^}]*\.dsa-body\[data-rail=open\][^}]*grid-template-columns:minmax\(0,1fr\)/u,
       'the resident rail becomes an overlay at the shell container breakpoint')
     assert.match(css, /@container dsa-shell \(max-width:820px\)\{[\s\S]*?\.dsa-workbench\{[^}]*position:absolute/u)
     assert.match(css, /@container dsa-shell \(max-width:820px\)\{[\s\S]*?\.dsa-rail-scrim\{[^}]*display:block/u)
-    assert.match(css, /@container dsa-rail \(min-width:360px\)\{\.dsa-artifact-grid\{[^}]*repeat\(2,/u,
-      'artifact cards use their own rail container, not the viewport')
+    assert.doesNotMatch(css, /@container dsa-rail \(min-width:360px\)\{\.dsa-artifact-grid\{[^}]*repeat\(2,/u,
+      'artifact cards stay single-column in the narrow rail')
+    assert.match(css, /\.dsa-more-grid\{grid-template-columns:minmax\(0,1fr\)/u,
+      'More cards stay single-column in the narrow rail')
     assert.match(css, /@container dsa-shell \(max-width:480px\)\{[\s\S]*?\.dsa-workbench\{[^}]*width:min\(375px,100%\)/u,
       'the narrow drawer is capped at 375px')
     assert.match(css, /@container dsa-rail \(max-width:375px\)\{[^}]*\.dsa-more-grid\{[^}]*grid-template-columns:minmax\(0,1fr\)/u,
       'More cards collapse inside a 375px rail')
+    assert.doesNotMatch(css, /\.dsa-hero/u, 'the empty state has no duplicate brand block')
+    assert.match(css, /\.dsa-compose-menu\{[^}]*max-width:100%/u)
+    assert.match(css, /@media \(prefers-reduced-motion:reduce\)/u, 'motion respects the OS preference')
   } finally {
     if (originalDocument === undefined) delete globalThis.document
     else globalThis.document = originalDocument
@@ -1145,41 +1346,68 @@ async function openMore(card, label) {
   tab.props.onClick()
   await settle()
   nodes = card.render()
-  const entry = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === label)
+  let entry = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === label)
+  if (!entry) {
+    const settings = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === '高级设置')
+    if (settings) await settings.props.onClick()
+    else {
+      const back = nodes.find(node => node.type === 'button' && node.children.includes('返回常用'))
+      assert.ok(back, 'More can return from Settings to common entries')
+      await back.props.onClick()
+    }
+    nodes = card.render()
+    entry = nodes.find(node => node.type === 'button' && node.props?.['aria-label'] === label)
+  }
   assert.ok(entry, `More offers ${label}`)
   await entry.props.onClick()
   return card.render()
 }
 
+async function openPlanForTest(card) {
+  let nodes = card.render()
+  nodes.find(node => node.props?.role === 'tab' && node.children.includes('更多')).props.onClick()
+  card.model().more = { ...card.model().more, panel: 'plan', loading: false, error: '', busy: {}, confirming: {},
+    planDraft: { goal: '', constraints: '', tasks: '', allow: 'read, write', deny: 'shell.execute, network', isolation: 'workspace', budget: '' } }
+  return card.render()
+}
+
 function field(nodes, label) {
+  const direct = nodes.find(node => ['input', 'select', 'textarea'].includes(node.type) && node.props?.['aria-label'] === label)
+  if (direct) return direct
   const owner = nodes.find(node => node.type === 'label' && (node.children ?? []).includes(label))
   assert.ok(owner, `the panel has a ${label} field`)
   return [...walkTree(owner)].find(node => ['input', 'select', 'textarea'].includes(node.type))
 }
 
-test('the More tab opens native subpanels and returns to its card hub', async () => {
+test('the More tab keeps two common entries and discloses advanced settings', async () => {
   const card = await panelHarness()
   let nodes = card.render()
   const more = nodes.find(node => node.props?.role === 'tab' && (node.children ?? []).includes('更多'))
   more.props.onClick()
   nodes = card.render()
   assert.equal(nodes.find(node => node.props?.role === 'tab' && (node.children ?? []).includes('更多'))?.props['aria-selected'], true)
-  for (const label of ['通知中心', '能力中心', '记忆中心', '运行时视图', '质量证据', '成本中心',
-    'Agent 档案', '设备配对', '计划预览', '自动化规则', '分享', '市场', '云端 Worker']) {
+  for (const label of ['产物库', '待办中心']) {
     assert.ok(nodes.some(node => node.type === 'button' && node.props?.['aria-label'] === label), label)
   }
-  const plan = nodes.find(node => node.props?.['aria-label'] === '计划预览')
-  await plan.props.onClick()
+  assert.equal(nodes.some(node => node.props?.['aria-label'] === '能力与连接'), false, 'advanced entries are hidden by default')
+  const settings = nodes.find(node => node.props?.['aria-label'] === '高级设置')
+  assert.ok(settings)
+  await settings.props.onClick()
   nodes = card.render()
-  assert.ok(nodes.some(node => node.props?.['aria-label'] === '返回更多'))
-  assert.ok(nodes.some(node => (node.children ?? []).includes('当前或最近任务中没有可预览的子任务')))
-  await nodes.find(node => node.props?.['aria-label'] === '返回更多').props.onClick()
+  for (const label of ['通知设置', '能力与连接', '记忆中心', '屏幕与控制', '费用', '智能体设置', '设备', '分享', '市场', '云端 Worker']) {
+    assert.ok(nodes.some(node => node.type === 'button' && node.props?.['aria-label'] === label), label)
+  }
+  await nodes.find(node => node.type === 'button' && node.children.includes('返回常用')).props.onClick()
   nodes = card.render()
-  assert.equal(card.model().more.panel, null)
+  assert.equal(nodes.some(node => node.props?.['aria-label'] === '自动化规则'), false)
+  assert.equal(nodes.some(node => node.props?.['aria-label'] === '运行记录'), false)
+  assert.equal(nodes.some(node => node.props?.['aria-label'] === '任务拆解'), false)
+  assert.equal(nodes.some(node => node.props?.['aria-label'] === '验收结果'), false)
+  assert.equal(card.model().more?.panel ?? null, null)
   assert.ok(nodes.some(node => node.props?.className === 'dsa-more-grid'))
 })
 
-test('notification center renders inbox/brief and saves dailyBrief/quietHours through PATCH', async () => {
+test('notification settings render brief and save dailyBrief/quietHours through PATCH', async () => {
   const originalFetch = globalThis.fetch
   const requests = []
   let preferences = {
@@ -1210,11 +1438,9 @@ test('notification center renders inbox/brief and saves dailyBrief/quietHours th
   }
   try {
     const card = await panelHarness()
-    let nodes = await openMore(card, '通知中心')
-    assert.ok(nodes.some(node => (node.children ?? []).includes('发布完成')))
+    let nodes = await openMore(card, '通知设置')
+    assert.equal(nodes.some(node => (node.children ?? []).includes('发布完成')), false, 'notification settings do not duplicate the inbox queue')
     assert.ok(nodes.some(node => (node.children ?? []).includes('Daily brief — 1 completed')))
-    await nodes.find(node => node.type === 'button' && node.props?.onClick && (node.children ?? []).includes('标为已读')).props.onClick()
-    assert.ok(requests.some(request => request.route.endsWith('/notices/read') && request.body.ids[0] === 'n1'))
     field(nodes, '完成').props.onChange({ target: { value: 'inbox' } })
     field(nodes, '启用每日简报').props.onChange({ target: { checked: false } })
     field(card.render(), '简报时间').props.onChange({ target: { value: '08:30' } })
@@ -1342,7 +1568,7 @@ test('capability center lists skills/mcp/grants and sends probe/restart/setEnabl
   }
   try {
     const card = await panelHarness()
-    let nodes = await openMore(card, '能力中心')
+    let nodes = await openMore(card, '能力与连接')
     assert.ok(nodes.some(node => (node.children ?? []).includes('release-review')))
     assert.ok(nodes.some(node => (node.children ?? []).includes('docs')))
     assert.ok(nodes.some(node => (node.children ?? []).includes('repo.read')))
@@ -1403,7 +1629,7 @@ test('runtime view captures, takes over, releases and confirms emergency stop', 
   }
   try {
     const card = await panelHarness({ detail: { id: 'run-1', goal: '检查', status: 'running' } })
-    let nodes = await openMore(card, '运行时视图')
+    let nodes = await openMore(card, '屏幕与控制')
     for (const label of ['截图', '接管', '释放']) {
       await nodes.find(node => node.type === 'button' && (node.children ?? []).includes(label)).props.onClick()
       nodes = card.render()
@@ -1422,7 +1648,7 @@ test('runtime view captures, takes over, releases and confirms emergency stop', 
   }
 })
 
-test('quality evidence, cost, profiles and device pairing load through the More hub', async () => {
+test('cost, profiles and device pairing load through advanced settings', async () => {
   const originalFetch = globalThis.fetch
   const requests = []
   let profiles = [{ id: 'agent-1', name: '研究员', role: 'researcher', model: 'test/model', enabled: true, revision: 1, tools: ['read_file'], permissions: ['workspace.read'] }]
@@ -1430,7 +1656,11 @@ test('quality evidence, cost, profiles and device pairing load through the More 
   globalThis.fetch = async (route, options = {}) => {
     requests.push({ route, method: options.method ?? 'GET', body: options.body ? JSON.parse(options.body) : null })
     if (route.includes('/runs/run-1/evidence?')) return jsonResponse({ runId: 'run-1', cards: [{ id: 'e1', title: '机器校验', category: 'machine', status: 'passed', basis: { summary: '退出码 0' }, confidence: { level: 'verified' } }], summary: { total: 1, byStatus: { passed: 1, failed: 0, unverified: 0 } } })
-    if (route.endsWith('/cost') && options.method === 'POST') return jsonResponse({ ok: true, status: 'selected', provider: 'test', model: 'model-v1', route: 'test/model-v1', role: 'worker', estimatedMicros: 10, currency: 'CNY' })
+    if (route.endsWith('/cost') && options.method === 'POST') {
+      const body = JSON.parse(options.body)
+      if (body.action === 'budget') return jsonResponse({ budgets: body.budgets })
+      return jsonResponse({ ok: true, status: 'selected', provider: 'test', model: 'model-v1', route: 'test/model-v1', role: 'worker', estimatedMicros: 10, currency: 'CNY' })
+    }
     if (route.endsWith('/cost')) return jsonResponse({ runs: 1, records: 1, complete: false, byCurrency: { CNY: 100_000 }, byModel: { 'test/model': { calls: 1, totalTokens: 10, priced: true, amountMicros: 100_000 } }, unpricedItems: [{ model: 'unpriced/model', runId: 'run-1', reason: 'no usable price' }] })
     if (route.endsWith('/profiles?includeDisabled=true')) return jsonResponse(profiles)
     if (route.endsWith('/profiles') && options.method === 'POST') {
@@ -1449,28 +1679,28 @@ test('quality evidence, cost, profiles and device pairing load through the More 
   }
   try {
     const card = await panelHarness({ workbench: { runs: [{ id: 'run-1', goal: '最近任务', status: 'completed', parentSessionId: 'chat-a' }], goals: [], inbox: [] } })
-    let nodes = await openMore(card, '质量证据')
-    assert.match(requests[0].route, /\/runs\/run-1\/evidence\?limit=100$/)
-    assert.ok(nodes.some(node => (node.children ?? []).includes('机器校验')))
-    assert.ok(nodes.some(node => (node.children ?? []).includes('退出码 0')))
-
-    await card.dispatch({ type: 'closeMore' })
-    nodes = await openMore(card, '成本中心')
+    let nodes = await openMore(card, '费用')
     assert.ok(nodes.some(node => (node.children ?? []).includes('CNY 0.1')))
     assert.ok(nodes.some(node => (node.children ?? []).includes('unpriced/model')))
     assert.ok(nodes.some(node => (node.children ?? []).includes('no usable price')))
+    field(nodes, '预算金额').props.onChange({ target: { value: '2.5' } })
+    nodes = card.render()
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('保存预算')).props.onClick()
+    assert.deepEqual(requests.filter(request => request.method === 'POST').at(-1).body,
+      { action: 'budget', budgets: { USD: 2_500_000 } })
     await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('获取路由建议')).props.onClick()
     assert.deepEqual(requests.filter(request => request.method === 'POST').at(-1).body,
       { action: 'route', role: 'worker', complexity: 'medium', inputTokens: 4000 })
     assert.ok(textOf(card.render()).includes('model-v1'))
 
     await card.dispatch({ type: 'closeMore' })
-    nodes = await openMore(card, 'Agent 档案')
-    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('停用档案')).props.onClick()
+    nodes = await openMore(card, '智能体设置')
+    await nodes.find(node => node.type === 'button' && (node.children ?? []).includes('停用')).props.onClick()
+    await card.render().find(node => node.type === 'button' && (node.children ?? []).includes('确认停用')).props.onClick()
     assert.deepEqual(requests.filter(request => request.method === 'POST').at(-1).body, { action: 'toggle', id: 'agent-1', enabled: false })
 
     await card.dispatch({ type: 'closeMore' })
-    nodes = await openMore(card, '设备配对')
+    nodes = await openMore(card, '设备')
     assert.ok(nodes.some(node => (node.children ?? []).includes('旧手机')))
     field(nodes, '设备名称').props.onChange({ target: { value: '新手机' } })
     nodes = card.render()
@@ -1505,19 +1735,22 @@ test('the global assistant editor saves every editable field through the profile
       assistant = { ...assistant, ...body.patch, revision: assistant.revision + 1 }
       return jsonResponse(assistant)
     }
+    if (route.endsWith('/profiles') && method === 'POST' && body.action === 'toggle') {
+      assistant = { ...assistant, enabled: body.enabled, revision: assistant.revision + 1 }
+      return jsonResponse(assistant)
+    }
     throw new Error(`unexpected route ${route}`)
   }
   try {
     const card = await panelHarness()
-    let nodes = await openMore(card, 'Agent 档案')
-    assert.ok(textOf(nodes).includes('角色：assistant（不可修改）'))
-    assert.ok(textOf(nodes).includes('ID：global-assistant（保留且不可修改）'))
-    assert.ok(textOf(nodes).includes('记忆范围：global（固定）'))
-    assert.ok(textOf(nodes).includes('工作区范围：global（固定）'))
+    let nodes = await openMore(card, '智能体设置')
+    assert.ok(textOf(nodes).includes('超级智能体设置'))
+    assert.ok(nodes.some(node => node.type === 'details' && (node.children ?? []).some(child => child.type === 'summary' && child.children.includes('高级选项'))))
+    assert.equal(textOf(nodes).includes('角色：assistant'), false)
     for (const [label, value] of [
-      ['全局助理名称', 'Release Assistant'], ['全局助理头像', 'bot'], ['全局助理 Provider', 'local'],
-      ['全局助理模型', 'test/model'], ['全局助理工具', 'read_file, write_file'],
-      ['全局助理权限', 'workspace.read, workspace.write, memory.global'],
+      ['超级智能体名称', 'Release Assistant'], ['超级智能体头像', 'bot'], ['超级智能体 Provider', 'local'],
+      ['超级智能体模型', 'test/model'], ['超级智能体工具', 'read_file, write_file'],
+      ['超级智能体权限', 'workspace.read, workspace.write, memory.global'],
     ]) {
       await nodes.find(node => node.props?.['aria-label'] === label).props.onChange({ target: { value } })
       nodes = card.render()
@@ -1531,9 +1764,14 @@ test('the global assistant editor saves every editable field through the profile
     } })
     assert.equal(card.model().more.profileDraft.expectedRevision, 5)
     assert.equal(card.model().more.profileDraft.dirty, false)
-    await card.render().find(node => node.props?.['aria-label'] === '全局助理模型').props.onChange({ target: { value: 'test/model-v2' } })
+    await card.render().find(node => node.props?.['aria-label'] === '超级智能体模型').props.onChange({ target: { value: 'test/model-v2' } })
     await card.render().find(node => node.type === 'form').props.onSubmit({ preventDefault() {} })
     assert.equal(requests.filter(request => request.method === 'POST').at(-1).body.expectedRevision, 5)
+    await buttonIn(card.render(), '停用超级智能体').props.onClick()
+    assert.equal(requests.some(request => request.body?.action === 'toggle'), false)
+    await buttonIn(card.render(), '确认停用').props.onClick()
+    assert.deepEqual(requests.filter(request => request.body?.action === 'toggle').at(-1),
+      { route: '/superagent/api/console/profiles', method: 'POST', body: { action: 'toggle', id: 'global-assistant', enabled: false } })
   } finally {
     if (originalFetch === undefined) delete globalThis.fetch
     else globalThis.fetch = originalFetch
@@ -1616,6 +1854,8 @@ test('composer voice stub records PCM16 WAV, inserts a draft, and discards a lat
     await settle()
     assert.equal(VoiceRecorder.instances.length, 1)
     nodes = card.render()
+    assert.equal(nodes.filter(node => node.props?.['aria-label'] === '停止录音').length, 1,
+      'the voice control stays mounted through state changes')
     await nodes.find(node => node.props?.['aria-label'] === '停止录音').props.onPointerUp(pointer)
     nodes = card.render()
     assert.equal(card.composer(nodes).props.value, '识别文本')
@@ -1779,6 +2019,42 @@ test('artifact preview opens the original run or continues in a new conversation
   }
 })
 
+test('candidate plans auto-generate from goal and optional constraints while manual inputs stay advanced', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (route, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : null
+    requests.push({ route, method: options.method ?? 'GET', body })
+    if (route.endsWith('/plan-preview') && body.action === 'auto') return jsonResponse({
+      kind: 'candidate-plan-preview', status: 'ready', canApprove: true, planDigest: `sha256:${'d'.repeat(64)}`,
+      goal: { title: body.goal }, inputSnapshot: { goal: body.goal, project: body.project, subtasks: [{ id: 'one' }],
+        permissionScope: { allow: ['read'] }, runtime: { cwd: body.project } },
+      issues: [], blocks: [], estimate: { cost: {} }, dag: { tasks: [{ id: 'one', title: '自动任务' }] }, executionStarted: false,
+    })
+    throw new Error(`unexpected route ${route}`)
+  }
+  try {
+    const card = await panelHarness()
+    let nodes = await openPlanForTest(card)
+    const mainForm = nodes.find(node => node.type === 'form' && textOf(node).includes('自动生成计划'))
+    assert.ok(mainForm)
+    assert.equal(textOf(mainForm).includes('子任务'), false)
+    assert.equal(textOf(mainForm).includes('允许工具'), false)
+    assert.ok(nodes.some(node => node.type === 'details' && textOf(node).includes('高级设置')))
+    await field(nodes, '候选计划目标').props.onChange({ target: { value: '整理发布说明' } })
+    nodes = card.render()
+    await field(nodes, '候选计划约束').props.onChange({ target: { value: '只读代码' } })
+    nodes = card.render()
+    await nodes.find(node => node.type === 'form' && textOf(node).includes('自动生成计划')).props.onSubmit({ preventDefault() {} })
+    assert.deepEqual(requests[0].body, { action: 'auto', goal: '整理发布说明', project: '/work/a', constraints: '只读代码' })
+    assert.equal(card.model().more.planPreview.kind, 'candidate-plan-preview')
+    assert.ok(textOf(card.render()).includes('自动任务'))
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch
+    else globalThis.fetch = originalFetch
+  }
+})
+
 test('candidate plan approval does not submit a blind message when Router support is absent', async () => {
   const originalFetch = globalThis.fetch
   const requests = []
@@ -1805,14 +2081,14 @@ test('candidate plan approval does not submit a blind message when Router suppor
   }
   try {
     const card = await panelHarness()
-    let nodes = await openMore(card, '计划预览')
+    let nodes = await openPlanForTest(card)
     const goalField = nodes.find(node => node.props?.['aria-label'] === '候选计划目标')
     assert.ok(goalField, `candidate goal field missing: ${textOf(nodes).slice(-1200)}`)
     await goalField.props.onChange({ target: { value: '候选发布' } })
     nodes = card.render()
     await field(nodes, '子任务（每行一个）').props.onChange({ target: { value: '起草：写报告' } })
     nodes = card.render()
-    await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} })
+    await nodes.find(node => node.type === 'form' && textOf(node).includes('手工预览候选计划')).props.onSubmit({ preventDefault() {} })
     assert.equal(requests[0].body.action, 'candidate')
     assert.equal(requests[0].body.subtasks[0].title, '起草')
     assert.deepEqual(requests[0].body.permissionScope.deny, ['shell.execute', 'network'])
@@ -1824,7 +2100,7 @@ test('candidate plan approval does not submit a blind message when Router suppor
     assert.deepEqual(requests.filter(request => request.route.endsWith('/plan-preview')).map(request => request.body.action), ['candidate', 'approve'])
     assert.equal(requests.some(request => request.route.endsWith('/message')), false)
     assert.equal(card.model().more.planHandoff.state, 'awaiting-router')
-    assert.ok(textOf(card.render()).includes('未发送任务，避免无绑定执行'))
+    assert.ok(textOf(card.render()).includes('计划已批准，但系统尚未确认执行方式；没有启动任务。'))
   } finally {
     if (originalFetch === undefined) delete globalThis.fetch
     else globalThis.fetch = originalFetch
@@ -1868,12 +2144,12 @@ test('an approved candidate plan is bound to the next Router submission', async 
   }
   try {
     const card = await panelHarness()
-    let nodes = await openMore(card, '计划预览')
+    let nodes = await openPlanForTest(card)
     await nodes.find(node => node.props?.['aria-label'] === '候选计划目标').props.onChange({ target: { value: '发布候选' } })
     nodes = card.render()
     await nodes.find(node => node.props?.['aria-label'] === '候选计划子任务').props.onChange({ target: { value: '起草：写报告\n复核：检查证据' } })
     nodes = card.render()
-    await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} })
+    await nodes.find(node => node.type === 'form' && textOf(node).includes('手工预览候选计划')).props.onSubmit({ preventDefault() {} })
     await buttonIn(card.render(), '批准并运行').props.onClick()
     const approveIndex = requests.findIndex(request => request.body?.action === 'approve')
     const messageIndex = requests.findIndex(request => request.route.endsWith('/message'))
@@ -1905,14 +2181,14 @@ test('blocked candidate plans expose no runnable approval control', async () => 
   }
   try {
     const card = await panelHarness()
-    let nodes = await openMore(card, '计划预览')
+    let nodes = await openPlanForTest(card)
     await nodes.find(node => node.props?.['aria-label'] === '候选计划目标').props.onChange({ target: { value: '阻塞发布' } })
     nodes = card.render()
     await nodes.find(node => node.props?.['aria-label'] === '候选计划子任务').props.onChange({ target: { value: '执行：发布' } })
     nodes = card.render()
-    await nodes.find(node => node.type === 'form').props.onSubmit({ preventDefault() {} })
-    assert.equal(buttonIn(card.render(), '批准并运行').props.disabled, true)
-    assert.ok(textOf(card.render()).includes('阻塞计划不能运行'))
+    await nodes.find(node => node.type === 'form' && textOf(node).includes('手工预览候选计划')).props.onSubmit({ preventDefault() {} })
+    assert.equal(buttonIn(card.render(), '批准并运行'), undefined)
+    assert.ok(textOf(card.render()).includes('暂时不能运行：权限不足'))
     assert.equal(requests.filter(request => request.body?.action === 'approve').length, 0)
     assert.equal(requests.some(request => request.route.endsWith('/message')), false)
   } finally {
@@ -1922,11 +2198,17 @@ test('blocked candidate plans expose no runnable approval control', async () => 
 })
 
 function textOf(tree) {
-  return [...walkTree(tree)].map(node => (node.children ?? []).filter(child => typeof child === 'string').join(' ')).join(' ')
+  if (Array.isArray(tree)) return tree.map(textOf).filter(Boolean).join(' ')
+  if (typeof tree === 'string') return tree
+  if (!tree || typeof tree !== 'object') return ''
+  if (typeof tree.type === 'function') return textOf(tree.type({ ...tree.props, children: tree.children }))
+  return textOf(tree.children ?? tree.props?.children)
 }
 
 function buttonIn(tree, label) {
-  return [...walkTree(tree)].find(node => node.type === 'button' && (node.children ?? []).includes(label))
+  return [...walkTree(tree)].find(node => node.type === 'button'
+    && ((node.children ?? []).includes(label) || node.props?.children === label
+      || (Array.isArray(node.props?.children) && node.props.children.includes(label))))
 }
 
 function rowNamed(nodes, name) {
@@ -1945,118 +2227,53 @@ async function clickConfirmed(card, label, confirmLabel, scope = null) {
   return card.render()
 }
 
-test('automation rules preview, create, revise, toggle, run and list executions through the real action contract', async () => {
-  const originalFetch = globalThis.fetch
-  const requests = []
-  let conflictOnce = true
-  let rules = [{
-    id: 'rule-1', name: '每日检查', description: '检查发布状态', enabled: true, revision: 2,
-    trigger: { type: 'cron', cron: '0 9 * * *', timeZone: 'UTC' },
-    action: { type: 'run', prompt: '检查项目' }, output: { relativePath: 'artifacts/check.md' },
-    notify: { events: ['completed', 'failed'] }, budget: { maxRuns: 10, maxModelCalls: null, maxTokens: null, maxCost: null },
-  }]
-  globalThis.fetch = async (route, options = {}) => {
-    const method = options.method ?? 'GET'
-    const body = options.body ? JSON.parse(options.body) : null
-    requests.push({ route, method, body })
-    if (route === '/superagent/api/console/automations' && method === 'GET') return jsonResponse(rules)
-    if (route === '/superagent/api/console/automations/rule-1/executions?limit=100') return jsonResponse([
-      { id: 'exec-1', ruleId: 'rule-1', ruleRevision: 1, status: 'completed', recordedAt: '2026-11-25T09:00:00.000Z',
-        action: { prompt: '检查项目' }, usage: { modelCalls: 1, tokens: 20 } },
-    ])
-    if (route !== '/superagent/api/console/automations' || method !== 'POST') throw new Error(`unexpected route ${route}`)
-    if (body.action === 'preview') return jsonResponse({ valid: true, errors: [], warnings: ['missing permission: workspace.write'],
-      triggerTimes: ['2026-11-27T09:00:00.000Z'], matches: [], sideEffects: 'none', executionStarted: false })
-    if (body.action === 'create') {
-      const created = { ...body.rule, id: 'rule-2', enabled: false, revision: 1, createdAt: new Date().toISOString() }
-      rules = [...rules, created]
-      return jsonResponse({ ...created, scheduleId: null })
-    }
-    if (body.action === 'toggle') {
-      if (conflictOnce) {
-        conflictOnce = false
-        rules = [{ ...rules[0], revision: 3 }, ...rules.slice(1)]
-        return jsonResponse({ message: 'revision conflict' }, 409)
-      }
-      rules = rules.map(rule => rule.id === body.id ? { ...rule, enabled: body.enabled, revision: rule.revision + 1 } : rule)
-      return jsonResponse({ ...rules.find(rule => rule.id === body.id), scheduleId: 'schedule-1' })
-    }
-    if (body.action === 'run-now') return jsonResponse({ id: 'exec-manual', status: 'queued', result: { requestId: 'router-1' } })
-    if (body.action === 'update') {
-      rules = rules.map(rule => rule.id === body.id ? { ...rule, ...body.patch, revision: rule.revision + 1 } : rule)
-      return jsonResponse({ ...rules.find(rule => rule.id === body.id), scheduleId: 'schedule-1' })
-    }
-    if (body.action === 'remove') {
-      rules = rules.filter(rule => rule.id !== body.id)
-      return jsonResponse({ id: body.id, revision: body.expectedRevision, scheduleId: null })
-    }
-    throw new Error(`unexpected automation action ${body.action}`)
+test('task-context evidence remains reachable without a global menu entry', async () => {
+  const card = await panelHarness()
+  await card.dispatch({ type: 'openMore', panel: 'evidence' })
+  assert.equal(card.model().more.panel, 'evidence')
+})
+
+test('manual automation setup is not exposed in the sidebar', async () => {
+  const card = await panelHarness()
+  let nodes = card.render()
+  nodes.find(node => node.props?.role === 'tab' && node.children.includes('更多')).props.onClick()
+  nodes = card.render()
+  assert.equal(nodes.some(node => node.props?.['aria-label'] === '自动化规则'), false)
+  await card.dispatch({ type: 'openMore', panel: 'automations' })
+  assert.equal(card.model().more?.panel ?? null, null)
+})
+
+test('task detail leads with a plain conclusion, actions and deliverables', async () => {
+  const run = {
+    id: 'run-plain', title: 'This run is phase 2 of 3: 核查 trpc/trpc 的 PR 待办 Phase objective: 从现有 GitHub 会话确认账号',
+    goal: 'This run is phase 2 of 3: 核查 trpc/trpc 的 PR 待办 Phase objective',
+    status: 'completed', phaseIndex: 1,
+    phases: [{ id: 'p1', status: 'completed' }, { id: 'p2', status: 'completed' }, { id: 'p3', status: 'completed' }],
+    subtasks: Array.from({ length: 6 }, (_, index) => ({ id: `s${index}`, title: `工作线 ${index + 1}`, status: 'completed' })),
+    output: '# trpc/trpc PR 待核查\n\n**优先处理 [PR #8204](https://github.com/trpc/trpc/pull/8204) 的 CI 失败。**\n\n### 需要处理的事项\n- 登录 GitHub 后重跑 CI\n- 下一步：回复评审意见\n',
+    artifacts: [{ name: '20261126T143738-d9a2.md', href: '/work/a/20261126T143738-d9a2.md' }],
   }
-  try {
-    const card = await panelHarness()
-    let nodes = await openMore(card, '自动化规则')
-    assert.ok(nodes.some(node => (node.children ?? []).includes('每日检查')))
-    await field(nodes, '规则名称').props.onChange({ target: { value: '每周汇总' } })
-    assert.equal(field(card.render(), '规则名称').props.value, '每周汇总', 'the automation draft keeps edits across renders')
-    await field(card.render(), 'Cron 表达式').props.onChange({ target: { value: '0 8 * * 1' } })
-    await field(card.render(), '执行 Prompt').props.onChange({ target: { value: '汇总本周进展' } })
-    await field(card.render(), '产物相对路径').props.onChange({ target: { value: 'artifacts/weekly.md' } })
-    await field(card.render(), '最大运行次数').props.onChange({ target: { value: '12' } })
-    nodes = card.render()
-    await buttonIn(nodes, '预览规则').props.onClick()
-    const preview = requests.find(request => request.body?.action === 'preview')
-    assert.equal(preview.body.rule.name, '每周汇总')
-    assert.equal(preview.body.rule.budget.maxRuns, 12)
-    assert.deepEqual(preview.body.rule.notify.events, ['completed', 'failed'])
-    nodes = card.render()
-    assert.ok(nodes.some(node => (node.children ?? []).includes('有效性：valid')))
-    assert.ok(nodes.some(node => (node.children ?? []).includes('副作用：none')))
-    assert.ok(textOf(nodes).includes('missing permission: workspace.write'))
-
-    await clickConfirmed(card, '创建规则', '确认创建')
-    const create = requests.find(request => request.body?.action === 'create')
-    assert.equal(create.body.rule.output.relativePath, 'artifacts/weekly.md')
-    assert.equal(card.model().more.automationEditId, 'rule-2')
-
-    await clickConfirmed(card, '立即运行', '确认运行', rowNamed(card.render(), '每日检查'))
-    const run = requests.find(request => request.body?.action === 'run-now')
-    assert.equal(run.body.id, 'rule-1')
-    assert.match(run.body.idempotencyKey, /^manual:rule-1:/)
-
-    nodes = card.render()
-    await buttonIn(rowNamed(nodes, '每日检查'), '执行历史').props.onClick()
-    assert.ok(requests.some(request => request.route.endsWith('/automations/rule-1/executions?limit=100')))
-    assert.ok(textOf(card.render()).includes('exec-1'))
-
-    nodes = await clickConfirmed(card, '停用', '确认停用', rowNamed(card.render(), '每日检查'))
-    assert.ok(nodes.some(node => node.props?.role === 'alert' && textOf(node).includes('revision conflict')))
-    const staleToggle = requests.filter(request => request.body?.action === 'toggle')[0]
-    assert.equal(staleToggle.body.expectedRevision, 2)
-    assert.equal(card.model().more.automations[0].name, '每日检查（已刷新）', 'revision conflicts refresh the visible rule')
-    await settle()
-    assert.equal(card.model().more.automations[0].revision, 3, 'revision conflicts refresh the visible rule')
-    await card.dispatch({ type: 'loadMore', panel: 'automations', force: true })
-    await clickConfirmed(card, '停用', '确认停用', rowNamed(card.render(), '每日检查'))
-    const freshToggle = requests.filter(request => request.body?.action === 'toggle')[1]
-    assert.equal(freshToggle.body.expectedRevision, 3, 'a conflict refreshes the revision before retry')
-    assert.equal(freshToggle.body.enabled, false)
-
-    nodes = card.render()
-    await buttonIn(rowNamed(nodes, '每日检查'), '编辑').props.onClick()
-    await field(card.render(), 'Cron 表达式').props.onChange({ target: { value: '0 10 * * *' } })
-    await clickConfirmed(card, '保存规则', '确认保存')
-    const update = requests.find(request => request.body?.action === 'update')
-    assert.equal(update.body.expectedRevision, 4)
-    assert.equal(update.body.patch.trigger.cron, '0 10 * * *')
-
-    await clickConfirmed(card, '删除', '确认删除', rowNamed(card.render(), '每日检查'))
-    const remove = requests.find(request => request.body?.action === 'remove')
-    assert.equal(remove.body.expectedRevision, 5)
-    assert.equal(card.model().more.automations.some(rule => rule.id === 'rule-1'), false)
-  } finally {
-    if (originalFetch === undefined) delete globalThis.fetch
-    else globalThis.fetch = originalFetch
-  }
+  const card = await panelHarness({ detail: run, workbench: { runs: [run], goals: [], inbox: [], projects: [] } })
+  const nodes = card.render()
+  const heading = nodes.filter(node => node.type === 'h2').at(-1)
+  assert.ok(heading)
+  assert.ok(textOf(heading).includes('核查 trpc/trpc 的 PR 待办'))
+  assert.equal(textOf(heading).includes('Phase objective'), false)
+  assert.ok(textOf(nodes).includes('第 2/3 阶段'))
+  assert.ok(textOf(nodes).includes('结论'))
+  assert.ok(textOf(nodes).includes('优先处理：') && textOf(nodes).includes('PR #8204') && textOf(nodes).includes('CI 失败'))
+  assert.ok(nodes.some(node => node.type === 'a' && node.props?.href === 'https://github.com/trpc/trpc/pull/8204'))
+  assert.ok(textOf(nodes).includes('下一步'))
+  const actionList = nodes.find(node => node.props?.className === 'dsa-run-action-list')
+  assert.equal([...walkTree(actionList)].filter(node => node.type === 'li').length, 2, 'distinct next steps are kept without repeating the conclusion')
+  assert.ok(textOf(nodes).includes('登录 GitHub 后重跑 CI'))
+  assert.ok(textOf(nodes).includes('下一步：回复评审意见'))
+  assert.ok(textOf(nodes).includes('交付物'))
+  assert.ok(textOf(nodes).includes('核查 trpc/trpc 的 PR 待办报告'))
+  const technical = nodes.find(node => node.props?.className === 'dsa-run-technical')
+  assert.ok(technical)
+  assert.equal(technical.props.open, undefined, 'technical details start collapsed')
+  assert.ok(nodes.some(node => node.type === 'button' && (node.children ?? []).includes('查看任务拆解')))
 })
 
 test('task detail builds plan preview from run.subtasks and shows blockers, warnings and cost', async () => {
@@ -2084,7 +2301,7 @@ test('task detail builds plan preview from run.subtasks and shows blockers, warn
   try {
     const card = await panelHarness({ detail: run, workbench: { runs: [run], goals: [], inbox: [] } })
     let nodes = card.render()
-    const preview = nodes.find(node => node.type === 'button' && (node.children ?? []).includes('预览计划'))
+    const preview = nodes.find(node => node.type === 'button' && (node.children ?? []).includes('查看任务拆解'))
     assert.ok(preview, 'current task detail offers plan preview')
     await preview.props.onClick()
     assert.equal(requests[0].route, '/superagent/api/console/plan-preview')
@@ -2098,8 +2315,8 @@ test('task detail builds plan preview from run.subtasks and shows blockers, warn
     assert.ok(nodes.some(node => (node.children ?? []).includes('阻塞：缺少模型价格')))
     assert.ok(nodes.some(node => (node.children ?? []).includes('警告：预算尚未核验')))
     assert.ok(nodes.some(node => (node.children ?? []).includes('未定价模型：test/model')))
-    assert.ok(nodes.some(node => (node.children ?? []).includes('预计成本')))
-    assert.ok(nodes.some(node => (node.children ?? []).includes('未开始执行')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('预计：2 次模型调用 · 270 tokens')))
+    assert.ok(nodes.some(node => (node.children ?? []).includes('状态：blocked')))
   } finally {
     if (originalFetch === undefined) delete globalThis.fetch
     else globalThis.fetch = originalFetch

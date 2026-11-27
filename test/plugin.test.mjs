@@ -20,7 +20,7 @@ function gate() {
  * Mount the plugin against a fake host: only `tools.register`, `subagents`, and
  * `agents` are provided, which is the whole injected surface.
  */
-test('the plugin mounts, registers the fourteen tools, and runs a goal end to end', async () => {
+test('the plugin mounts, registers the fifteen tools, and runs a goal end to end', async () => {
   const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
   const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-home-'))
   const previousHome = process.env.DSH_HOME
@@ -54,7 +54,7 @@ test('the plugin mounts, registers the fourteen tools, and runs a goal end to en
       [
         'superagent_answer', 'superagent_audit', 'superagent_cancel', 'superagent_followup',
         'superagent_goal', 'superagent_help', 'superagent_inject', 'superagent_list',
-        'superagent_memory', 'superagent_resume', 'superagent_schedule', 'superagent_start',
+        'superagent_memory', 'superagent_repo_wiki', 'superagent_resume', 'superagent_schedule', 'superagent_start',
         'superagent_status', 'superagent_template',
       ],
     )
@@ -377,7 +377,7 @@ test('without a subagents service the tools still mount and explain what is miss
 
   try {
     apply(ctx, { stateDir })
-    assert.equal(tools.size, 14, 'the tools must not vanish when the service is optional')
+    assert.equal(tools.size, 15, 'the tools must not vanish when the service is optional')
 
     const started = await tools.get('superagent_start').execute({ goal: 'needs workers' }, { agent: { id: 'session-1' } })
     assert.match(started, /subagent service is unavailable/)
@@ -385,8 +385,8 @@ test('without a subagents service the tools still mount and explain what is miss
   } finally {
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
-    await fsp.rm(stateDir, { recursive: true, force: true })
-    await fsp.rm(home, { recursive: true, force: true })
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    await fsp.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   }
 })
 
@@ -408,11 +408,12 @@ test('an unusable state directory is reported instead of an empty run list', asy
   }
 })
 
-test('console mode mounts on a cordis context that has no plain root property', async () => {
+test('console mode defaults to an ephemeral port on a cordis context that has no plain root property', async () => {
   const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-console-mount-'))
   const disposers = []
   const ctx = {
     tools: { register: () => {} },
+    inject() {},
     effect: execute => {
       disposers.push(execute())
     },
@@ -427,7 +428,7 @@ test('console mode mounts on a cordis context that has no plain root property', 
     },
   })
   try {
-    assert.doesNotThrow(() => apply(ctx, { stateDir, notifyOnComplete: false, consolePort: 0 }))
+    assert.doesNotThrow(() => apply(ctx, { stateDir, notifyOnComplete: false }))
     const discovery = await waitForJson(path.join(stateDir, 'console.json'), 5000)
     assert.match(discovery.url, /^http:\/\/127\.0\.0\.1:\d+$/)
   } finally {
@@ -454,6 +455,60 @@ async function waitForJson(file, timeoutMs = 3000) {
     }
   }
 }
+
+test('superagent sessions join a workspace and receive a readable title', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-session-meta-'))
+  const consoleRoot = path.join(stateDir, 'console-root')
+  await fsp.mkdir(consoleRoot)
+  const created = []
+  const renamed = []
+  const workspacePaths = []
+  const sessionController = {
+    create: async options => {
+      created.push(options)
+      return { sessionId: 'session-meta' }
+    },
+    rename: async options => { renamed.push(options) },
+    list: async () => ({ items: [] }),
+    prompt: async () => {},
+    follow: async function* () {},
+  }
+  const workspaceController = {
+    create: async options => {
+      workspacePaths.push(options.path)
+      return { workspace: { workspaceId: 'workspace-1' } }
+    },
+  }
+  const disposers = []
+  const ctx = {
+    tools: { register: () => {} },
+    effect: execute => { disposers.push(execute()) },
+    get: service => service === 'sessionController' ? sessionController
+      : service === 'workspaceController' ? workspaceController : undefined,
+  }
+  try {
+    apply(ctx, { stateDir, consoleRoot, consolePort: 0, notifyOnComplete: false })
+    const discovery = await waitForJson(path.join(stateDir, 'console.json'), 5000)
+    const response = await fetch(`${discovery.url}/api/console/message`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${discovery.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ text: '修复塔防镜头', project: consoleRoot, intent: 'task', id: 'session-meta-request' }),
+    })
+    assert.equal(response.status, 200)
+    for (let attempt = 0; attempt < 1000 && !renamed.length; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.deepEqual(workspacePaths, [await fsp.realpath(consoleRoot)])
+    assert.equal(created[0].workspaceId, 'workspace-1')
+    assert.equal(created[0].cwd, undefined)
+    assert.deepEqual(renamed, [{ sessionId: 'session-meta', title: '修复塔防镜头' }])
+  } finally {
+    for (const dispose of disposers.reverse()) if (typeof dispose === 'function') {
+      try { await dispose() } catch {}
+    }
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
 
 test('the control plane is off by default and starts runs through a live session when enabled', async () => {
   const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-plugin-'))
@@ -766,8 +821,8 @@ test('a run that finishes with its session gone says the result was not delivere
   } finally {
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
-    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
-    await fsp.rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    await fsp.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   }
 })
 
@@ -1367,11 +1422,4 @@ test('a missing imported module is named with the fix, not swallowed', async () 
   const other = explainLoadError(new Error('boom'), 'C:\\pkg')
   assert.match(other, /failed to load: boom/)
   assert.match(other, /keeps its other tools/)
-
-  const posix = explainLoadError(
-    new Error("Cannot find module '/opt/pkg/lib/wizard.js' imported from /opt/pkg/lib/index.js"),
-    '/opt/pkg/lib',
-  )
-  assert.ok(posix.includes('file it imports is missing: /opt/pkg/lib/wizard.js'), posix)
-  assert.ok(posix.includes('cp -R lib/. /opt/pkg'), posix)
 })

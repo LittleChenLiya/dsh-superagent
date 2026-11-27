@@ -13,6 +13,7 @@ import {
   mergeWizardPatch,
   readDefaultModel,
   readProviderRoute,
+  WIZARD_DEFAULTS,
 } from '../lib/wizard.js'
 
 const SECRET = 'sk-wizard-test-1234567890'
@@ -98,6 +99,27 @@ function wizardFor(fixtureData, credentials, extra = {}) {
     ...extra,
   })
 }
+
+test('wizard inherits the live host model before using README fallbacks', async () => {
+  const data = await fixture('')
+  const credentials = fakeCredentials({ HOST_PROVIDER_API_KEY: SECRET })
+  const inherited = wizardFor(data, credentials, {
+    getDefaultModel: () => ({ provider: 'host-provider', model: 'host-model' }),
+  })
+  const status = await inherited.status()
+  assert.equal(status.provider, 'host-provider')
+  assert.equal(status.model, 'host-model')
+  assert.equal(status.inheritedFrom, 'host')
+  assert.equal(status.baseURL, null)
+  assert.equal(status.needsSetup, false)
+
+  const fallback = wizardFor(data, fakeCredentials({ DEEPSEEK_OFFICIAL_API_KEY: SECRET })).status()
+  assert.equal((await fallback).provider, 'deepseek-official')
+  assert.equal((await fallback).model, 'deepseek-flash')
+  assert.deepEqual(WIZARD_DEFAULTS, {
+    provider: 'deepseek-official', baseURL: 'https://api.deepseek.com/v1', model: 'deepseek-flash',
+  })
+})
 
 test('mergeWizardPatch preserves unrelated entries and comments', () => {
   const original = [

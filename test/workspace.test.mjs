@@ -87,10 +87,9 @@ test('checkouts live inside the repository, the host sandbox writable boundary',
   const manager = managerFor(repo)
   const work = await manager.prepare({ runId: 'run-pool', index: 1 })
   assert.equal(work.ok, true, work.reason)
-  const canonicalRepo = await fsp.realpath(repo)
-  const relative = path.relative(canonicalRepo, work.dir)
+  const relative = path.relative(repo, work.dir)
   assert.ok(relative && !relative.startsWith('..') && !path.isAbsolute(relative), `${work.dir} is outside ${repo}`)
-  assert.equal(normalize(manager.root), normalize(path.join(canonicalRepo, '.superagent', 'worktrees')))
+  assert.equal(normalize(manager.root), normalize(path.join(repo, '.superagent', 'worktrees')))
   // The pool ignores itself, so a waiting merge does not see a dirty checkout.
   assert.equal((await git(repo, ['status', '--porcelain'])).trim(), '')
 })
@@ -103,7 +102,7 @@ test('a repository outside the sandbox boundary gets a pool inside the boundary'
   assert.equal(work.ok, true, work.reason)
   // The host only lets the worker write inside the session directory, so the
   // checkout must live there even though its repository does not.
-  assert.ok(normalize(work.dir).startsWith(`${normalize(await fsp.realpath(boundary))}/`), `${work.dir} is outside ${boundary}`)
+  assert.ok(normalize(work.dir).startsWith(`${normalize(boundary)}/`), `${work.dir} is outside ${boundary}`)
   assert.equal((await git(repo, ['status', '--porcelain'])).trim(), '')
 })
 
@@ -156,7 +155,7 @@ test('preparing the same worker twice reuses its checkout instead of failing', a
   const again = await manager.prepare({ runId: 'run-b', index: 1 })
   assert.equal(again.ok, true, again.reason)
   assert.equal(again.reused, true)
-  assert.equal(again.dir, first.dir)
+  assert.equal(normalize(await fsp.realpath(again.dir)), normalize(await fsp.realpath(first.dir)))
   assert.equal(await fsp.readFile(path.join(again.dir, 'notes.txt'), 'utf8'), 'kept\n')
 })
 

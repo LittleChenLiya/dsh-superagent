@@ -264,6 +264,7 @@ test('an expanded template is a normal goal: same planner, same plan, same limit
     const host = mount({
       stateDir,
       home,
+      config: { workspaceIsolation: false, repoWiki: { enabled: false } },
       spawn: async spec => {
         if (spec.label === 'superagent-plan') {
           plannerPrompts.push(spec.request.prompt[0].text)

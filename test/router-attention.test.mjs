@@ -95,6 +95,30 @@ async function settled(router, what = 'router queue to drain') {
 const receipts = (messages, taskId) => messages.filter(message =>
   message.id?.startsWith(`result-${taskId}-`) && message.taskId === taskId)
 
+test('new tasks default to direct execution and only explicit complex work is planned', async () => {
+  const { base, state } = await fixture('superagent-direct-routing')
+  const executed = []
+  const { boot, stopAll } = harness({
+    state, projects: [], tasks: [],
+    classify: context => ({ action: 'task', title: context.input,
+      ...(context.input.includes('复杂') ? { execution: 'planned' } : {}) }),
+    execute: async command => { executed.push(command); return { text: '已送达执行方' } },
+  })
+  try {
+    const router = boot()
+    await router.submit({ id: 'direct-route-1', text: '把这段文字翻译成英文' })
+    await settled(router)
+    await router.submit({ id: 'direct-route-2', text: '复杂任务：先调研再实现再测试' })
+    await settled(router)
+    assert.equal(executed[0].action, 'task')
+    assert.equal(executed[0].execution, 'direct')
+    assert.equal(executed[1].execution, 'planned')
+  } finally {
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
 test('a model permission failure in a finish chunk is shown before any task is dispatched', async () => {
   const { base, state } = await fixture('superagent-router-model-permission')
   const original = '帮我看看新作业和课程更新。我的塔防空格镜头太近，改好以后打包，打好了发消息给我。顺便看看最近的 PR 和今晚吃什么。'
@@ -237,6 +261,75 @@ test('one terminal receipt per finished timestamp survives polling and restarts,
       return hits.length === 2 ? hits : null
     }, 'second delivery receipt')
     assert.equal(new Set(both.map(message => message.id)).size, 2, 'a new finishedAt needs its own message id')
+  } finally {
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('batch results use an unordered Markdown list with one line per item', async () => {
+  const { base, state } = await fixture('superagent-batch-result-list')
+  const tasks = [{
+    id: 'goal-batch', project: 'release', title: '批量整理', status: 'completed', routed: true, batch: true,
+    finishedAt: '2026-11-21T04:00:00.000Z',
+    phases: [
+      { id: 'p1', title: '整理作业', status: 'completed', finishedAt: '2026-11-21T03:00:00.000Z', summary: '已整理并归档。' },
+      { id: 'p2', title: '检查 PR', status: 'completed', finishedAt: '2026-11-21T03:30:00.000Z', summary: '**发现两项待处理。** 这里还有很长的后续说明，不应该显示。' },
+    ],
+  }]
+  const { boot, stopAll } = harness({
+    state, projects: [{ name: '发布', cwd: 'release' }], tasks,
+    classify: () => ({ action: 'status' }), execute: async () => ({ text: '完成' }),
+  })
+  try {
+    const router = boot()
+    const message = await until(async () => {
+      const snapshot = await router.snapshot()
+      return snapshot.messages.find(item => item.id?.startsWith('result-goal-batch-')) ?? null
+    }, 'batch result receipt')
+    assert.match(message.text, /^- 「整理作业」：已完成 — 已整理并归档。$/m)
+    assert.match(message.text, /^- 「检查 PR」：已完成 — 发现两项待处理。$/m)
+    assert.doesNotMatch(message.text, /这里还有很长/u)
+    assert.doesNotMatch(message.text, /\*\*/u)
+    assert.doesNotMatch(message.text, /^\d+\./m)
+  } finally {
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})
+
+test('legacy terminal messages are migrated to the Markdown list format on load', async () => {
+  const { base, state } = await fixture('superagent-legacy-result-format')
+  const tasks = [{
+    id: 'goal-legacy', project: 'release', title: '旧任务结果', status: 'partial', routed: true,
+    finishedAt: '2026-11-21T04:00:00.000Z',
+    phases: [
+      { id: 'p1', title: '第一步', status: 'completed', finishedAt: '2026-11-21T03:00:00.000Z', summary: '已完成。' },
+      { id: 'p2', title: '第二步', status: 'skipped', finishedAt: '2026-11-21T03:30:00.000Z', outcome: 'token budget exceeded (2062501/2000000 tokens)' },
+      { id: 'p3', title: '第三步', status: 'skipped', finishedAt: '2026-11-21T03:40:00.000Z', outcome: 'not started because w1 was blocked by a missing capability; not started because w1 was blocked by a missing capability' },
+    ],
+  }]
+  await fsp.writeFile(path.join(state, 'router.json'), JSON.stringify({
+    version: 2, revision: 1,
+    messages: [{ id: 'result-goal-legacy-old', role: 'assistant', taskId: 'goal-legacy', at: 1,
+      text: '「旧任务结果」部分交付（1/2 阶段完成）。未交付：p2「第二步」failed。' }],
+    commands: [], memory: [], outcomes: {}, facts: [], phaseOutcomesSeeded: true,
+  }))
+  const { boot, stopAll } = harness({
+    state, projects: [{ name: '发布', cwd: 'release' }], tasks,
+    classify: () => ({ action: 'status' }), execute: async () => ({ text: '完成' }),
+  })
+  try {
+    const router = boot()
+    const message = await until(async () => {
+      const snapshot = await router.snapshot()
+      const found = snapshot.messages.find(item => item.id === 'result-goal-legacy-old')
+      return found?.text.includes('1. 「第一步」') ? found : null
+    }, 'legacy result migration')
+    assert.match(message.text, /^「旧任务结果」部分交付（1\/3 阶段完成）。$/m)
+    assert.match(message.text, /1\. 「第一步」：已完成 — 已完成。/m)
+    assert.match(message.text, /2\. 「第二步」：已跳过 — Token 预算已用尽/m)
+    assert.match(message.text, /3\. 「第三步」：已跳过 — 缺少所需能力/m)
   } finally {
     await stopAll()
     await fsp.rm(base, { recursive: true, force: true })
@@ -414,9 +507,9 @@ test('a finished phase is delivered once with its conclusion and evidence entry,
       const messages = (await router.snapshot()).messages
       return messages.find(message => message.id?.startsWith('result-goal-playtest-')) ?? null
     }, 'the closing note')
-    assert.match(closing.text, /未交付/)
-    assert.match(closing.text, /p2「试玩安排」failed/)
-    assert.doesNotMatch(closing.text, /p2「试玩安排」已完成/)
+    assert.match(closing.text, /1\. 「镜头方案」：已完成/)
+    assert.match(closing.text, /2\. 「试玩安排」：失败/)
+    assert.doesNotMatch(closing.text, /「试玩安排」：已完成/)
     assert.equal(phaseReceipts((await router.snapshot()).messages).length, 1, 'a failed phase needs no accepted receipt')
   } finally {
     await stopAll()

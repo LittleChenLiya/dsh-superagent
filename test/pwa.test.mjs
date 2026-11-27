@@ -360,6 +360,7 @@ test('mobile API is an explicit device-scope allowlist with no privileged entry 
   assert.deepEqual(routes, [
     { name: 'status', method: 'GET', path: '/api/console/device/status', scope: 'null' },
     { name: 'sessions', method: 'GET', path: '/api/console/sessions', scope: "'chat'" },
+    { name: 'router', method: 'GET', path: '/api/console/router', scope: "'chat'" },
     { name: 'events', method: 'GET', path: '/api/console/events', scope: "'chat'" },
     { name: 'runs', method: 'GET', path: '/api/console/runs', scope: "'tasks'" },
     { name: 'notifications', method: 'GET', path: '/api/console/notifications', scope: "'inbox'" },
@@ -418,6 +419,10 @@ test('mobile consumes read APIs, sends messages and answers approvals without HT
     const path = new URL(url, origin).pathname
     if (path.endsWith('/device/status')) return json([])
     if (path.endsWith('/sessions')) return json({ currentSessionId: 'session-1', sessions: [{ sessionId: 'session-1', title: hostile }] })
+    if (path.endsWith('/router')) return json({ revision: 1, pending: 0, messages: [
+      { id: 'prior-user', role: 'user', text: '之前的问题' },
+      { id: 'prior-reply', role: 'assistant', text: hostile },
+    ] })
     if (path.endsWith('/runs')) return json({ runs: [{ id: 'run-1', goal: hostile, status: 'running' }] })
     if (path.endsWith('/notifications')) return json({ inbox: [
       { id: 'approval:ap-1', kind: 'approval', approvalId: 'ap-1', title: 'shell', body: hostile },
@@ -438,6 +443,9 @@ test('mobile consumes read APIs, sends messages and answers approvals without HT
   assert.equal(elements.get('connection').textContent, '已连接')
   assert.match(elements.get('session-list').textContent, /session-1/)
   assert.equal(elements.get('session-list').querySelectorAll('img').length, 0)
+  assert.match(elements.get('chat-log').textContent, /Superagent/)
+  assert.match(elements.get('chat-log').textContent, /<script>globalThis\.pwned=1<\/script>/)
+  assert.equal(elements.get('chat-log').querySelectorAll('img').length, 0)
 
   await elements.get('tab-tasks').dispatch('click')
   assert.match(elements.get('task-list').textContent, /run-1/)
@@ -465,7 +473,7 @@ test('mobile consumes read APIs, sends messages and answers approvals without HT
 
   const paths = requests.map(item => new URL(item.url, origin).pathname)
   assert.deepEqual([...new Set(paths)].sort(), [
-    '/api/console/device/status', '/api/console/sessions', '/api/console/events', '/api/console/runs',
+    '/api/console/device/status', '/api/console/sessions', '/api/console/router', '/api/console/events', '/api/console/runs',
     '/api/console/notifications', '/api/console/artifacts',
     '/api/console/artifacts/art_run-1.abc', '/api/console/approval',
     '/api/console/answer', '/api/console/message',
@@ -480,12 +488,56 @@ test('mobile consumes read APIs, sends messages and answers approvals without HT
   assert.ok(allNodes.every(node => !('innerHTML' in node)))
 })
 
+test('mobile renders authoritative router assistant replies and reconciles optimistic sends', async () => {
+  let releaseMessage
+  const messageGate = new Promise(resolve => { releaseMessage = resolve })
+  let revision = 1
+  const messages = [
+    { id: 'old-user', role: 'user', text: '之前的问题', at: Date.now() - 1000 },
+    { id: 'old-reply', role: 'assistant', text: '权威助手回复', at: Date.now() - 500 },
+  ]
+  const mobile = createMobile(async (url, options) => {
+    const path = new URL(url, origin).pathname
+    if (path.endsWith('/device/status')) return json({ id: 'device-1', scopes: ['chat'] })
+    if (path.endsWith('/sessions')) return json({ sessions: [], currentSessionId: null, reason: 'router-mode' })
+    if (path.endsWith('/router')) return json({ revision, messages, pending: 0 })
+    if (path.endsWith('/events')) return json({}, 503)
+    if (path.endsWith('/message')) {
+      const body = JSON.parse(options.body)
+      assert.match(body.id, /^local-[a-z0-9-]+$/)
+      await messageGate
+      messages.push({ id: body.id, role: 'user', text: body.text, at: Date.now() })
+      messages.push({ id: `reply-${body.id}`, role: 'assistant', text: `已回复：${body.text}`, at: Date.now() })
+      revision += 1
+      return json({ accepted: true, id: body.id })
+    }
+    assert.fail(`unexpected route ${url}`)
+  })
+  const { elements } = mobile
+  elements.get('token-input').value = deviceToken
+  await elements.get('token-form').dispatch('submit')
+  assert.match(elements.get('chat-log').textContent, /权威助手回复/)
+  assert.match(elements.get('chat-log').textContent, /Superagent/)
+
+  elements.get('chat-input').value = 'new question'
+  const sending = elements.get('chat-form').dispatch('submit')
+  assert.match(elements.get('chat-log').textContent, /new question/, 'the optimistic send must appear before the server answers')
+  releaseMessage()
+  await sending
+  const rendered = elements.get('chat-log').textContent
+  assert.match(rendered, /已回复：new question/)
+  const userCards = elements.get('chat-log').children.filter(card =>
+    card.children[0]?.textContent === '你' && card.children[1]?.textContent === 'new question')
+  assert.equal(userCards.length, 1, 'the snapshot must replace, not duplicate, the optimistic echo')
+})
+
 test('mobile supports the host API prefix and reports per-feature scope denials', async () => {
   const mobile = createMobile(async url => {
     const path = new URL(url, origin).pathname
     if (path === '/api/console/device/status') return json({}, 404)
     if (path === '/superagent/api/console/device/status') return json({ id: 'device-1', scopes: ['chat'] })
     if (path === '/superagent/api/console/sessions') return json({ sessions: [] })
+    if (path === '/superagent/api/console/router') return json({ revision: 0, pending: 0, messages: [] })
     if (path === '/superagent/api/console/runs') return json({ error: { summary: 'forbidden' } }, 403)
     assert.fail(`unexpected route ${url}`)
   })

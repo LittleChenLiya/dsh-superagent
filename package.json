@@ -1,6 +1,6 @@
 {
   "name": "@xiangyixie/dsh-superagent",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "description": "长周期自主执行插件：一个目标拆成可并行的子任务，交付一份合并报告，重启后仍可继续。",
   "author": "Admire (LittleChenLiya)",
   "type": "module",
@@ -126,6 +126,7 @@
     "lib/notify-preferences.js",
     "lib/plan-preview.js",
     "lib/route-policy.js",
+    "lib/repo-wiki.js",
     "lib/runtime-view.js",
     "lib/share.js",
     "lib/skill-import.js",
@@ -144,8 +145,10 @@
     "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "scripts": {
-    "test": "node --test --test-concurrency=2 test/lock.test.mjs test/orchestrator.test.mjs test/direct-and-queue.test.mjs test/dialog.test.mjs test/workspace.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/overhead.test.mjs test/guard.test.mjs test/goal.test.mjs test/cron.test.mjs test/schedule.test.mjs test/audit.test.mjs test/inject.test.mjs test/sync.test.mjs test/workbench.test.mjs test/usage.test.mjs test/cost.test.mjs test/ledger.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/user-memory.test.mjs test/notify.test.mjs test/templates.test.mjs test/archive.test.mjs test/doctor.test.mjs test/pack.test.mjs test/runtime-control.test.mjs test/artifacts.test.mjs test/console.test.mjs test/ui-regressions.test.mjs test/router-attention.test.mjs test/work-graph.test.mjs test/attention-policy.test.mjs test/github-events.test.mjs test/sources.test.mjs test/client-bundle.test.mjs test/client-entries.test.mjs test/wizard.test.mjs test/board.test.mjs test/long-goal.test.mjs test/observability.test.mjs test/mcp-memory.test.mjs test/host-schedule.test.mjs test/workspace-host.test.mjs test/host-integrations.test.mjs test/agent-profiles.test.mjs test/brief-scheduler.test.mjs test/remote-jobs.test.mjs test/automation-rules.test.mjs test/capability-center.test.mjs test/client-voice.test.mjs test/cloud-worker.test.mjs test/cloud-artifacts.test.mjs test/imported-skills.test.mjs test/runtime-stream.test.mjs test/console-integrations.test.mjs test/console-platform.test.mjs test/cost-center.test.mjs test/device-pairing.test.mjs test/evidence-center.test.mjs test/feishu-client.test.mjs test/feishu-outbox.test.mjs test/feishu-outbound.test.mjs test/market-client.test.mjs test/memory-center.test.mjs test/notification-center.test.mjs test/notify-preferences.test.mjs test/plan-preview.test.mjs test/pwa.test.mjs test/route-policy.test.mjs test/runtime-view.test.mjs test/share.test.mjs test/skill-import.test.mjs test/voice.test.mjs",
-    "check-pack": "node scripts/check-pack.mjs"
+    "test": "node --test --test-concurrency=2 test/lock.test.mjs test/orchestrator.test.mjs test/direct-and-queue.test.mjs test/dialog.test.mjs test/workspace.test.mjs test/store.test.mjs test/errors.test.mjs test/plugin.test.mjs test/overhead.test.mjs test/guard.test.mjs test/goal.test.mjs test/cron.test.mjs test/schedule.test.mjs test/audit.test.mjs test/inject.test.mjs test/sync.test.mjs test/workbench.test.mjs test/usage.test.mjs test/cost.test.mjs test/ledger.test.mjs test/control.test.mjs test/watch.test.mjs test/report.test.mjs test/memory.test.mjs test/user-memory.test.mjs test/notify.test.mjs test/templates.test.mjs test/archive.test.mjs test/doctor.test.mjs test/pack.test.mjs test/runtime-control.test.mjs test/artifacts.test.mjs test/console.test.mjs test/ui-regressions.test.mjs test/router-attention.test.mjs test/work-graph.test.mjs test/attention-policy.test.mjs test/github-events.test.mjs test/sources.test.mjs test/client-bundle.test.mjs test/client-entries.test.mjs test/wizard.test.mjs test/board.test.mjs test/long-goal.test.mjs test/observability.test.mjs test/mcp-memory.test.mjs test/host-schedule.test.mjs test/workspace-host.test.mjs test/host-integrations.test.mjs test/agent-profiles.test.mjs test/brief-scheduler.test.mjs test/remote-jobs.test.mjs test/automation-rules.test.mjs test/capability-center.test.mjs test/client-voice.test.mjs test/cloud-worker.test.mjs test/cloud-artifacts.test.mjs test/imported-skills.test.mjs test/runtime-stream.test.mjs test/console-integrations.test.mjs test/console-platform.test.mjs test/cost-center.test.mjs test/device-pairing.test.mjs test/evidence-center.test.mjs test/feishu-client.test.mjs test/feishu-outbox.test.mjs test/feishu-outbound.test.mjs test/market-client.test.mjs test/memory-center.test.mjs test/notification-center.test.mjs test/notify-preferences.test.mjs test/plan-preview.test.mjs test/pwa.test.mjs test/route-policy.test.mjs test/runtime-view.test.mjs test/share.test.mjs test/skill-import.test.mjs test/voice.test.mjs test/benchmark-parity.test.mjs test/router-semantic-routing.test.mjs test/repo-wiki.test.mjs test/repo-wiki-integration.test.mjs",
+    "check-pack": "node scripts/check-pack.mjs",
+    "benchmark:parity": "node scripts/benchmark-parity.mjs",
+    "test:host-integration": "node --test --test-concurrency=2 test/wizard.test.mjs test/doctor.test.mjs test/host-integrations.test.mjs test/console-integrations.test.mjs test/plan-preview.test.mjs test/automation-rules.test.mjs test/plugin.test.mjs"
   },
   "keywords": [
     "dsh",

@@ -766,12 +766,12 @@ test('mounting with no plan leaves the scheduler off and writes no schedule file
   }
   try {
     apply(ctx, { stateDir: dir, notifyOnComplete: false })
-    assert.equal(tools.size, 14)
+    assert.equal(tools.size, 15)
     const listed = await tools.get('superagent_schedule').execute({ action: 'list' }, { agent: { id: OWNER } })
     assert.match(listed, /no scheduled runs/)
     await assert.rejects(fsp.access(path.join(dir, 'schedules.json')), 'listing must not create state')
   } finally {
-    await fsp.rm(dir, { recursive: true, force: true })
+    await fsp.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   }
 })
 

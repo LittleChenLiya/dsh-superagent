@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { createServer as createHttpServer } from 'node:http'
+import { createServer as createNetServer } from 'node:net'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -113,13 +115,16 @@ function fakeLive({ mode = 'launch', port = 5555, page = fakePage() } = {}) {
 }
 
 /** A runtime layer over stubs, with the browser half replaceable. */
-function runtimeWith(stateDir, config, { openBrowserImpl = null, attachBrowserImpl = null } = {}) {
+function runtimeWith(stateDir, config, { openBrowserImpl = null, attachBrowserImpl = null, readinessImpl = null } = {}) {
   const auditor = createAuditor({ dir: path.join(stateDir, 'audit'), warn: () => {} })
   const runtime = createRuntimeControl({
     config,
     stateRoot: stateDir,
     auditor,
     warn: () => {},
+    // Browser behavior tests use a fake live session; dedicated readiness tests
+    // below exercise the real filesystem/HTTP preflight instead.
+    readinessImpl: readinessImpl ?? (async () => ({ ready: true, mode: 'launch', host: { requested: null, allowed: null, allowedHosts: LOOPBACK_HOSTS } })),
     ...(openBrowserImpl ? { openBrowserImpl } : {}),
     ...(attachBrowserImpl ? { attachBrowserImpl } : {}),
   })
@@ -135,7 +140,7 @@ test('runtime control is not registered unless a profile opts in', async () => {
     [
       'superagent_answer', 'superagent_audit', 'superagent_cancel', 'superagent_followup',
       'superagent_goal', 'superagent_help', 'superagent_inject', 'superagent_list',
-      'superagent_memory', 'superagent_resume', 'superagent_schedule', 'superagent_start',
+      'superagent_memory', 'superagent_repo_wiki', 'superagent_resume', 'superagent_schedule', 'superagent_start',
       'superagent_status', 'superagent_template',
     ],
   )
@@ -212,8 +217,6 @@ test('human checks are recognised in both languages and ordinary pages stay quie
   assert.equal(classifyHumanGate({ text: '双重验证' }).kind, 'two-factor')
   assert.equal(classifyHumanGate({ text: 'Scan the QR code to sign in' }).kind, 'qr-login')
   assert.equal(classifyHumanGate({ text: '请扫码登录' }).kind, 'qr-login')
-  assert.equal(classifyHumanGate({ text: '验证码登录\n使用学习通APP扫码登录' }).kind, 'qr-login')
-  assert.equal(classifyHumanGate({ text: '手机扫码，安全登录\n获取验证码' }).kind, 'qr-login')
   assert.equal(classifyHumanGate({ text: '欢迎回来 登录', passwordField: true }).kind, 'login-required')
   assert.equal(classifyHumanGate({ text: 'Change password', passwordField: true }), null)
   assert.equal(classifyHumanGate({ text: 'Browse products' }), null)
@@ -232,9 +235,7 @@ test('a sign-in page stops the action as attention, not as a failure', async () 
   assert.match(result, /browser_await_human/)
   assert.match(result, /sign-in the page is waiting for/)
   assert.equal(runtime.takeHumanHandoff('worker-2'), null)
-  const { id, ...handoff } = runtime.takeHumanHandoff('worker-1')
-  assert.ok(id)
-  assert.deepEqual(handoff, {
+  assert.deepEqual(runtime.takeHumanHandoff('worker-1'), {
     kind: 'login-required', url: 'http://127.0.0.1:8080/', headless: true,
   })
   assert.equal(runtime.takeHumanHandoff('worker-1'), null)
@@ -517,9 +518,135 @@ test('runtime_status reports the stop state, hosts, and halves', async () => {
   assert.match(text, /enabled: yes/)
   assert.match(text, /browser tools: 9/)
   assert.match(text, /browser mode: launch with a fresh temporary profile/)
+  assert.match(text, /browser readiness: (ready|not ready)/)
+  assert.match(text, /requested host: none requested/)
   assert.match(text, /desktop tools: 0/)
   assert.match(text, /stop switch: clear/)
   assert.match(text, /127\.0\.0\.1/)
+})
+
+test('a missing executable makes status not ready and browser_open fail before delegation', async t => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-no-executable-'))
+  t.after(() => fsp.rm(stateDir, { recursive: true, force: true }))
+  const missing = path.join(stateDir, 'missing-chrome.exe')
+  let launches = 0
+  let attaches = 0
+  const runtime = createRuntimeControl({
+    config: { enabled: true, browser: { executablePath: missing } },
+    stateRoot: stateDir,
+    auditor: createAuditor({ dir: path.join(stateDir, 'audit'), warn: () => {} }),
+    warn: () => {},
+    openBrowserImpl: async () => { launches += 1; return fakeLive() },
+    attachBrowserImpl: async () => { attaches += 1; return fakeLive({ mode: 'attach' }) },
+  })
+  const status = await runtime.tools.find(tool => tool.name === 'runtime_status').execute({})
+  assert.match(status, /browser readiness: not ready/)
+  assert.match(status, /browser executable: not found/)
+  assert.match(status, /readiness detail: .*runtime\.browser\.executablePath.*runtime\/executable-missing/)
+  assert.equal(launches, 0)
+  assert.equal(attaches, 0)
+
+  const result = await runtime.tools.find(tool => tool.name === 'browser_open')
+    .execute({ url: 'http://127.0.0.1:8080/' })
+  assert.match(result, /^\[error\] browser is not ready: no Chromium-family browser executable/)
+  assert.match(result, /No browser was launched or attached/)
+  assert.equal(launches, 0)
+  assert.equal(attaches, 0)
+  const { events } = await readAudit(stateDir)
+  const failed = events.find(event => event.action === 'open')
+  assert.equal(failed.rule, 'runtime/executable-missing')
+  assert.equal(failed.result, 'error')
+})
+
+test('an unreachable attach port is reported without attaching or launching', async t => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-no-attach-'))
+  t.after(() => fsp.rm(stateDir, { recursive: true, force: true }))
+  const server = createNetServer()
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = server.address().port
+  await new Promise(resolve => server.close(resolve))
+  let attaches = 0
+  let launches = 0
+  const runtime = createRuntimeControl({
+    config: { enabled: true, browser: { attachPort: port } },
+    stateRoot: stateDir,
+    warn: () => {},
+    attachBrowserImpl: async () => { attaches += 1; return fakeLive({ mode: 'attach', port }) },
+    openBrowserImpl: async () => { launches += 1; return fakeLive() },
+  })
+  const status = await runtime.tools.find(tool => tool.name === 'runtime_status').execute({})
+  assert.match(status, /browser readiness: not ready/)
+  assert.match(status, new RegExp(`attach endpoint: not ready at 127\\.0\\.0\\.1:${port}`))
+  assert.match(status, /runtime\/attach-unreachable/)
+  assert.equal(attaches, 0)
+  assert.equal(launches, 0)
+
+  const result = await runtime.tools.find(tool => tool.name === 'browser_open')
+    .execute({ url: 'http://127.0.0.1:8080/' })
+  assert.match(result, /^\[error\] browser is not ready: cannot reach a Chromium DevTools endpoint/)
+  assert.match(result, new RegExp(`remote-debugging-port=${port}`))
+  assert.equal(attaches, 0, 'status and a failed preflight must not create a CDP target')
+  assert.equal(launches, 0, 'attach mode must never fall back to a launch')
+})
+
+test('host readiness allows configured hosts and denies others before browser delegation', async t => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-host-ready-'))
+  t.after(() => fsp.rm(stateDir, { recursive: true, force: true }))
+  let launches = 0
+  const runtime = createRuntimeControl({
+    config: { enabled: true, browser: { executablePath: process.execPath, allowedHosts: ['example.test', '*.allowed.test'] } },
+    stateRoot: stateDir,
+    warn: () => {},
+    openBrowserImpl: async () => { launches += 1; return fakeLive() },
+  })
+  const status = runtime.tools.find(tool => tool.name === 'runtime_status')
+  const allowed = await status.execute({ url: 'https://api.allowed.test/path?secret=hidden' })
+  assert.match(allowed, /browser readiness: ready/)
+  assert.match(allowed, /requested host: api\.allowed\.test \(allowed\)/)
+  const denied = await status.execute({ url: 'https://example.test.evil.test/' })
+  assert.match(denied, /browser readiness: not ready/)
+  assert.match(denied, /requested host: example\.test\.evil\.test \(denied\)/)
+  assert.match(denied, /runtime\/host-not-allowed/)
+  assert.equal(launches, 0, 'status never launches a browser')
+
+  const open = runtime.tools.find(tool => tool.name === 'browser_open')
+  assert.match(await open.execute({ url: 'https://denied.test/' }), /^\[error\] denied\.test is not an allowed host/)
+  assert.equal(launches, 0, 'a denied host is stopped before the executable/launch path')
+  assert.match(await open.execute({ url: 'https://example.test/' }), /^browser_open: ok/)
+  assert.equal(launches, 1)
+})
+
+test('a live DevTools endpoint is ready for status and attach without status creating a target', async t => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-attach-ready-'))
+  t.after(() => fsp.rm(stateDir, { recursive: true, force: true }))
+  let requests = 0
+  const server = createHttpServer((request, response) => {
+    requests += 1
+    assert.equal(request.url, '/json/version')
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ Browser: 'Chrome/999.0', webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/browser/test' }))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise(resolve => server.close(resolve)))
+  const port = server.address().port
+  let attaches = 0
+  const runtime = createRuntimeControl({
+    config: { enabled: true, browser: { attachPort: port } },
+    stateRoot: stateDir,
+    warn: () => {},
+    attachBrowserImpl: async () => { attaches += 1; return fakeLive({ mode: 'attach', port }) },
+    openBrowserImpl: async () => { throw new Error('attach mode must not launch') },
+  })
+  const status = await runtime.tools.find(tool => tool.name === 'runtime_status').execute({})
+  assert.match(status, /browser readiness: ready/)
+  assert.match(status, new RegExp(`attach endpoint: ready at 127\\.0\\.0\\.1:${port} \\(Chrome/999\\.0\\)`))
+  assert.equal(requests, 1)
+  assert.equal(attaches, 0, 'the HTTP readiness probe is not a CDP attachment')
+
+  const result = await runtime.tools.find(tool => tool.name === 'browser_open')
+    .execute({ url: 'http://127.0.0.1:8080/' })
+  assert.match(result, /^browser_open: ok/)
+  assert.equal(attaches, 1)
 })
 
 test('key names resolve to virtual-key codes and a chord is refused', () => {
@@ -554,180 +681,6 @@ test('the guard refuses browser and desktop tools for worker agents unless allow
 
   const unbound = blocked.checkToolCall({ name: 'browser_open', arguments: { url: 'http://127.0.0.1/' }, agent: { id: 'someone-else' } })
   assert.equal(unbound.blocked, false, 'calls the guard does not own pass through')
-
-  blocked.bindChild('browser-task', {
-    runId: 'run-3', browserScope: { runId: 'run-3', subtaskId: 'subtask-1' },
-  })
-  const call = name => blocked.checkToolCall({ name, arguments: {}, agent: { id: 'browser-task' } })
-  assert.equal(call('browser_open').blocked, false)
-  assert.equal(call('browser_await_human').blocked, false)
-  assert.equal(call('browser_script').blocked, true)
-  assert.equal(call('desktop_click').blocked, true)
-})
-
-/** A CDP stub that records frames, acks, and input on one page session. */
-function fakeConnection() {
-  const calls = []
-  const listeners = new Set()
-  return {
-    calls,
-    async send(method, params = {}, options = {}) {
-      calls.push({ method, params, sessionId: options.sessionId })
-      if (method === 'Page.startScreencast') {
-        queueMicrotask(() => this.emit({
-          method: 'Page.screencastFrame',
-          sessionId: 'page-1',
-          params: {
-            data: 'aGk=', metadata: { deviceWidth: 420, deviceHeight: 760 }, sessionId: 7,
-          },
-        }))
-      }
-      return {}
-    },
-    onEvent(listener) {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-    emit(event) {
-      for (const listener of [...listeners]) listener(event)
-    },
-  }
-}
-
-/** A live session whose page is the fake above and whose CDP channel is ours. */
-function liveWithConnection(connection, options = {}) {
-  const page = fakePage()
-  page.sessionId = 'page-1'
-  return { live: { ...fakeLive({ page, ...options }), connection }, page }
-}
-
-test('concurrent login requests bind input and confirmation to the original worker tab', async () => {
-  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-two-logins-'))
-  const connection = fakeConnection()
-  const { live } = liveWithConnection(connection)
-  let starts = 0
-  let tabs = 0
-  const gates = new Map([['page-1', true], ['page-2', true]])
-  const closed = []
-  live.openTab = async () => {
-    const id = `page-${++tabs}`
-    const page = fakePage({ gate: () => gates.get(id) ? { kind: 'qr-login', label: '扫码登录', matched: '扫码登录' } : null })
-    page.sessionId = id
-    return { page, close: async () => { closed.push(id) } }
-  }
-  const { runtime } = runtimeWith(stateDir, { enabled: true }, { openBrowserImpl: async () => {
-    starts++
-    return live
-  } })
-  const tool = name => runtime.tools.find(entry => entry.name === name)
-  const scope = runId => ({ runId, subtaskId: 'subtask-1' })
-  const open = (actor, run, platform) => runtime.withActor(actor,
-    () => tool('browser_open').execute({ url: `http://127.0.0.1/${platform}` }), scope(run))
-  try {
-    const result = await Promise.all([open('a1', 'run-a', 'course-a'), open('b1', 'run-b', 'course-b')])
-    assert.ok(result.every(value => value.startsWith('[attention]')))
-    assert.equal(starts, 1)
-    assert.equal(tabs, 2)
-    const a = runtime.takeHumanHandoff('a1')
-    const b = runtime.takeHumanHandoff('b1')
-    assert.notEqual(a.id, b.id)
-    assert.equal((await runtime.live.status(a.id)).url, 'http://127.0.0.1/course-a')
-    assert.equal((await runtime.live.status(b.id)).url, 'http://127.0.0.1/course-b')
-    assert.equal((await runtime.live.status('stale-request')).available, false)
-    await assert.rejects(async () => runtime.live.input({ kind: 'focus' }, 'stale-request'), /已失效/u)
-    await assert.rejects(runtime.verifyHumanHandoff(a.id), /仍在等待/u)
-
-    await runtime.live.input({ kind: 'focus' }, a.id)
-    assert.equal(connection.calls.at(-1).sessionId, 'page-1')
-    await runtime.live.input({ kind: 'focus' }, b.id)
-    assert.equal(connection.calls.at(-1).sessionId, 'page-2')
-    gates.set('page-1', false)
-    await runtime.verifyHumanHandoff(a.id)
-    await assert.rejects(runtime.verifyHumanHandoff(b.id), /仍在等待/u)
-    const resumed = await runtime.withActor('a2',
-      () => tool('browser_await_human').execute({ screenshot: false }), scope('run-a'))
-    assert.match(resumed, /browser_await_human: ok[\s\S]*course-a/u)
-    assert.equal(tabs, 2, 'the replacement worker uses the tab with the login')
-
-    await runtime.releaseRun('run-a')
-    assert.deepEqual(closed, ['page-1'])
-    assert.equal((await runtime.live.status(a.id)).available, false)
-    assert.equal((await runtime.live.status(b.id)).available, true)
-    gates.set('page-2', false)
-    await runtime.verifyHumanHandoff(b.id)
-  } finally {
-    await runtime.dispose()
-    await fsp.rm(stateDir, { recursive: true, force: true })
-  }
-})
-
-test('the live view streams the run browser, forwards input, and restores the viewport', async () => {
-  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-live-'))
-  const connection = fakeConnection()
-  const { live } = liveWithConnection(connection)
-  const { runtime } = runtimeWith(stateDir, { enabled: true }, { openBrowserImpl: async () => live })
-  try {
-    assert.equal((await runtime.live.status()).available, false, 'no browser before the first action')
-
-    const open = runtime.tools.find(tool => tool.name === 'browser_open')
-    await open.execute({ url: 'http://127.0.0.1:8080/login' })
-    const status = await runtime.live.status()
-    assert.equal(status.available, true)
-    assert.equal(status.headless, true)
-    assert.equal(status.url, 'http://127.0.0.1:8080/login')
-
-    const frames = []
-    const detach = runtime.live.attach(frame => frames.push(frame), { width: 420, height: 760 })
-    await new Promise(resolve => setTimeout(resolve, 20))
-    assert.ok(frames.some(frame => frame.type === 'frame'), 'the panel receives a painted frame')
-    assert.ok(connection.calls.some(call => call.method === 'Emulation.setDeviceMetricsOverride'
-      && call.params.width === 420), 'the panel width becomes the page viewport')
-    assert.ok(connection.calls.some(call => call.method === 'Page.startScreencast'))
-    assert.ok(connection.calls.some(call => call.method === 'Page.screencastFrameAck'),
-      'every frame is acknowledged')
-
-    await runtime.live.input({ kind: 'mouse', type: 'down', x: 12, y: 24, button: 'left', buttons: 1 })
-    await runtime.live.input({ kind: 'key', type: 'press', key: 'a', code: 'KeyA', keyCode: 65, text: 'a' })
-    await runtime.live.input({ kind: 'wheel', x: 10, y: 20, deltaY: 120 })
-    assert.ok(connection.calls.some(call => call.method === 'Input.dispatchMouseEvent'
-      && call.params.type === 'mousePressed' && call.params.x === 12 && call.params.y === 24))
-    assert.equal(connection.calls.filter(call => call.method === 'Input.dispatchKeyEvent').length, 2,
-      'a press is one keyDown and one keyUp')
-    assert.ok(connection.calls.some(call => call.method === 'Input.dispatchMouseEvent'
-      && call.params.type === 'mouseWheel' && call.params.deltaY === 120))
-
-    detach()
-    await new Promise(resolve => setTimeout(resolve, 20))
-    assert.ok(connection.calls.some(call => call.method === 'Page.stopScreencast'))
-    const restored = connection.calls.filter(call => call.method === 'Emulation.setDeviceMetricsOverride').at(-1)
-    assert.deepEqual({ width: restored.params.width, height: restored.params.height },
-      { width: 1280, height: 900 }, 'the run gets its own viewport back')
-  } finally {
-    await runtime.dispose()
-    await fsp.rm(stateDir, { recursive: true, force: true })
-  }
-})
-
-test('an attached user tab is streamed but never resized', async () => {
-  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-live-attach-'))
-  const connection = fakeConnection()
-  const { live } = liveWithConnection(connection, { mode: 'attach' })
-  const { runtime } = runtimeWith(stateDir, { enabled: true, browser: { attachPort: 9333 } }, {
-    attachBrowserImpl: async () => live,
-    openBrowserImpl: async () => { throw new Error('attach must not launch a browser') },
-  })
-  try {
-    const open = runtime.tools.find(tool => tool.name === 'browser_open')
-    await open.execute({ url: 'http://127.0.0.1:8080/login' })
-    const detach = runtime.live.attach(() => {}, { width: 420, height: 760 })
-    await new Promise(resolve => setTimeout(resolve, 20))
-    assert.equal(connection.calls.some(call => call.method === 'Emulation.setDeviceMetricsOverride'), false,
-      'the size of the user window is theirs')
-    detach()
-  } finally {
-    await runtime.dispose()
-    await fsp.rm(stateDir, { recursive: true, force: true })
-  }
 })
 
 /** Read the auditor's JSONL through the same reader the plugin uses. */

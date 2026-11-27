@@ -8,6 +8,27 @@ along with the next code release. A doc-only version leaves `lib/` and `bin/`
 byte-identical to the version before it, and the pinned install line in the
 README is updated to the version being released.
 
+## 0.26.0 — 2026-11-27
+
+### 新增
+
+- 新增本地仓库 ontology / RepoWiki：扫描模块边界、入口和 import 关系，生成 11 类知识卡与六页仓库文档，支持搜索、来源行号、人工 `depends_on` / `related_to` 关系、指纹缓存和增量更新。
+- 新增“更多 → 仓库知识”面板；任务执行前可自动把相关模块知识注入 planner/worker 上下文。扫描不调用付费模型、不修改源码，忽略 `.env`、密钥、二进制、`node_modules` 和构建产物。
+- 新增 `superagent_repo_wiki` 工具与 `/repo-wiki` Console API；支持 `generate/status/list/read/query/link/unlink`。
+- 简单任务默认直接执行，复杂任务才规划；浏览器/桌面能力缺失时降级并说明原因，子会话使用与父会话对等的有效工具和权限。
+- 新增八项可重复对照基准 `scripts/benchmark-parity.mjs`，超级智能体得分低于普通会话基线时门禁失败。
+
+### 修复与收尾
+
+- 默认关闭 Token 硬上限，保留显式预算；修复候选计划权限自阻塞、浏览器 readiness、移动端 scope、Markdown 链接和任务结果重复展示。
+- 任务结果统一为逐项列表，不显示内部阶段编号、加粗标记或英文错误；历史结果自动迁移。
+- 超级智能体创建的会话显式加入 Workspace，并写入任务标题，不再显示“未命名”或空工作区。
+- README 中英文同步仓库 ontology、配置项、工具和隐私边界。
+
+### 收尾验证
+
+- 全量测试 1288 通过、1 跳过、0 失败；`check-pack` 110 个文件、83 个入口可达文件全部随包。
+
 ## 0.25.0 — 2026-11-25
 
 ### 新增

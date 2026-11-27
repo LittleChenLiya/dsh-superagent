@@ -18,18 +18,37 @@ test('the panel sends through one router and keeps workspace selection local to 
   assert.ok(!source.includes("call('/sessions')"))
   assert.ok(!source.includes("call('/session/switch'"))
   assert.ok(!source.includes('编辑助理名称'))
-  assert.ok(source.includes("const PANEL_LABEL = '全局助理'"))
+  assert.ok(source.includes("const PANEL_LABEL = '超级智能体'"))
   assert.ok(source.includes('工作区文件夹绝对路径'))
   assert.ok(!source.includes('项目助理'))
   assert.ok(!source.includes('项目专属助理'))
   assert.ok(!source.includes('项目文件夹'))
 })
 
-test('the global workbench reaches artifacts, automation, and all six rail tabs', () => {
+test('the compact rail removes duplicate actions and global directories', () => {
   assert.ok(source.includes('call(`/artifacts?${artifactQuery(query)}`)'))
   assert.ok(source.includes("call('/schedules')"))
-  assert.ok(source.includes("label: '概览'") && source.includes("label: '自动化'") && source.includes("label: '更多'"))
-  assert.ok(source.includes('dsa-workbench-badge'))
+  assert.ok(source.includes("label: '概览'") && source.includes("label: '任务'") && source.includes("label: '更多'"))
+  assert.equal(source.includes("label: '运行记录'"), false)
+  assert.equal(source.includes("label: '任务拆解'"), false)
+  assert.equal(source.includes("label: '自动化规则'"), false)
+  assert.equal(source.includes('dsa-workbench-head'), false, 'the rail has no duplicate close header')
+  assert.ok(!source.includes('dsa-hero'))
+  assert.ok(source.includes("'aria-label': '更多输入选项'"))
+  assert.ok(source.includes("'aria-label': '切换工作区'"))
+  assert.ok(source.includes('dsa-empty-title'))
+  assert.ok(!source.includes('沿用最近对话'))
+  assert.ok(!source.includes('插入批量清单'))
+  assert.ok(!source.includes('contextMode'))
+  assert.ok(source.includes('.dsa-composer .dsa-input:focus-visible{outline:none}'), 'the composer overrides the host focus box')
+  assert.match(source, /\.dsa-msg\{padding:0\}/)
+  assert.match(source, /\.dsa-user\{[^}]*margin-bottom:8px/)
+  assert.match(source, /\.dsa-assistant\{[^}]*margin-bottom:8px/)
+  assert.match(source, /\.dsa-task-receipt\{[^}]*margin:0 0 6px/)
+  assert.match(source, /\.dsa-overview-task\{[^}]*grid-template-columns:minmax\(0,1fr\) 16px/)
+  assert.ok(source.includes("'aria-label': '高级设置'"))
+  assert.equal(source.includes('发起任务'), false)
+  assert.equal(source.includes("h('h2', null, PANEL_LABEL)"), false)
   assert.ok(source.includes('暂无自动化执行记录'))
   assert.ok(source.includes('ownerSessionId ?? descriptor.owner'))
 })
@@ -67,9 +86,10 @@ test('the run list is clickable instead of a dead list', () => {
 })
 
 test('the More hub reaches every first-batch integration and reserves second-batch entry points', () => {
-  const labels = ['通知中心', '能力中心', '记忆中心', '运行时视图', '质量证据', '成本中心', 'Agent 档案', '设备配对', '计划预览', '分享', '市场', '云端 Worker']
+  const labels = ['产物库', '仓库知识', '待办中心', '通知设置', '能力与连接', '记忆中心', '屏幕与控制',
+    '费用', '智能体设置', '设备', '分享', '市场', '云端 Worker']
   for (const label of labels) assert.ok(source.includes(`label: '${label}'`), `${label} has a native More entry`)
-  for (const route of ['/notifications/preferences', '/notifications', '/capabilities', '/memory', '/runtime-view',
+  for (const route of ['/notifications/preferences', '/notifications', '/capabilities', '/memory', '/repo-wiki', '/runtime-view',
     '/evidence?limit=100', '/cost', '/profiles?includeDisabled=true', '/device/status', '/plan-preview',
     '/voice/transcribe', '/shares', '/automations', '/market', '/cloud-worker']) {
     assert.ok(source.includes(route), `the client reaches ${route}`)
@@ -84,16 +104,21 @@ test('the More hub reaches every first-batch integration and reserves second-bat
 })
 
 test('the second-batch More panels expose real actions, confirmations and safe handoffs', () => {
-  for (const action of ['previewAutomation', 'saveAutomation', 'automationAction', 'loadAutomationExecutions',
+  for (const action of ['previewAutomation', 'saveAutomation', 'createAutomationFromText', 'automationAction', 'loadAutomationExecutions',
     'shareArtifact', 'removeShare', 'searchMarket', 'marketDetail', 'marketHandoff', 'importMarketSkill',
     'refreshCloudWorker', 'submitCloudWorker', 'cloudWorkerAction', 'openOriginalArtifact', 'continueArtifact',
-    'previewCandidatePlan', 'suggestRoute', 'updateRuntimePanel', 'updateMcpDraft', 'updatePlanDraft', 'updateRouteDraft']) {
+    'previewCandidatePlan', 'autoCandidatePlan', 'suggestRoute', 'updateRuntimePanel', 'updateMcpDraft', 'updatePlanDraft', 'updateRouteDraft',
+    'generateRepoWiki', 'searchRepoWiki', 'readRepoWiki', 'linkRepoWiki']) {
     assert.ok(source.includes(`${action}:`), `${action} has a client action`)
   }
   for (const action of ['create', 'update', 'remove', 'toggle', 'preview', 'run-now']) {
     assert.ok(source.includes(`action: '${action}'`) || source.includes(`action, id`), `automation action ${action} is wired`)
   }
   assert.ok(source.includes("action: 'install-handoff'"), 'market installation stays a handoff')
+  assert.ok(source.includes("action: 'from-text', text: description"), 'natural-language automation uses the from-text contract')
+  assert.ok(source.includes("action: 'auto', goal: normalizedGoal, project: project ?? null, constraints:"), 'candidate plans use the auto contract')
+  assert.ok(source.includes('workspaceSuggestion') && source.includes('使用推荐') && source.includes('更改'), 'workspace suggestions are actionable')
+  assert.ok(source.includes('approvalRiskView') && source.includes('messageStatusRows'), 'approval and message status translations are wired')
   assert.ok(source.includes('executed:'), 'handoff results expose whether anything executed')
   assert.doesNotMatch(source, /marketInstallCommand\([^)]*\)[\s\S]{0,200}(exec|spawn|fetch)\(/, 'the displayed install command is never executed')
   assert.ok(source.includes('expectedRevision'), 'automation writes carry revisions')
@@ -101,7 +126,7 @@ test('the second-batch More panels expose real actions, confirmations and safe h
   assert.ok(source.includes("confirmLabel: '确认分享'") && source.includes("confirmLabel: '确认删除'")
     && source.includes("confirmLabel: '确认导入'") && source.includes("confirmLabel: '确认提交'"), 'mutations ask for confirmation')
   assert.ok(!source.includes('第二批服务尚未接入'), 'the second batch is no longer a placeholder')
-  for (const label of ['产物开始日期', '产物结束日期', '在原任务打开', '新对话继续', '模型：', '权限：', 'IM：',
+  for (const label of ['产物开始日期', '产物结束日期', '在原任务打开', '新对话继续', '可用权限',
     '实时画面', 'runtime-view/events', '执行前候选计划', '权限范围', '运行环境', '模型路由建议', '按需加载', '停用 Skill']) {
     assert.ok(source.includes(label), `${label} is wired`)
   }
