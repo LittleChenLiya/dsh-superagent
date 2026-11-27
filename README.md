@@ -39,12 +39,12 @@
 
 ## 安装
 
-桌面端：侧边栏 **插件** → **Add plugin** → 输入 `@xiangyixie/dsh-superagent@0.26.0`，装完重启 DSH。
+桌面端：侧边栏 **插件** → **Add plugin** → 输入 `@xiangyixie/dsh-superagent@0.27.1`，装完重启 DSH。
 
 命令行：
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.26.0
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.27.1
 ```
 
 命令行装完同样要重启 DSH。
