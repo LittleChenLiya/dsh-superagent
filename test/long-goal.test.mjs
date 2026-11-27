@@ -289,6 +289,75 @@ test('a batch bounds live work, persists pause and resumes the remaining items a
   await goals.close()
 })
 
+test('an explicit batch larger than eight runs every item in bounded waves', async t => {
+  const root = await tempRoot('batch-waves')
+  t.after(() => fsp.rm(root, { recursive: true, force: true }))
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'twelve independent checks', batch: true, parentSessionId: agent.id,
+    maxParallelPhases: 3, maxAttemptsPerPhase: 1,
+    phases: Array.from({ length: 12 }, (_, index) => phase(`item${index + 1}`)),
+  })
+
+  for (let wave = 0; wave < 4; wave++) {
+    await goals.tick()
+    const state = await goals.get(goal.id)
+    const running = state.phases.filter(entry => entry.status === 'running')
+    assert.equal(running.length, 3, `wave ${wave + 1} must fill but not exceed maxParallelPhases`)
+    for (const entry of running) orchestrator.complete(orchestrator.runs.get(entry.currentRunId))
+  }
+  await goals.tick()
+
+  const finished = await goals.get(goal.id)
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.phases.length, 12)
+  assert.ok(finished.phases.every(entry => entry.status === 'completed'))
+  assert.deepEqual(
+    orchestrator.calls.start.map(call => call.origin.phaseId),
+    Array.from({ length: 12 }, (_, index) => `item${index + 1}`),
+  )
+  goals.close()
+})
+
+test('a conversation-routed natural-language multi-task plan may exceed eight phases without losing items', async t => {
+  const root = await tempRoot('routed-waves')
+  t.after(() => fsp.rm(root, { recursive: true, force: true }))
+  const orchestrator = fakeOrchestrator()
+  const goals = await manager(root, orchestrator)
+  const goal = await goals.create({
+    goal: 'Review ten independent files and summarize each', routerRequestId: 'router-multi-1',
+    parentSessionId: agent.id, maxParallelPhases: 2, maxAttemptsPerPhase: 1,
+  })
+
+  await goals.tick()
+  const decompose = orchestrator.runs.get('r-1')
+  assert.match(decompose.goal, /up to 256 phases/)
+  decompose.report = JSON.stringify({
+    phases: Array.from({ length: 10 }, (_, index) => ({
+      id: `p${index + 1}`, title: `File ${index + 1}`, objective: `Review file ${index + 1}`,
+    })),
+  })
+  orchestrator.complete(decompose, decompose.report)
+  await goals.tick()
+
+  for (let wave = 0; wave < 5; wave++) {
+    await goals.tick()
+    const state = await goals.get(goal.id)
+    const running = state.phases.filter(entry => entry.status === 'running')
+    assert.equal(running.length, 2, `wave ${wave + 1} must fill but not exceed maxParallelPhases`)
+    for (const entry of running) orchestrator.complete(orchestrator.runs.get(entry.currentRunId))
+  }
+  await goals.tick()
+
+  const finished = await goals.get(goal.id)
+  assert.equal(finished.status, 'completed')
+  assert.equal(finished.phases.length, 10)
+  assert.ok(finished.phases.every(entry => entry.status === 'completed'))
+  assert.equal(orchestrator.calls.start.filter(call => call.origin?.role !== 'decompose').length, 10)
+  goals.close()
+})
+
 test('an item waiting for a person lets the rest of its batch advance', async t => {
   const root = await tempRoot('batch-decision')
   t.after(() => fsp.rm(root, { recursive: true, force: true }))
@@ -639,6 +708,39 @@ test('a worker question is answered through the run attention path', async () =>
   assert.deepEqual(orchestrator.calls.answer, [
     { runId: run.id, attentionId: 'q1', text: 'docs/report.md' },
   ])
+})
+
+test('a worker question can resolve its owner from answer options when parent is omitted', async () => {
+  const root = await tempRoot('question-owner-resolver')
+  const orchestrator = fakeOrchestrator()
+  let ownerAvailable = true
+  const goals = await manager(root, orchestrator, { resolveOwner: async () => ownerAvailable ? agent : null })
+  const goal = await goals.create({ goal: 'question', parentSessionId: agent.id, phases: [phase('p1')] })
+  await goals.tick()
+  let state = await goals.status(goal.id)
+  const run = orchestrator.runs.get(state.goal.phases[0].currentRunId)
+  run.status = 'failed'
+  run.attention.items.push({ id: 'q1', question: 'Which directory?', answer: null })
+  await goals.tick()
+  state = await goals.status(goal.id)
+  const decision = state.goal.decisions.at(-1)
+
+  let answeredBy = null
+  const answer = orchestrator.answer.bind(orchestrator)
+  orchestrator.answer = async (runId, attentionId, text, parent) => {
+    answeredBy = parent
+    return answer(runId, attentionId, text, parent)
+  }
+  ownerAvailable = false
+  await goals.answer(goal.id, decision.id, 'answer', {
+    note: 'docs/report.md',
+    ownerResolver: async () => ({ agent: { id: 'resolved-session-1' } }),
+  })
+
+  assert.equal(answeredBy.id, 'resolved-session-1')
+  assert.equal(run.attention.items[0].answer, 'docs/report.md')
+  goals.close()
+  await fsp.rm(root, { recursive: true, force: true })
 })
 
 test('a goal that makes no progress opens a stall decision instead of retrying', async () => {

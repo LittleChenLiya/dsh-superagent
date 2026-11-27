@@ -234,6 +234,69 @@ test('prune rechecks a candidate under the run lock before deleting it', async (
   await fsp.rm(dir, { recursive: true, force: true })
 })
 
+test('prune archives the run, report, and referenced artifacts before deleting store copies', async () => {
+  const { store, dir } = await tempStore()
+  const workspace = path.join(dir, 'workspace')
+  await fsp.mkdir(workspace, { recursive: true })
+  const artifact = path.join(workspace, 'evidence.txt')
+  await fsp.writeFile(artifact, 'durable evidence\n', 'utf8')
+  const run = fullRun({
+    workspace: { base: workspace },
+    artifacts: [{ kind: 'txt', name: 'evidence.txt', path: artifact }],
+    report: null,
+  })
+  await store.write(run)
+  await writeReport(store, run.id, '# Result\n\nSee [evidence](./evidence.txt).')
+  const archiveDir = path.join(dir, 'archive')
+
+  const result = await store.prune({ olderThanDays: 7, archiveDir })
+
+  assert.deepEqual(result.removed, [run.id])
+  assert.deepEqual(result.archived, [run.id])
+  assert.equal(result.archives[0].path, path.join(archiveDir, run.id))
+  await assert.rejects(fsp.access(path.join(store.runsDir, `${run.id}.json`)), { code: 'ENOENT' })
+  await assert.rejects(fsp.access(path.join(store.root, 'reports', `${run.id}.md`)), { code: 'ENOENT' })
+  await fsp.access(artifact)
+  const archivedRun = JSON.parse(await fsp.readFile(path.join(archiveDir, run.id, 'run.json'), 'utf8'))
+  assert.equal(archivedRun.id, run.id)
+  assert.match(await fsp.readFile(path.join(archiveDir, run.id, 'report.md'), 'utf8'), /durable evidence|evidence/)
+  const manifest = JSON.parse(await fsp.readFile(path.join(archiveDir, run.id, 'manifest.json'), 'utf8'))
+  assert.equal(manifest.artifacts.length, 1)
+  assert.equal(manifest.artifacts[0].status, 'copied')
+  assert.equal(
+    await fsp.readFile(path.join(archiveDir, run.id, manifest.artifacts[0].path), 'utf8'),
+    'durable evidence\n',
+  )
+  await fsp.rm(dir, { recursive: true, force: true })
+})
+
+test('prune skips deletion when the archive cannot be written', async () => {
+  const { store, dir } = await tempStore()
+  const workspace = path.join(dir, 'workspace')
+  await fsp.mkdir(workspace, { recursive: true })
+  const artifact = path.join(workspace, 'evidence.txt')
+  await fsp.writeFile(artifact, 'keep me\n', 'utf8')
+  const run = fullRun({
+    workspace: { base: workspace },
+    artifacts: [{ kind: 'txt', name: 'evidence.txt', path: artifact }],
+  })
+  await store.write(run)
+  await writeReport(store, run.id, run.report)
+  const archiveDir = path.join(dir, 'not-a-directory')
+  await fsp.writeFile(archiveDir, 'blocked', 'utf8')
+
+  const result = await store.prune({ olderThanDays: 7, archiveDir })
+
+  assert.deepEqual(result.removed, [])
+  assert.deepEqual(result.archived, [])
+  assert.equal(result.failed.length, 1)
+  assert.equal(result.failed[0].id, run.id)
+  assert.equal((await store.read(run.id)).id, run.id)
+  await fsp.access(path.join(store.root, 'reports', `${run.id}.md`))
+  assert.equal(await fsp.readFile(artifact, 'utf8'), 'keep me\n')
+  await fsp.rm(dir, { recursive: true, force: true })
+})
+
 test('export writes a self-contained directory that import restores as read-only', async () => {
   const { store, dir } = await tempStore()
   const run = fullRun()

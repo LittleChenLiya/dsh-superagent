@@ -185,6 +185,73 @@ test('snapshot reports injected services and capture returns bounded file metada
   view.dispose()
 })
 
+test('completed browser and desktop screenshot tools publish bounded frames and reject escaping paths', async t => {
+  const dir = await tempDir(t)
+  const shotDir = path.join(dir, 'shots')
+  const runtime = fakeRuntime({ shotDir, stopFile: path.join(dir, 'STOP') })
+  let clock = 1700000000000
+  let mode = 'ok'
+  const returned = []
+  for (const source of ['browser', 'desktop']) {
+    const tool = runtime.tools.find(entry => entry.name === `${source}_screenshot`)
+    tool.execute = async args => {
+      const file = mode === 'outside' ? path.join(dir, 'outside.png') : args.path
+      await fsp.mkdir(path.dirname(file), { recursive: true })
+      await fsp.writeFile(file, 'png')
+      if (mode === 'failed') return `[error] ${source} capture failed\npath: ${file}`
+      const text = source === 'browser'
+        ? `${source}_screenshot: ok\npath: ${file}\nviewport: 1280×720  bytes: 3\nurl: https://user:password@example.test/private?token=${SECRET}#fragment`
+        : `${source}_screenshot: ok\nscope: window\npath: ${file}\nbytes: 3`
+      returned.push(text)
+      return text
+    }
+  }
+  const view = createRuntimeViewController({ runtimeControl: runtime, now: () => clock })
+  const events = []
+  view.subscribe(event => events.push(event))
+
+  assert.equal(await view.tool('browser_screenshot').execute({ path: path.join(shotDir, 'browser.png') }), returned[0])
+  assert.equal(await view.tool('desktop_screenshot').execute({ window: SECRET, path: path.join(shotDir, 'desktop.png') }), returned[1])
+  const frames = events.filter(event => event.type === 'frame').map(event => event.frame)
+  assert.deepEqual(frames.map(frame => frame.source), ['browser', 'desktop'])
+  assert.deepEqual(frames.map(frame => frame.seq), [1, 2])
+  assert.equal(frames[0].width, 1280)
+  assert.equal(frames[0].height, 720)
+  assert.equal(frames[0].bytes, 3)
+  assert.equal(frames[0].url, 'https://example.test/private')
+  assert.equal(frames[1].scope, 'window')
+  assert.equal(frames.every(frame => path.dirname(frame.path) === shotDir), true)
+  assert.equal(view.snapshot().frame.source, 'desktop')
+
+  clock += 10
+  mode = 'outside'
+  await view.tool('browser_screenshot').execute({ path: path.join(shotDir, 'escape.png') })
+  clock += 10
+  mode = 'failed'
+  await view.tool('desktop_screenshot').execute({ path: path.join(shotDir, 'failed.png') })
+  assert.equal(events.filter(event => event.type === 'frame').length, 2, 'failed and escaping captures must not publish')
+  const json = JSON.stringify({ events, snapshot: view.snapshot() })
+  for (const forbidden of [SECRET, 'password', 'token=', 'fragment', 'outside.png', 'result', 'browser_screenshot: ok']) {
+    assert.equal(json.includes(forbidden), false, `published frames must not retain ${forbidden}`)
+  }
+  view.dispose()
+})
+
+test('capture publishes exactly one frame when its wrapped screenshot tool also completes', async t => {
+  const dir = await tempDir(t)
+  const shotDir = path.join(dir, 'shots')
+  const runtime = fakeRuntime({ shotDir, stopFile: path.join(dir, 'STOP') })
+  const view = createRuntimeViewController({ runtimeControl: runtime })
+  const frames = []
+  view.subscribe(event => { if (event.type === 'frame') frames.push(event.frame) })
+  const shot = await view.capture()
+  assert.equal(shot.published, true)
+  assert.equal(frames.length, 1)
+  assert.equal(frames[0].seq, shot.seq)
+  assert.equal(frames[0].path, shot.path)
+  view.dispose()
+})
+
 test('capture clamps numeric metadata and refuses a returned path outside the generated shotDir file', async t => {
   const dir = await tempDir(t)
   const shotDir = path.join(dir, 'shots')

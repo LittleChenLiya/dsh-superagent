@@ -36,12 +36,12 @@ dsh-superagent 把这件事接过去：你说一句目标，它负责拆、负�
 
 ### 1. 装
 
-桌面端：侧边栏 **插件** → **Add plugin** → 输入 `@xiangyixie/dsh-superagent@0.25.0` → 安装。
+桌面端：侧边栏 **插件** → **Add plugin** → 输入 `@xiangyixie/dsh-superagent@0.26.0` → 安装。
 
 命令行：
 
 ```bash
-dsh plugin --profile web add @xiangyixie/dsh-superagent@0.25.0
+dsh plugin --profile web add @xiangyixie/dsh-superagent@0.26.0
 ```
 
 装完**重启 DSH**（插件只在宿主启动时加载一次）。也可以从「发现」页添加[插件索引](https://raw.githubusercontent.com/LittleChenLiya/dsh-superagent/main/plugin-index.json)一键安装；升级一律先 `remove` 再 `add`。
@@ -76,7 +76,7 @@ export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 
 **开销大概多少？**
 
-一次 run 至少包含一次规划、每个子任务若干次模型调用，以及一次汇总。文档里那条两个子任务的样例是 4 次调用、约 4.6k 输入 / 0.5k 输出 token；活越长，调用越多。默认不内置价格，在 `pricing` 里配好之后每个 run 会打印金额；另有 `maxModelCallsPerRun`（默认 80）和 `maxTokensPerRun`（默认 2,000,000）两道硬上限。
+一次 run 至少包含一次规划、每个子任务若干次模型调用，以及一次汇总。文档里那条两个子任务的样例是 4 次调用、约 4.6k 输入 / 0.5k 输出 token；活越长，调用越多。默认不内置价格，在 `pricing` 里配好之后每个 run 会打印金额；另有 `maxModelCallsPerRun`（默认 80）一道硬上限；`maxTokensPerRun` 默认 `0`（不设 Token 硬上限），只有用户显式配置时才启用。
 
 ## 什么时候不要用它
 
@@ -126,7 +126,7 @@ export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 | `attempts` | `2` | 每个子任务的尝试次数，用完即标记失败。看起来是暂时性的失败（配额、限流、超时、5xx）会依次等 2s、4s、8s 再试。 |
 | `deadlineMinutes` | `120` | 墙钟预算；到期后 run 以 `partial` 或 `failed` 结束。 |
 | `maxModelCallsPerRun` | `80` | 每个 run 子 agent 模型调用次数的硬上限；`0` 关闭。 |
-| `maxTokensPerRun` | `2000000` | 每个 run 的 prompt + completion token 硬上限；`0` 关闭。 |
+| `maxTokensPerRun` | `0` | 每个 run 的 prompt + completion token 硬上限；默认关闭，只有显式配置时启用。 |
 | `pricing` | 空 | 每百万 token 的价格，键必须与用量日志里模型的名字完全一致（`provider/model`）。模型路由还需要每条价格显式声明 `capabilities`（如 `planning`、`reasoning`、`coding`、`review`、`summarization`）；可附 `available` 与 `maxContextTokens`。开箱状态下没有任何价格，路由会明确返回无候选。 |
 | `resultCapBytes` | `32768` | 每个子任务报告保留的字节数。 |
 | `notifyOnComplete` | `true` | 主动消息的总开关。关掉之后插件永远不会叫醒会话。 |
@@ -143,6 +143,12 @@ export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 | `memoryDigestEntries` | `12` | 注入 prompt 的笔记条数。 |
 | `memoryDigestChars` | `1600` | 该 prompt 中笔记部分的字符预算。 |
 | `memoryUserProfile` | `false` | 跨任务的用户画像（事实、偏好、决策），位于 `<stateDir>/user-memory`。关掉时不构建任何东西，也不创建目录。见[用户画像](#用户画像)。 |
+| `repoWiki.enabled` | `true` | 本地仓库 ontology 与知识卡。见[仓库 ontology 与 RepoWiki](#仓库-ontology-与-repowiki)。 |
+| `repoWiki.autoContext` | `true` | 执行任务前自动扫描当前工作区，并把相关模块知识注入 planner/worker 上下文。 |
+| `repoWiki.maxFiles` | `4000` | 单次扫描纳入的文件数上限；超出会标记截断。 |
+| `repoWiki.maxBytes` | `8388608` | 单次扫描纳入的总字节上限。 |
+| `repoWiki.maxDepth` | `8` | 目录扫描深度上限。 |
+| `repoWiki.contextChars` | `5000` | 注入执行上下文的知识字符预算。 |
 | `keepRuns` | `0` | 挂载时删除早于这么多天的终态 run；`0` 全部保留。 |
 | `guard` | 开 | worker 的路径与命令策略。每一项默认值和背后的理由见[worker 安全护栏](#worker-安全护栏)。 |
 | `audit` | `true` | 只追加的审计轨迹。它只观察；关掉只会去掉轨迹，不会改变 run 的行为。 |
@@ -490,9 +496,9 @@ cost: ¥0.0952 + $0.0248 (estimate; all models priced)
 
 如果目标有两个及以上可独立交付的产物，或含“先做 A 才能做 B”的前置依赖，就用 `superagent_start`，不要用宿主自带的 `subagent` 自己编排：只有 run 会留下计划、并行时序和一份合并报告。每个会话开始时只会收到一次同样意思的简短提示（不再每个 turn 重复），子会话不会收到。单一动作（一次查询、一次编辑、一条命令、一段短文本）不必起 run，直接做。
 
-默认只声明 8 个常用工具（`superagent_start` / `status` / `list` / `cancel` / `resume` / `followup` / `answer` / `help`），这样每次请求固定带的工具说明很小。长期目标、定时任务、实时插话、跨 run 笔记、模板、审计这 6 个工具按需展开：先调用一次 `superagent_help`，它们会在下一步自动出现在工具列表里，本会话之后一直可用。
+默认只声明 8 个常用工具（`superagent_start` / `status` / `list` / `cancel` / `resume` / `followup` / `answer` / `help`），这样每次请求固定带的工具说明很小。长期目标、定时任务、实时插话、跨 run 笔记、仓库 ontology、模板、审计这 7 个工具按需展开：先调用一次 `superagent_help`，它们会在下一步自动出现在工具列表里，本会话之后一直可用。
 
-- `superagent_help()` 列出另外 6 个按需工具以及各自适用的场景，并为本会话展开它们。需要定时、长期目标、记忆、模板、审计或实时插话时先调用它。
+- `superagent_help()` 列出另外 7 个按需工具以及各自适用的场景，并为本会话展开它们。需要定时、长期目标、记忆、仓库知识、模板、审计或实时插话时先调用它。
 - `superagent_start(goal, mode?, queue?, max_subtasks?, max_parallel?, deadline_minutes?, allow_duplicate?, wait_seconds?)`
   启动一次 run 并立刻返回 run id。`mode: "direct"` 让一个 worker 直接跑这个 goal，不要 planner 也不要 aggregator，并把该 worker 的回复原样作为报告返回——适合一次自成一体的查询、修改、检索或短写作，不适合可以并行拆开的目标。默认的 `mode: "planned"` 走完整的 planner → worker → 合并报告流程。计划中的子任务可以声明 `dependsOn` 另一个子任务：依赖方会等它，并在自己的 prompt 里拿到它的报告，而彼此独立的子任务仍然并行。依赖成环会在任何工作开始前否掉整个计划，依赖一个计划从未声明的任务则以原因跳过。两种模式产出相同的 run 记录、配额、deadline、取消和用量记账。`goal_mode: true` 增加一步验收，并在失败的轮次重新规划；见 [Goal 模式](#goal-模式)。
   `queue: true` 让 `maxActiveRuns` 占满时的启动改为等空位而不是失败：它返回 `status: "queued"` 以及
@@ -519,7 +525,9 @@ cost: ¥0.0952 + $0.0248 (estimate; all models priced)
 - `superagent_memory(action, key?, kind?, text?, scope?, query?, tags?, limit?)`
   列出、搜索、添加、更正或遗忘笔记本里的笔记。`set` 一个已存在的 key 会取代旧的；`forget` 撤回它。`scope` 指向 `rules`
   （项目规则）、`profile`（用户偏好），或 run scope。`search`
-  按 `query`（当前 goal 效果不错）和/或精确 `tags` 给笔记排序，于是相关的老笔记能被找到，而不只是最新的几条；笔记在设置时可以携带 `tags`。这个工具是增量的：另外十二个工具的参数和输出都不变。
+  按 `query`（当前 goal 效果不错）和/或精确 `tags` 给笔记排序，于是相关的老笔记能被找到，而不只是最新的几条；笔记在设置时可以携带 `tags`。这个工具是增量的：另外十四个工具的参数和输出都不变。
+- `superagent_repo_wiki(action, project_path?, path?, query?, source_path?, target_path?, kind?, reason?)`
+  生成、查看或查询本地仓库 ontology。`action` 支持 `generate`、`status`、`list`、`read`、`query`、`link`、`unlink`；不传 `project_path` 时使用当前会话工作区。知识卡和模块关系带真实文件行号来源，详见[仓库 ontology 与 RepoWiki](#仓库-ontology-与-repowiki)。
 - `superagent_template(action, id?, params?, template?, limit?)` 列出、展示、展开、保存或删除一个工作流模板：一个固定的 goal 骨架，带必需参数、适用场景和不适用场景。`expand` 返回一个普通 goal 字符串，`superagent_start` 会像对待手打的 goal 一样规划它；缺失或为空的参数会按名字被拒绝，而不是取默认值。模板不能设置限额、预算、模式或覆盖项，所以用模板永远不会扩大 run 的权限。内置 id 只读；自定义模板放在状态目录的模板目录下，那里的失败会被记录，但不会让 run 工具失效。
 - `superagent_schedule(action, id?, name?, goal?, template_id?, params?, cron?,
   every_minutes?, timezone?, miss_policy?, goal_mode?, acceptance?, max_rounds?,
@@ -760,6 +768,20 @@ run 笔记本的行为与之前完全一致。
   邮箱、电话号码，以及家目录路径里的用户名。画像位于
   `<stateDir>/user-memory`，带与笔记本相同的嵌套 `.gitignore`，
   并且永远不在包的 `files` 白名单里。
+
+## 仓库 ontology 与 RepoWiki
+
+插件会在本地把当前工作区变成一张可查询的仓库知识图，不调用付费模型，也不修改源码。第一次执行任务时自动扫描；之后按文件指纹增量更新。
+
+- **模块 ontology。** 从源码目录、入口文件和 import/require 关系识别模块边界，形成 `depends_on` 与 `related_to` 图。
+- **11 类知识卡。** 每个模块都有概览、架构设计、技术栈、编码约定、搭建与命令、配置系统、依赖管理、日志系统、错误处理、构建系统、前端风格；没有证据时明确写“未检测到”。
+- **六页仓库文档。** 项目概览、架构总览、模块清单、依赖关系、编码约定、搭建与命令，可含 Mermaid 架构图。
+- **来源可核验。** 每张卡都带真实文件与行号引用，搜索结果显示片段和来源，不把模型自述当事实。
+- **人工关系。** 可在面板里补充 `depends_on` / `related_to`，重新扫描会保留人工关系。
+
+入口是 **更多 → 仓库知识**。也可以先调用 `superagent_help`，再使用 `superagent_repo_wiki(action=generate|status|list|read|query|link|unlink)`。默认 `repoWiki.autoContext: true`，任务执行前会把相关模块知识注入 planner/worker 上下文；关闭它不会影响手动查询。
+
+扫描结果写在 `<stateDir>/repo-wiki/`，忽略 `.git`、`node_modules`、构建产物、`.env`、密钥文件和二进制文件，并且不跟随符号链接。扫描有文件数、字节数和深度上限；超出时会在 UI 和知识图里明确标记截断。
 
 ## 观察与报告
 
@@ -1165,7 +1187,7 @@ SHA-256）。`--format html` 把同样的内容写成一个自包含
 
 | 你看到的 | 含义 | 怎么办 |
 | --- | --- | --- |
-| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.25.0` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
+| `superagent_*` 工具不存在 | bundle 行没挂上，或者宿主拒绝加载插件。 | 跑 `--dump-config` 查 `@xiangyixie/dsh-superagent` 块；用 `dsh plugin --profile <p> add @xiangyixie/dsh-superagent@0.26.0` 重装，并在宿主日志里找 `[dsh-superagent]` 行。 |
 | `Cannot find module .../lib/control.js`（或 `watch.js` / `report.js` / `wizard.js`），或宿主日志里的 `[dsh-superagent] dsh-superagent failed to load because a file it imports is missing: ...` | 那个 profile 里的副本不完整——被中断的 `add` 会留下残缺的解包结果。0.14.3 起的入口会直接点名缺哪个文件。已发布的包不是原因：每个版本都带全部三十四个 `lib/` 文件。 | 删掉 profile 的 `node_modules` 下该插件的目录（带 scope 的 `@xiangyixie/dsh-superagent`，或旧 tarball 安装留下的无 scope 的 `dsh-superagent`），再用同一条 `add` 命令重装，并带上版本号。不要手工拷贝文件进去。 |
 | `[error] the model provider rejected the API key` | 启动宿主的那个进程里缺 key 环境变量。 | 导出 `DEEPSEEK_API_KEY`（默认路由）或你那条路由声明的变量，然后重启 `dsh`。 |
 | `MISSING_CREDENTIAL ... no API key for provider route "..."` | profile 的路由在环境里没有凭据。 | 设置该路由对应的环境变量并重启。错误行里写了路由名，以它为准，不要照本文。 |

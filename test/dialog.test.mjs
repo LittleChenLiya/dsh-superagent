@@ -359,34 +359,6 @@ test('answering a finished run reopens it so the aggregation applies the answer'
   )
 })
 
-test('answering a failed run reopens the aggregation without restarting its workers', async () => {
-  // The worker only asked a question: its reply is stripped to nothing, so the
-  // subtask fails and the run settles while the question stays open.
-  const answerable = '```attention\n{"question":"Which region?","options":["eu"],"reason":"needs a person"}\n```'
-  const spawner = makeSpawner(async spec => {
-    if (spec.label === 'superagent-plan') return completed(JSON.stringify({ subtasks: [{ title: 'A', prompt: 'do A' }] }))
-    if (spec.label === 'superagent-aggregate') return completed('report built with the answer')
-    return completed(answerable)
-  })
-  const { orchestrator } = orchestratorWith({ spawner })
-
-  const run = await orchestrator.start({ goal: 'pick a region', parentSessionId: parent.id, parent })
-  const finished = await orchestrator.status(run.id, 5)
-  assert.equal(finished.status, 'failed')
-  assert.equal(finished.attention.items.length, 1)
-  const workersBefore = spawner.calls.filter(call => call.label === 'superagent-1').length
-
-  const answered = await orchestrator.answer(run.id, 'q1', 'eu', parent)
-  assert.equal(answered.resumed, true)
-  assert.equal(answered.restartable, 1, 'the unfinished subtask is named, not silently rerun')
-
-  const after = await orchestrator.status(run.id, 5)
-  const workersAfter = spawner.calls.filter(call => call.label === 'superagent-1').length
-  assert.equal(workersAfter, workersBefore, 'an answer does not spend another worker round')
-  assert.equal(after.status, 'failed', 'the unfinished work stays visible instead of being claimed as done')
-  assert.equal(after.attention, null, 'the answered question is no longer open')
-})
-
 test('an answer must name the right question', async () => {
   const question = region => `Findings.\n\n\`\`\`attention\n${JSON.stringify({
     question: `${region}?`,

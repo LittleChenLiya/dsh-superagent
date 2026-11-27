@@ -212,7 +212,7 @@ $DSH_HOME/profiles/web/cordis.patch.yml
   config:
     maxParallel: 4
     maxModelCallsPerRun: 80
-    maxTokensPerRun: 2000000
+    maxTokensPerRun: 0
     pricing:
       deepseek-official/deepseek-flash:
         input: 0.28          # 每 100 万未命中缓存的输入 token，单位见 currency

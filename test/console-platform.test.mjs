@@ -460,6 +460,7 @@ test('device tokens allow only their scopes and reject revoked or expired creden
     ['GET', '/api/console/artifacts', undefined, 200],
     ['GET', '/api/console/device/status', undefined, 200],
     ['GET', '/api/console/sessions', undefined, 200],
+    ['GET', '/api/console/router', undefined, 200],
     ['POST', '/api/console/approval', {}, 400],
   ]
   for (const [method, route, body, status] of allowed) {
@@ -476,6 +477,11 @@ test('device tokens allow only their scopes and reject revoked or expired creden
     assert.equal(response.status, 403, route)
     assert.equal(response.json.error.id, 'device-scope-forbidden')
   }
+  const choose = await request(panel, 'POST', '/api/console/router/choose', {
+    requestId: 'route-1', target: 'goal-1',
+  }, token)
+  assert.equal(choose.status, 403, 'chat scope permits transcript reads, not routing decisions')
+  assert.equal(choose.json.error.id, 'device-scope-forbidden')
   assert.equal((await request(panel, 'GET', '/', undefined, token)).status, 403)
 
   await request(panel, 'POST', '/api/console/device/revoke', { id: paired.json.data.id })
@@ -502,7 +508,7 @@ test('remote Worker console actions persist jobs and observed state', async t =>
     calls.push({ url: String(url), method: init.method })
     if (init.method === 'POST' && String(url).endsWith('/v1/workers')) return new Response(JSON.stringify({
       workerId: 'worker-1', state: 'queued', leaseId: 'lease-1', fencingToken: 7,
-      leaseExpiresAt: '2026-11-26T12:05:00.000Z',
+      leaseExpiresAt: '2099-01-01T00:00:00.000Z',
     }), { status: 200, headers: { 'content-type': 'application/json' } })
     if (init.method === 'GET' && String(url).endsWith('/v1/workers/worker-1')) return new Response(JSON.stringify({
       workerId: 'worker-1', state: 'running', fencingToken: 7,

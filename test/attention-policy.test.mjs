@@ -180,3 +180,39 @@ test('the model is only consulted for a message that is not a deterministic read
     await fsp.rm(base, { recursive: true, force: true })
   }
 })
+
+test('recent context is attached automatically only when the classifier needs it', async () => {
+  const { base, state } = await fixture('superagent-auto-context')
+  const executions = []
+  const { boot, stopAll } = harness({
+    state,
+    execute: async decision => {
+      executions.push(decision)
+      return { text: '已接下。', taskId: 'goal-a', receipt: 'registered' }
+    },
+    classify: ({ input }) => {
+      if (input.includes('先记录')) return { action: 'reply', text: '背景已记下' }
+      if (input.includes('继续刚才')) return { action: 'task', title: '继续发布说明', useContext: true, text: input }
+      return { action: 'task', title: '全新任务', useContext: false, text: input }
+    },
+  })
+  const router = boot()
+  try {
+    await router.submit({ id: 'ctx-seed', project: 'release-a', text: '先记录：发布说明必须包含兼容性' })
+    await settled(router)
+    await router.submit({ id: 'ctx-use', project: 'release-a', text: '继续刚才那份发布说明' })
+    await settled(router)
+    assert.equal(executions.length, 1)
+    assert.equal(executions[0].useContext, true)
+    assert.ok(executions[0].snapshot.some(message => message.text.includes('兼容性')),
+      'the executor receives the recent conversation without a UI toggle')
+
+    await router.submit({ id: 'ctx-skip', project: 'release-a', text: '写一个全新的笑话' })
+    await settled(router)
+    assert.equal(executions[1].useContext, false)
+    assert.equal(executions[1].snapshot, undefined, 'a self-contained task does not carry stale context')
+  } finally {
+    await stopAll()
+    await fsp.rm(base, { recursive: true, force: true })
+  }
+})

@@ -86,7 +86,7 @@ async function createPackage(root, {
     await writeFile(root, `lib/${name}.js`, 'export const value = 1\n')
   }
   await writeFile(root, 'bin/watch.js', "import { value } from '../lib/store.js'\nif (value !== 1) throw new Error('bad fixture')\n")
-  await writeFile(root, 'cordis.patch.yml', `- insert:\n    - id: superagent\n      name: '${NAME}'\n`)
+  await writeFile(root, 'cordis.patch.yml', `- insert:\n    - id: superagent\n      name: '${NAME}'\n    - id: preset-planner\n      config:\n        id: planner\n`)
   await writeFile(root, 'README.md', '# fixture\n')
   return root
 }

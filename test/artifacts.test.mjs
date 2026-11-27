@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { collectArtifacts, listArtifacts, parseArtifactId } from '../lib/artifacts.js'
+import { collectArtifacts, collectLocalArtifacts, listArtifacts, parseArtifactId } from '../lib/artifacts.js'
 import { apply } from '../lib/index.js'
 import { createStore } from '../lib/store.js'
 
@@ -99,6 +99,21 @@ test('declared artifacts win over normalised Markdown links and ids stay stable 
     report: '[Escape](../outside.txt)',
   })], {})
   assert.deepEqual(escaped.artifacts, [], 'relative report links cannot list files outside the run workspace')
+})
+
+test('local artifact collection keeps declared and report files while omitting URLs', () => {
+  const root = path.join(os.tmpdir(), 'artifact-local-files')
+  const record = run({
+    workspace: { base: root },
+    artifacts: [{ kind: 'txt', name: 'declared.txt', path: path.join(root, 'declared.txt') }],
+    report: '[Declared](./declared.txt)\n[Report](./report.md)\n[Web](https://example.com/file.pdf)',
+  })
+
+  const files = collectLocalArtifacts([record], { 'session-a': { name: 'Release', cwd: root } })
+
+  assert.deepEqual(files.map(file => path.basename(file.path)).sort(), ['declared.txt', 'report.md'])
+  assert.equal(files.find(file => file.name === 'declared.txt').source, 'declared')
+  assert.equal(files.find(file => path.basename(file.path) === 'report.md').source, 'report')
 })
 
 test('global aggregation scopes projects, filters, sorts, and paginates deterministically', () => {

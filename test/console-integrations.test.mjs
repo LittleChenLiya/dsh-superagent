@@ -552,6 +552,24 @@ test('real apply wiring persists integrations and audits sensitive actions witho
   assert.equal((await request(panel, 'GET', '/api/console/cost')).status, 200)
   assert.equal((await request(panel, 'GET', '/api/console/runs/missing/evidence')).status, 404)
 
+  const fromText = await request(panel, 'POST', '/api/console/automations', {
+    action: 'from-text', text: '每天9点 总结项目状态',
+  })
+  assert.equal(fromText.status, 200, JSON.stringify(fromText.json))
+  assert.equal(fromText.json.data.rule.trigger.cron, '0 9 * * *')
+  assert.equal(fromText.json.data.preview.executionStarted, false)
+  assert.ok(fromText.json.data.rule.budget.maxModelCalls > 0)
+
+  const autoPlan = await request(panel, 'POST', '/api/console/plan-preview', {
+    action: 'auto', goal: '检查项目并总结状态', project: root, constraints: { maxSubtasks: 2 },
+  })
+  assert.equal(autoPlan.status, 200, JSON.stringify(autoPlan.json))
+  assert.equal(autoPlan.json.data.kind, 'candidate-plan-preview')
+  assert.equal(autoPlan.json.data.status, 'ready')
+  assert.ok(autoPlan.json.data.inputSnapshot.subtasks.length >= 1)
+  assert.equal(autoPlan.json.data.generation.userSuppliedSubtasks, false)
+  assert.equal(path.resolve(autoPlan.json.data.runtime.cwd), path.resolve(root))
+
   const preferences = await request(panel, 'PATCH', '/api/console/notifications/preferences', {
     events: { completed: 'off' },
   })

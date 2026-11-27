@@ -30,7 +30,7 @@ async function withRoot(fn) {
   try {
     return await fn(root)
   } finally {
-    await fsp.rm(root, { recursive: true, force: true })
+    await fsp.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   }
 }
 
@@ -359,7 +359,7 @@ test('the plugin default config creates no user-memory directory and no user-mem
     apply(ctx, { stateDir: root })
     // Every registered tool is one of the documented set; the user profile adds
     // no tool of its own, it only widens superagent_memory.
-    assert.equal(tools.size, 14)
+    assert.equal(tools.size, 15)
     assert.equal(tools.has('superagent_memory'), true)
     const result = await tools.get('superagent_memory').execute({ action: 'list', layer: 'user' }, {
       agent: { id: 'session-1' },

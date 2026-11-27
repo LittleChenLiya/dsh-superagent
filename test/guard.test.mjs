@@ -6,6 +6,7 @@ import test from 'node:test'
 
 import { apply } from '../lib/index.js'
 import { createGuard } from '../lib/guard.js'
+import { approvePlan, createCandidatePlanPreview } from '../lib/plan-preview.js'
 
 const BASE = {
   cwd: 'C:\\work\\proj',
@@ -297,6 +298,50 @@ test('an execution contract allows normalized read and write categories', () => 
     assert.equal(verdict.explicitAllow, undefined, name)
   }
   assert.equal(guard.snapshot('run-contract'), null)
+})
+
+test('an approved auto candidate plan allows its normalized read and edit tools while deny still wins', () => {
+  const input = {
+    goal: 'Update the release notes',
+    project: BASE.cwd,
+    subtasks: [{
+      id: 'release-notes',
+      operations: [
+        { type: 'read', path: 'README.md' },
+        { type: 'edit', path: 'README.md' },
+      ],
+    }],
+    capabilities: ['filesystem.read', 'filesystem.write'],
+    permissionScope: {
+      tools: ['read_file', 'write', 'edit'],
+      allow: [],
+      deny: ['network.request'],
+      approvalMode: 'policy',
+    },
+    runtime: { cwd: BASE.cwd, isolation: 'workspace', provider: 'host' },
+  }
+  const preview = createCandidatePlanPreview(input)
+  assert.equal(preview.status, 'ready')
+  assert.deepEqual(preview.permissionScope.allow, ['filesystem.read', 'filesystem.write'])
+  const credential = approvePlan(preview, { planDigest: preview.planDigest })
+  assert.deepEqual(credential.permissionScope.deny, ['network'])
+  assert.equal(credential.permissionScope.approvalMode, 'policy')
+
+  const approved = contractHarness(credential.permissionScope)
+  assert.equal(approved.call('read_file', { file_path: 'README.md' }).blocked, false)
+  assert.equal(approved.call('edit', { file_path: 'README.md', old_string: 'a', new_string: 'b' }).blocked, false)
+
+  const deniedInput = structuredClone(input)
+  deniedInput.permissionScope.deny = ['edit']
+  const deniedPreview = createCandidatePlanPreview(deniedInput)
+  assert.equal(deniedPreview.status, 'blocked')
+  assert.ok(deniedPreview.issues.some(item => item.code === 'tool_denied'))
+  const denied = contractHarness(deniedPreview.permissionScope)
+  assert.equal(denied.call('read_file', { file_path: 'README.md' }).blocked, false)
+  const edit = denied.call('edit', { file_path: 'README.md', old_string: 'a', new_string: 'b' })
+  assert.equal(edit.blocked, true)
+  assert.equal(edit.rule, 'contract/permission-denied')
+  assert.match(edit.reason, /filesystem\.write/)
 })
 
 test('filesystem.read denial blocks read, list, search, and every shell host tool', () => {

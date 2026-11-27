@@ -27,8 +27,8 @@ const estimate = text => {
 // without failing this file. Both are estimates, deliberately conservative.
 const ALWAYS_ON_CHARS_MAX = 7000
 const ALWAYS_ON_TOKENS_MAX = 1750
-const ALL_TOOLS_CHARS_MAX = 19000
-const ALL_TOOLS_TOKENS_MAX = 4800
+const ALL_TOOLS_CHARS_MAX = 20000
+const ALL_TOOLS_TOKENS_MAX = 5000
 const GUIDANCE_CHARS_MAX = 320
 const GUIDANCE_TOKENS_MAX = 150
 
@@ -147,7 +147,7 @@ test('the gated tools stay out of the prompt until superagent_help turns them on
   const host = await mount()
   try {
     const sessionId = 'session-expand'
-    const gated = ['superagent_goal', 'superagent_schedule', 'superagent_memory', 'superagent_template', 'superagent_audit', 'superagent_inject']
+    const gated = ['superagent_goal', 'superagent_schedule', 'superagent_memory', 'superagent_repo_wiki', 'superagent_template', 'superagent_audit', 'superagent_inject']
     for (const name of gated) {
       assert.equal(host.tools.has(name), true, `${name} must still be registered`)
       assert.equal(

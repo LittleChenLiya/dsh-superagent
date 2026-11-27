@@ -370,6 +370,36 @@ test('candidate preview exposes a DAG, estimate, explicit permissions, and runti
   assert.deepEqual(input, before, 'candidate preview must not mutate its inputs')
 })
 
+test('candidate preview fills an empty allow list from normalized tools and preserves deny and approval mode', () => {
+  const input = candidateFixture()
+  input.subtasks = [{
+    id: 'update',
+    operations: [
+      { type: 'read_file', path: 'README.md' },
+      { type: 'edit', path: 'README.md' },
+    ],
+  }]
+  input.capabilities.push('filesystem.write')
+  input.permissionScope = {
+    tools: ['read_file', 'write', 'edit'],
+    allow: [],
+    deny: ['network.request'],
+    approvalMode: 'policy',
+  }
+  const before = structuredClone(input)
+  const preview = createCandidatePlanPreview(input)
+
+  assert.equal(preview.status, 'ready')
+  assert.deepEqual(preview.permissionScope.tools, ['filesystem.read', 'filesystem.write'])
+  assert.deepEqual(preview.permissionScope.allow, ['filesystem.read', 'filesystem.write'])
+  assert.deepEqual(preview.permissionScope.deny, ['network'])
+  assert.equal(preview.permissionScope.approvalMode, 'policy')
+  assert.deepEqual(preview.permissionScope.filesystemRoots, { read: [ROOT], write: [ROOT] })
+  const credential = approvePlan(preview, { planDigest: preview.planDigest })
+  assert.deepEqual(credential.permissionScope, preview.permissionScope)
+  assert.deepEqual(input, before, 'normalizing generated permissions must not mutate the input')
+})
+
 test('candidate preview fails closed for missing permissions or runtime and only warns for a missing budget', () => {
   const noPermissions = candidateFixture()
   delete noPermissions.permissionScope
@@ -380,6 +410,13 @@ test('candidate preview fails closed for missing permissions or runtime and only
     { tools: permissionPreview.permissionScope.tools, allow: permissionPreview.permissionScope.allow, deny: permissionPreview.permissionScope.deny, approvalMode: permissionPreview.permissionScope.approvalMode },
     { tools: null, allow: null, deny: null, approvalMode: null },
   )
+
+  const noAllow = candidateFixture()
+  delete noAllow.permissionScope.allow
+  const noAllowPreview = createCandidatePlanPreview(noAllow)
+  assert.equal(noAllowPreview.status, 'blocked')
+  assert.ok(hasIssue(noAllowPreview, 'permission_scope_incomplete'))
+  assert.equal(noAllowPreview.permissionScope.allow, null)
 
   const noRuntime = candidateFixture()
   delete noRuntime.runtime
@@ -523,7 +560,6 @@ test('candidate confirmations remain explicit while status stays ready or blocke
 })
 
 test('preview and approval have no model, filesystem, network, timer, or process side effects', async t => {
-  const module = await import('../lib/plan-preview.js')
   const calls = []
   const patches = [
     [fs, 'writeFile'], [fs, 'writeFileSync'], [fs, 'appendFile'], [fs, 'appendFileSync'],
@@ -551,6 +587,7 @@ test('preview and approval have no model, filesystem, network, timer, or process
 
   let modelCalls = 0
   let startedRuns = 0
+  const module = await import(`../lib/plan-preview.js?no-side-effects=${Date.now()}`)
   const input = fixture()
   input.generate = () => { modelCalls += 1 }
   input.startRun = () => { startedRuns += 1 }
