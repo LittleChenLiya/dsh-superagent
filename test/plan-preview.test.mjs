@@ -560,6 +560,7 @@ test('candidate confirmations remain explicit while status stays ready or blocke
 })
 
 test('preview and approval have no model, filesystem, network, timer, or process side effects', async t => {
+  const module = await import(`../lib/plan-preview.js?no-side-effects=${Date.now()}`)
   const calls = []
   const patches = [
     [fs, 'writeFile'], [fs, 'writeFileSync'], [fs, 'appendFile'], [fs, 'appendFileSync'],
@@ -587,7 +588,6 @@ test('preview and approval have no model, filesystem, network, timer, or process
 
   let modelCalls = 0
   let startedRuns = 0
-  const module = await import(`../lib/plan-preview.js?no-side-effects=${Date.now()}`)
   const input = fixture()
   input.generate = () => { modelCalls += 1 }
   input.startRun = () => { startedRuns += 1 }

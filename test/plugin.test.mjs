@@ -767,8 +767,8 @@ test('a run that finishes with its session gone says the result was not delivere
   } finally {
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
-    await fsp.rm(stateDir, { recursive: true, force: true })
-    await fsp.rm(home, { recursive: true, force: true })
+    await fsp.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    await fsp.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   }
 })
 

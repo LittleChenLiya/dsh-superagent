@@ -50,7 +50,7 @@ test('superagent_repo_wiki generates, queries and reads source-backed ontology',
     const tool = host.tools.get('superagent_repo_wiki').tool
     const exec = { agent: { id: 'repo-session', session: { cwd: project } } }
     const generated = JSON.parse(await tool.execute({ action: 'generate' }, exec))
-    assert.equal(generated.projectPath.toLowerCase(), path.resolve(project).toLowerCase())
+    assert.equal(generated.projectPath.toLowerCase(), (await fsp.realpath(project)).toLowerCase())
     assert.ok(generated.stats.modules >= 2)
     assert.ok(generated.stats.files >= 4)
 

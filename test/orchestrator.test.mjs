@@ -2997,7 +2997,7 @@ test('isolation follows the session directory, so the merge lands where the user
     const finished = await orchestrator.status(run.id, 20)
 
     assert.equal(finished.status, 'completed')
-    assert.equal(normalizePath(finished.workspace.base), normalizePath(session))
+    assert.equal(normalizePath(finished.workspace.base), normalizePath(await fsp.realpath(session)))
     assert.match(finished.workspace.baseNote, /workspaceRoot .* is not this session's directory/)
     // The deliverable lands in the session repository; the stale one is untouched.
     assert.equal(await fsp.readFile(path.join(session, 'a.txt'), 'utf8'), 'delivered\n')
@@ -3021,7 +3021,7 @@ test("workspaceBase: 'config' still isolates against the configured repository",
     const finished = await orchestrator.status(run.id, 20)
 
     assert.equal(finished.status, 'completed')
-    assert.equal(normalizePath(finished.workspace.base), normalizePath(configured))
+    assert.equal(normalizePath(finished.workspace.base), normalizePath(await fsp.realpath(configured)))
     // An explicit opt-in keeps the old behaviour and says nothing about it.
     assert.equal(finished.workspace.baseNote, undefined)
     assert.equal(await fsp.readFile(path.join(configured, 'a.txt'), 'utf8'), 'delivered\n')
