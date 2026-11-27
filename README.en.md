@@ -119,10 +119,10 @@ Row config in `<profile>/cordis.patch.yml`:
 | `commandWorkerPermission` | `inherit` | Sandbox mode for workers whose plan entry declares a command capability (`shell`, `bash`, `pwsh`, …). `danger-full-access` lets those workers actually run commands on a `workspace-write` host; every other child keeps inheritance. See [Per-worker command permissions](#per-worker-command-permissions). |
 | `maxSubtasks` | `8` | Cap on planned subtasks. A tool argument can only lower it, never raise it; hard max 16. |
 | `maxParallel` | `4` | Subtasks executing at once. A tool argument can only lower it; hard max 8. |
-| `maxActiveRuns` | `2` | Active runs per state directory, across profiles and hosts that share it. A further `superagent_start` is rejected unless it passes `queue: true`, in which case it waits for a slot instead. `superagent_resume` is not counted and works when the cap is full, because it only finishes work that already exists. |
+| `maxActiveRuns` | `2` | Active runs per state directory, across profiles and hosts that share it. New starts queue by default when the cap is reached. `superagent_resume` is not counted and works when the cap is full, because it only finishes work that already exists. |
 | `maxQueuedRuns` | `5` | Runs allowed to wait for a free slot at once; hard max 32. `0` turns queueing off, so every start over `maxActiveRuns` is rejected again. |
 | `queueTimeoutMinutes` | `30` | How long a queued run waits before it fails without ever starting; nothing is spent. |
-| `queueOnFull` | `false` | Queue every start that exceeds `maxActiveRuns`, not only the ones that pass `queue: true`. |
+| `queueOnFull` | `true` | Queue every start that exceeds `maxActiveRuns`, not only the ones that pass `queue: true`. |
 | `attempts` | `2` | Attempts per subtask before it is marked failed. A failure that looks transient (quota, rate limit, timeout, 5xx) waits 2s, then 4s, then 8s before the next attempt. |
 | `deadlineMinutes` | `120` | Wall-clock budget; on expiry the run ends `partial` or `failed`. |
 | `maxModelCallsPerRun` | `80` | Hard cap on child model calls per run; `0` disables. |
@@ -142,7 +142,7 @@ Row config in `<profile>/cordis.patch.yml`:
 | `memoryMaxAgeDays` | `30` | Notes older than this are ignored, then compacted away. |
 | `memoryDigestEntries` | `12` | Notes injected into a prompt. |
 | `memoryDigestChars` | `1600` | Character budget for the note part of that prompt. |
-| `memoryUserProfile` | `false` | Cross-task user profile (facts, preferences, decisions) under `<stateDir>/user-memory`. Off means nothing is constructed and no directory is created. See [User profile](#user-profile). |
+| `memoryUserProfile` | `true` | Cross-task user profile (facts, preferences, decisions) under `<stateDir>/user-memory`. Enabled by default and stored separately. See [User profile](#user-profile). |
 | `repoWiki.enabled` | `true` | Local repository ontology and knowledge cards. See [Repository ontology and RepoWiki](#repository-ontology-and-repowiki). |
 | `repoWiki.autoContext` | `true` | Scan the active workspace before a task and inject relevant module knowledge into planner/worker context. |
 | `repoWiki.maxFiles` | `4000` | Maximum files included in one scan; exceeding it marks the graph truncated. |
@@ -155,9 +155,9 @@ Row config in `<profile>/cordis.patch.yml`:
 | `policyFile` | `<stateDir>/policy.json` when it exists | Permission policy. Unset and absent means no policy, i.e. the old behaviour. |
 | `auditDir` | `<stateDir>/audit` | Where `audit.jsonl` and its exports live. |
 | `sources` | off | GitHub / Feishu source ingress; credentials are environment names only. See [Sources](#sources). |
-| `runtime` | off | Browser and desktop runtime control; nested keys and defaults are under [Runtime control](#runtime-control). |
+| `runtime` | on | Browser and desktop runtime control; nested keys and defaults are under [Runtime control](#runtime-control). |
 | `observability` | below | Optional host observability adapter; nested keys and defaults follow. |
-| `observability.enabled` | `false` | Enable host OTel, session-query, and token-meter adapters; metadata only. |
+| `observability.enabled` | `true` | Enable host OTel, session-query, and token-meter adapters; metadata only. |
 | `observability.serviceName` | `dsh-superagent` | OTel resource and scope name. |
 | `observability.endpoint` | empty | OTel event endpoint; no reporter is created when empty. |
 | `observability.exportSessionLogs` | `false` | Compatibility flag; even `true` never enables raw Session-log export. |
@@ -222,7 +222,7 @@ variable with values that actually exist in the host:
   reviewer's tools. Without it, no reviewer child is spawned and the subtask is
   `unverified`. A failed review, invalid JSON, or an unverifiable result also
   leaves the subtask `unverified`; the worker is not rerun automatically.
-- **Observability:** off by default and metadata-only. IDs, status, event type,
+- **Observability:** on by default and metadata-only. IDs, status, event type,
   duration, and token counts may be exported; goals, prompts, reports, and raw
   Session logs never enter OTel. `exportSessionLogs: true` does not change that
   boundary. An empty endpoint disables event export only; lightweight snapshots
@@ -566,11 +566,12 @@ figure per currency instead of a single number whose unit would be undefined.
 ## Runtime control
 
 The plugin can drive a browser and, on Windows, the desktop. Both halves are
-**off by default**: with `runtime.enabled` false not one of these tools is
-registered, so an existing profile sees exactly the same tool list as before.
-Nothing here needs an npm dependency — the browser is spoken to over the
-DevTools protocol with Node's own `WebSocket`, and the desktop is reached
-through `powershell.exe` and `user32.dll`.
+**on by default**: the browser stays headless and loopback-only, while the
+desktop may click and type in the background but does not bring windows forward.
+Every action still passes through the STOP switch, host/scheme checks,
+irreversible-action confirmation, and audit. Nothing here needs an npm dependency —
+the browser is spoken to over the DevTools protocol with Node's own `WebSocket`,
+and the desktop is reached through `powershell.exe` and `user32.dll`.
 
 ```json
 {
@@ -674,8 +675,10 @@ your session with a throwaway profile. A page that asks for a person writes
   `runtime.desktop.allowActivation: true`, and each activation is recorded in
   `meta.activated`.
 - **Worker agents.** `browser_*` and `desktop_*` belong to the session that
-  mounted the plugin. The guard blocks them for bound child agents with rule
-  `guard/runtime-tool` unless `guard.allowRuntimeTools` is true.
+  mounted the plugin. The guard allows bound child agents to use them by default
+  (`guard.allowRuntimeTools: true`), still subject to host/scheme checks,
+  irreversible-action confirmation, and audit. Set it to false to restrict them
+  to the parent session again.
 
 ### What it deliberately cannot do
 
@@ -1217,11 +1220,11 @@ risk shipping it. If you point `stateDir` at a repository, the nested
 ### User profile
 
 The notebook above answers "what did the last run learn about this task". A
-second, optional store answers a different question — "who is this person, what
+second store answers a different question — "who is this person, what
 do they want, and why did we choose that before" — and it has to outlive
-unrelated tasks, so it is kept apart and read apart. It is off by default
-(`memoryUserProfile: false`): nothing is constructed, no directory is created,
-and the run notebook behaves exactly as before.
+unrelated tasks, so it is kept apart and read apart. It is on by default
+(`memoryUserProfile: true`) under `<stateDir>/user-memory`; set
+`memoryUserProfile: false` to disable it.
 
 - **Three categories, three files.** `fact` (durable technical context such as
   the stack or the environment), `preference` (how the user wants work done),
@@ -1451,7 +1454,7 @@ only, and there is no remote or unauthenticated mode.
 ```yaml
 - id: superagent
   config:
-    consolePort: 0            # off by default; 0 = OS picks a free loopback port
+    consolePort: 0            # 0 = OS picks a free loopback port
     consoleRoot: /path/to/project
 ```
 
@@ -1824,7 +1827,7 @@ appears to "hang" until the ignored-abort child returns.
 | `[error] the subagent service is unavailable` | The profile has no `subagents` service, so the plugin has nothing to spawn. | Use a profile built on the base bundle (`web` or `headless` from the stock image), or add the subagent plugin to the profile. |
 | `error: subagent provider "..." cannot enforce maxSubagentDepth` | The route's subagent backend cannot cap delegation. | Keep `provider: spawn`, or set `maxSubagentDepth: provider-managed` if you accept the backend's own limit. |
 | `error: the Windows file sandbox could not start a child process` | Host sandbox launcher failure (`windows-acl-run: ...`), not your goal or key. The subtask is retried once. | Retry the run; if it repeats, restart the host, or disable the Windows ACL sandbox in the profile, then run the `diagnose-windows-sandbox-acl` skill. |
-| `error: the run was not started because the active-run limit is already in use` | `maxActiveRuns` is full, including runs from another profile that shares the state directory, and the start did not ask to queue (or the queue itself is full). | Retry with `queue: true`, wait, cancel one, or raise `maxActiveRuns` / `maxQueuedRuns`. |
+| `error: the run was not started because the active-run limit is already in use` | `maxActiveRuns` is full, including runs from another profile that shares the state directory, and the queue itself is full or disabled. | Wait, cancel one, or raise `maxActiveRuns` / `maxQueuedRuns`. |
 | `error: the run stopped because it reached its spending cap` | `maxModelCallsPerRun` or `maxTokensPerRun` was hit. | Read the partial report; raise the cap in the config, then `superagent_resume` continues with the new limits. |
 | `usage: not recorded` | The run finished and no child session log could be read (moved `sessions` directory, or a run created before accounting). | Nothing to fix on old runs; new runs record usage. While a run is still active the line says accounting is pending instead. |
 | `usage note: N child session log(s) could not be read` | Part of the usage was unreadable; the token figures are a lower bound. The call budget still counted those children. | Check that `$DSH_HOME/sessions` exists and is readable by the host process. |

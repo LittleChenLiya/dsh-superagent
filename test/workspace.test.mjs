@@ -176,7 +176,7 @@ test('a clean worker branch merges back into the main checkout', async () => {
   assert.equal(await fsp.readFile(path.join(repo, 'added.txt'), 'utf8'), 'new file\n')
   // The merged checkout is removed so a finished run leaves no debris.
   const worktrees = await git(repo, ['worktree', 'list', '--porcelain'])
-  assert.doesNotMatch(worktrees, new RegExp(path.basename(work.dir)))
+  assert.equal(normalize(worktrees).includes(normalize(path.resolve(work.dir))), false)
 })
 
 test('a worker that changed nothing is reported and its checkout is dropped', async () => {

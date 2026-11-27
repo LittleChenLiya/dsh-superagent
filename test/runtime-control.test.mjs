@@ -131,27 +131,32 @@ function runtimeWith(stateDir, config, { openBrowserImpl = null, attachBrowserIm
   return { runtime, auditor }
 }
 
-test('runtime control is not registered unless a profile opts in', async () => {
-  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-off-'))
+test('runtime control is registered by default with browser and desktop tools', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-default-'))
   const { tools, ctx } = fakeHost()
   apply(ctx, { stateDir, notifyOnComplete: false })
-  assert.deepEqual(
-    [...tools.keys()].sort(),
-    [
-      'superagent_answer', 'superagent_audit', 'superagent_cancel', 'superagent_followup',
-      'superagent_goal', 'superagent_help', 'superagent_inject', 'superagent_list',
-      'superagent_memory', 'superagent_repo_wiki', 'superagent_resume', 'superagent_schedule', 'superagent_start',
-      'superagent_status', 'superagent_template',
-    ],
-  )
+  for (const name of [
+    'browser_open', 'browser_elements', 'browser_click', 'browser_type',
+    'browser_screenshot', 'browser_script', 'browser_wait', 'browser_await_human',
+    'browser_close', 'runtime_status', 'desktop_screenshot', 'desktop_windows',
+    'desktop_click', 'desktop_type', 'desktop_keys',
+  ]) {
+    assert.equal(tools.has(name), true, `${name} should be registered by default`)
+  }
+})
+
+test('runtime control can be explicitly disabled', async () => {
+  const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-off-'))
+  const { tools, ctx } = fakeHost()
+  apply(ctx, { stateDir, notifyOnComplete: false, runtime: { enabled: false } })
   assert.equal(tools.has('browser_open'), false)
   assert.equal(tools.has('desktop_click'), false)
 })
 
-test('opting in registers browser tools and leaves desktop off until it is enabled', async () => {
+test('browser stays headless and desktop can be explicitly disabled', async () => {
   const stateDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'superagent-runtime-on-'))
   const { tools, ctx } = fakeHost()
-  apply(ctx, { stateDir, notifyOnComplete: false, runtime: { enabled: true } })
+  apply(ctx, { stateDir, notifyOnComplete: false, runtime: { enabled: true, desktop: { enabled: false } } })
   for (const name of [
     'browser_open', 'browser_elements', 'browser_click', 'browser_type',
     'browser_screenshot', 'browser_script', 'browser_wait', 'browser_await_human',

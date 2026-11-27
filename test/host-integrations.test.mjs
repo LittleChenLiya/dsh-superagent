@@ -176,11 +176,11 @@ test('automatic helpers produce safe defaults and explicit approval guidance', (
   assert.deepEqual(statusGuidance({ status: 'completed', subtasks: [] }).nextSteps, ['查看最终报告；如需补充要求，使用 superagent_followup。'])
 })
 
-test('default host integrations stay off and the plugin still mounts all tools', async t => {
+test('default host integrations enable local runtime and configure observability without external services', async t => {
   const host = await mount(t)
-  assert.equal(host.tools.size, 15)
+  assert.equal(host.tools.size, 30)
   const status = parseStatus(await host.execute('superagent_audit', { format: 'status' }))
-  assert.equal(status.observability.configured, false)
+  assert.equal(status.observability.configured, true)
   assert.equal(status.observability.enabled, false)
   assert.equal(status.mcpMemory.status, 'disabled')
   assert.equal(status.hostSchedule, 'unavailable')
@@ -251,6 +251,31 @@ test('capability preflight intersects parent tools with the selected child prese
   assert.match(worker.request.prompt[0].text, /does not have: browser/)
 })
 
+test('the default guard keeps runtime tools available to workers', async t => {
+  const specs = []
+  const host = await mount(t, {
+    subagents: {
+      async startActivation(spec) {
+        specs.push(spec)
+        return { childId: `child-${spec.label}`, result: Promise.resolve(completed('runtime answer')), dispose: async () => {} }
+      },
+    },
+    config: { attempts: 1 },
+  })
+  host.ctx.tools.definitions = () => [{ name: 'read_file' }, { name: 'browser_open' }]
+  const session = owner(host.temporary)
+  const started = await host.execute('superagent_start', {
+    goal: 'inspect the site', mode: 'direct', requires: ['browser'],
+  }, session)
+  const runId = /run ([0-9A-Za-z-]+) —/.exec(started)?.[1]
+  assert.ok(runId, started)
+  await host.execute('superagent_status', { run_id: runId, wait_seconds: 5 }, session)
+  const finished = await createStore(host.stateDir).read(runId)
+  assert.equal(finished.preflight.toolCount, 2)
+  assert.equal(finished.preflight.degraded, 0)
+  assert.deepEqual(finished.subtasks[0].missingCapabilities ?? [], [])
+})
+
 test('direct preflight removes browser tools forbidden by the guard', async t => {
   const specs = []
   const host = await mount(t, {
@@ -260,7 +285,7 @@ test('direct preflight removes browser tools forbidden by the guard', async t =>
         return { childId: `child-${spec.label}`, result: Promise.resolve(completed('partial answer')), dispose: async () => {} }
       },
     },
-    config: { attempts: 1 },
+    config: { attempts: 1, guard: { allowRuntimeTools: false } },
   })
   host.ctx.tools.definitions = () => [{ name: 'read_file' }, { name: 'browser_open' }]
   const session = owner(host.temporary)

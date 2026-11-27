@@ -119,10 +119,10 @@ export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 | `commandWorkerPermission` | `inherit` | 给"计划条目里声明了命令能力"的 worker（`shell`、`bash`、`pwsh`、…）使用的沙箱模式。`danger-full-access` 让这些 worker 在 `workspace-write` 宿主上真正执行命令；其他子 agent 保持继承。见[按 worker 设置命令权限](#按-worker-设置命令权限)。 |
 | `maxSubtasks` | `8` | 计划中子任务数量的上限。工具参数只能调低，不能调高；硬上限 16。 |
 | `maxParallel` | `4` | 同时执行的子任务数。工具参数只能调低；硬上限 8。 |
-| `maxActiveRuns` | `2` | 每个状态目录的活跃 run 数，跨共享该目录的 profile 和宿主计算。超出后再 `superagent_start` 会被拒，除非带上 `queue: true`，那样会等一个空位。`superagent_resume` 不计入配额，配额满了也能用，因为它只是把已经存在的活儿干完。 |
+| `maxActiveRuns` | `2` | 每个状态目录的活跃 run 数，跨共享该目录的 profile 和宿主计算。超出后新启动默认进入队列等待空位；`superagent_resume` 不计入配额，配额满了也能用，因为它只是把已经存在的活儿干完。 |
 | `maxQueuedRuns` | `5` | 同时允许排队等空位的 run 数；硬上限 32。`0` 关闭排队，超过 `maxActiveRuns` 的启动重新一律被拒。 |
 | `queueTimeoutMinutes` | `30` | 排队的 run 等多久还没开始就失败；期间不花任何钱。 |
-| `queueOnFull` | `false` | 让每个超过 `maxActiveRuns` 的启动都排队，而不只是显式传 `queue: true` 的那些。 |
+| `queueOnFull` | `true` | 让每个超过 `maxActiveRuns` 的启动都排队，而不只是显式传 `queue: true` 的那些。 |
 | `attempts` | `2` | 每个子任务的尝试次数，用完即标记失败。看起来是暂时性的失败（配额、限流、超时、5xx）会依次等 2s、4s、8s 再试。 |
 | `deadlineMinutes` | `120` | 墙钟预算；到期后 run 以 `partial` 或 `failed` 结束。 |
 | `maxModelCallsPerRun` | `80` | 每个 run 子 agent 模型调用次数的硬上限；`0` 关闭。 |
@@ -142,7 +142,7 @@ export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 | `memoryMaxAgeDays` | `30` | 比这更旧的笔记被忽略，并在压缩时清掉。 |
 | `memoryDigestEntries` | `12` | 注入 prompt 的笔记条数。 |
 | `memoryDigestChars` | `1600` | 该 prompt 中笔记部分的字符预算。 |
-| `memoryUserProfile` | `false` | 跨任务的用户画像（事实、偏好、决策），位于 `<stateDir>/user-memory`。关掉时不构建任何东西，也不创建目录。见[用户画像](#用户画像)。 |
+| `memoryUserProfile` | `true` | 跨任务的用户画像（事实、偏好、决策），位于 `<stateDir>/user-memory`。默认开启，单独存放、单独读取。见[用户画像](#用户画像)。 |
 | `repoWiki.enabled` | `true` | 本地仓库 ontology 与知识卡。见[仓库 ontology 与 RepoWiki](#仓库-ontology-与-repowiki)。 |
 | `repoWiki.autoContext` | `true` | 执行任务前自动扫描当前工作区，并把相关模块知识注入 planner/worker 上下文。 |
 | `repoWiki.maxFiles` | `4000` | 单次扫描纳入的文件数上限；超出会标记截断。 |
@@ -155,9 +155,9 @@ export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 | `policyFile` | 存在时为 `<stateDir>/policy.json` | 权限策略文件。不设置且文件不存在就表示没有策略，即旧行为。 |
 | `auditDir` | `<stateDir>/audit` | `audit.jsonl` 及其导出文件所在目录。 |
 | `sources` | 关 | GitHub / Feishu 来源接入；凭据只写环境变量名。见[来源接入](#来源接入)。 |
-| `runtime` | 关 | 浏览器与桌面运行时控制；子键和默认值见[运行时控制](#运行时控制)。 |
+| `runtime` | 开 | 浏览器与桌面运行时控制；子键和默认值见[运行时控制](#运行时控制)。 |
 | `observability` | 见下 | 可选的宿主可观测性适配；子键与默认值如下。 |
-| `observability.enabled` | `false` | 开启宿主 OTel、会话查询与 token 计量适配；只处理元数据。 |
+| `observability.enabled` | `true` | 开启宿主 OTel、会话查询与 token 计量适配；只处理元数据。 |
 | `observability.serviceName` | `dsh-superagent` | OTel resource 与 scope 名称。 |
 | `observability.endpoint` | 空 | OTel 事件导出地址；为空时不创建 reporter。 |
 | `observability.exportSessionLogs` | `false` | 兼容位；即使为 `true` 也不开启原始 Session 日志导出。 |
@@ -214,7 +214,7 @@ export DEEPSEEK_API_KEY=sk-...      # PowerShell: $env:DEEPSEEK_API_KEY="sk-..."
 ```
 
 - **独立 reviewer：** 默认关闭。开启后每个成功 worker 回复多一次独立子 agent 调用，并计入同一 run 的调用预算；`reviewerModel` / `reviewerPreset` 只影响 reviewer。`reviewerPreset` 在开启 reviewer 时必需，且必须显式限制 reviewer 的工具集；未配置时不 spawn reviewer，子任务为 `unverified`。审查失败、返回无效 JSON 或无法验证时也保持 `unverified`，不会自动重跑 worker。
-- **observability：** 默认关闭，只导出标识、状态、事件类型、耗时和 token 计数等元数据；goal、prompt、报告和原始 Session 日志不会进入 OTel。`exportSessionLogs` 即使为 `true` 也不改变这条边界。endpoint 为空只关闭事件导出；宿主提供 `sessionQuery` / `tokenMeter` 时仍可生成轻量快照。
+- **observability：** 默认开启，只导出标识、状态、事件类型、耗时和 token 计数等元数据；goal、prompt、报告和原始 Session 日志不会进入 OTel。`exportSessionLogs` 即使为 `true` 也不改变这条边界。endpoint 为空只关闭事件导出；宿主提供 `sessionQuery` / `tokenMeter` 时仍可生成轻量快照。
 - **MCP memory：** 默认关闭，只向宿主 `mcpManager` 注册。支持 `stdio` 与 `streamable-http`（`http` 别名）；stdio 需预先安装命令，HTTP 需提供 URL。宿主拥有连接、进程与注册清理，插件不自动安装，也不自行启动 server。
 - **调度：** `scheduleProvider: auto` 优先使用完整可用的宿主 Schedule，`local` 强制插件定时器。宿主不可用、调用来自委派子 agent，或计划含 budget、Goal 模式 budget、`miss_policy: "none"`、`human_priority: false` 时，计划留在本地并说明原因。
 - **工作区：** `workspaceProvider: host` 是显式 opt-in，需 `workspaceIsolation: true` 以及宿主 `worktrees.create/restore`、`workingDirectory.set`，并强制 `maxParallel=1`。create/restore 会短暂切换父 cwd 后恢复；`<stateDir>/workspace-host.json` 记录由跨进程锁 `<stateDir>/workspace-host.json.lock` 保护。resume 会复用已保留 checkout，必要时通过宿主恢复，再恢复父 cwd。服务缺失时明确报告隔离不可用并共享目录，不静默回退本地 worktree。
@@ -400,7 +400,7 @@ cost: ¥0.0952 + $0.0248 (estimate; all models priced)
 
 ## 运行时控制
 
-插件可以驱动浏览器，在 Windows 上还可以驱动桌面。两部分**默认都关**：`runtime.enabled` 为 false 时，这些工具一个都不注册，已有的 profile 看到的工具列表与之前完全一样。这里不需要任何 npm 依赖——浏览器通过 DevTools 协议、用 Node 自带的 `WebSocket` 对话，桌面则通过 `powershell.exe` 和 `user32.dll` 触达。
+插件可以驱动浏览器，在 Windows 上还可以驱动桌面。两部分**默认都开**：浏览器默认 headless、只允许回环地址；桌面默认允许后台点击和输入，但不会自动把窗口带到前台。所有动作仍经过 STOP 开关、域名/协议限制、不可逆操作确认和审计。这里不需要任何 npm 依赖——浏览器通过 DevTools 协议、用 Node 自带的 `WebSocket` 对话，桌面则通过 `powershell.exe` 和 `user32.dll` 触达。
 
 ```json
 {
@@ -470,8 +470,7 @@ cost: ¥0.0952 + $0.0248 (estimate; all models priced)
 - **焦点。** 后台点击或按键从不把窗口拉到前面。前台动作需要 `activate: true` **并且**
   `runtime.desktop.allowActivation: true`，每次激活都记录在
   `meta.activated` 里。
-- **worker agent。** `browser_*` 和 `desktop_*` 属于挂载插件的那个会话。护栏会以规则
-  `guard/runtime-tool` 拦下受绑定的子 agent 的调用，除非 `guard.allowRuntimeTools` 为 true。
+- **worker agent。** `browser_*` 和 `desktop_*` 属于挂载插件的那个会话。护栏默认允许受绑定的子 agent 调用这些运行时工具（`guard.allowRuntimeTools: true`），仍受域名、协议、不可逆确认和审计限制；设为 false 可恢复为仅父会话可用。
 
 ### 它刻意做不到的事
 
@@ -751,8 +750,8 @@ aggregator 被指示不要记录密钥、客户数据或报告本身。`stateDir
 
 ### 用户画像
 
-上面的笔记本回答的是"上一个 run 对这个任务学到了什么"。第二个可选的存储回答另一个问题——"这个人是谁、他想要什么、我们之前为什么那样选"——而且它必须比不相关的任务活得更久，所以它单独存放、单独读取。默认关闭
-（`memoryUserProfile: false`）：不构建任何东西、不创建目录，
+上面的笔记本回答的是"上一个 run 对这个任务学到了什么"。第二个存储回答另一个问题——"这个人是谁、他想要什么、我们之前为什么那样选"——而且它必须比不相关的任务活得更久，所以它单独存放、单独读取。默认开启
+（`memoryUserProfile: true`），位于 `<stateDir>/user-memory`；不需要时可用 `memoryUserProfile: false` 关闭。
 run 笔记本的行为与之前完全一致。
 
 - **三类，三个文件。** `fact`（持久的技术背景，例如技术栈或环境）、`preference`（用户希望工作怎么做）、
@@ -923,7 +922,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "$URL/runs"
 ```yaml
 - id: superagent
   config:
-    consolePort: 0            # off by default; 0 = OS picks a free loopback port
+    consolePort: 0            # 0 = OS picks a free loopback port
     consoleRoot: /path/to/project
 ```
 

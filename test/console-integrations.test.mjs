@@ -543,7 +543,7 @@ test('real apply wiring persists integrations and audits sensitive actions witho
     await fsp.rm(root, { recursive: true, force: true })
   })
   apply(ctx, { stateDir: state, consolePort: 0, consoleRoot: root, workbenchRoot: root,
-    notifyOnComplete: false, audit: true, memory: true })
+    notifyOnComplete: false, audit: true, memory: true, runtime: { enabled: false } })
   const discovery = await waitForJson(path.join(state, 'console.json'))
   const panel = { url: discovery.url, token: discovery.token }
 
